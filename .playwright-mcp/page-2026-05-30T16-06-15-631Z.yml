@@ -1,0 +1,387 @@
+- generic [ref=e1]:
+  - dialog "Welcome to Flightradar24 Consent Management" [ref=e4]:
+    - document [active] [ref=e5]:
+      - heading "Flightradar24" [level=1] [ref=e7]
+      - generic [ref=e8]:
+        - paragraph [ref=e10]:
+          - text: We collect some sensitive and not sensitive personal data like your ip address or the browser's cookies and we share or sell it to third parties. This also helps us in keeping our service operative, improving our products and delivering personalized ads. You can choose to opt-out from the share and from the sale of the data by using the options below. Please visit our
+          - link "Privacy Policy" [ref=e11] [cursor=pointer]:
+            - /url: https://www.flightradar24.com/privacy-policy
+          - text: for more information about your rights.
+        - paragraph [ref=e13]:
+          - heading "We and our partners process data for the following purposes:" [level=2] [ref=e14]
+          - generic [ref=e15]: Advertising, Analytics, Functional, Marketing, Use my personal information for targeted advertising
+        - button "View our 57 partners" [ref=e16] [cursor=pointer]
+      - generic [ref=e17]:
+        - button "Do not share or sell my personal information" [ref=e18] [cursor=pointer]
+        - button "Agree and close" [ref=e19] [cursor=pointer]
+  - generic [ref=e22]:
+    - navigation [ref=e23]:
+      - generic [ref=e26]:
+        - img [ref=e28] [cursor=pointer]
+        - link [ref=e30] [cursor=pointer]:
+          - /url: https://fr24api.flightradar24.com/
+          - img [ref=e32]
+        - generic [ref=e40] [cursor=pointer]:
+          - link "Go to" [ref=e41]:
+            - /url: https://www.flightradar24.com
+          - generic [ref=e42]: Log in
+    - generic [ref=e43]:
+      - generic [ref=e44] [cursor=pointer]:
+        - img [ref=e45]
+        - generic [ref=e48]: Back to top
+      - generic [ref=e49] [cursor=pointer]:
+        - img [ref=e50]
+        - generic [ref=e52]: Help
+    - generic [ref=e55]:
+      - generic [ref=e58]:
+        - generic [ref=e59]:
+          - generic [ref=e60] [cursor=pointer]: Documentation
+          - generic [ref=e61]:
+            - generic [ref=e62] [cursor=pointer]:
+              - img [ref=e63]
+              - text: Credit Overview
+            - separator [ref=e67]
+        - list
+      - generic [ref=e70]:
+        - heading "Credit Overview" [level=1] [ref=e71]
+        - generic [ref=e74]:
+          - paragraph [ref=e75]: Our API platform offers a variety of credit packages to suit different user needs. Credits are essential for accessing various API services, and users can choose from subscription credits and top-up credits to manage their API usage efficiently.
+          - heading "Types of credits" [level=3] [ref=e76]
+          - list [ref=e77]:
+            - listitem [ref=e78]:
+              - strong [ref=e79]: Subscription credits
+              - text: ": Granted monthly as part of a subscription plan. Each monthly bundle of subscription credits is valid for one billing month."
+            - listitem [ref=e80]:
+              - strong [ref=e81]: Top-up credits
+              - text: ": Can be purchased anytime to supplement your existing credit balance. Top-up credits are available in predefined packages. Purchasing larger packages allows you to receive a better discount and a lower price per credit."
+              - img "Credits overview in User panel" [ref=e82]
+          - heading "Credit expiration policy" [level=3] [ref=e83]
+          - list [ref=e84]:
+            - listitem [ref=e85]:
+              - strong [ref=e86]: Subscription credits
+              - text: are valid for one month. At the end of each billing cycle (after successful payment), any unused subscription credits expire and your balance is replaced with a new bundle of subscription credits for the upcoming month. Subscription credits do not roll over between billing periods.
+            - listitem [ref=e87]:
+              - strong [ref=e88]: Top-up credits
+              - text: expire 6 months from the date of purchase.
+            - listitem [ref=e89]: Purchasing or receiving additional top-up credits does not extend the expiration date of previously held top-up credits; each top-up package keeps its original expiry date.
+          - heading "Order of credit consumption" [level=3] [ref=e90]
+          - list [ref=e91]:
+            - listitem [ref=e92]:
+              - strong [ref=e93]: "Subscription credits:"
+              - text: Used first to ensure users maximize their subscription benefits.
+            - listitem [ref=e94]:
+              - strong [ref=e95]: "Top-up credits:"
+              - text: Used next, following first-in-first-out principles based on their purchase and expiration dates.
+          - heading "Subscription tiers" [level=3] [ref=e96]
+          - paragraph [ref=e97]: Each subscription tier comes with a designated amount of credits, tailored to suit varying needs. Higher tiers offer increased benefits such as higher throttling limits, larger result sets per query, access to specific endpoints and history availability.
+          - list [ref=e98]:
+            - listitem [ref=e99]:
+              - strong [ref=e100]: "Explorer:"
+              - text: $9/month, 30,000 credits, 10 queries/minute, 30 days of historic data.
+            - listitem [ref=e101]:
+              - strong [ref=e102]: "Essential:"
+              - text: $90/month, 333,000 credits, 30 queries/minute, 2 years of historic data.
+            - listitem [ref=e103]:
+              - strong [ref=e104]: "Advanced:"
+              - text: $900/month, 4,050,000 credits, 90 queries/minute, unlimited history data (subject to system availability limits, which vary by endpoint).
+          - heading "Credit packages" [level=3] [ref=e105]
+          - paragraph [ref=e106]: "Bulk purchase discounts are available for higher credit package investments. Below are some examples of credit packages:"
+          - table [ref=e107]:
+            - rowgroup [ref=e108]:
+              - row "Package $ Total Credits Price per Credit Discount (%)" [ref=e109]:
+                - columnheader "Package $" [ref=e110]
+                - columnheader "Total Credits" [ref=e111]
+                - columnheader "Price per Credit" [ref=e112]
+                - columnheader "Discount (%)" [ref=e113]
+            - rowgroup [ref=e114]:
+              - row "9 30,000 $0.0003 0" [ref=e115]:
+                - cell "9" [ref=e116]
+                - cell "30,000" [ref=e117]
+                - cell "$0.0003" [ref=e118]
+                - cell "0" [ref=e119]
+              - row "30 105,000 $0.000286 4.76" [ref=e120]:
+                - cell "30" [ref=e121]
+                - cell "105,000" [ref=e122]
+                - cell "$0.000286" [ref=e123]
+                - cell "4.76" [ref=e124]
+              - row "60 218,000 $0.000275 8.26" [ref=e125]:
+                - cell "60" [ref=e126]
+                - cell "218,000" [ref=e127]
+                - cell "$0.000275" [ref=e128]
+                - cell "8.26" [ref=e129]
+              - row "120 452,000 $0.000265 11.5" [ref=e130]:
+                - cell "120" [ref=e131]
+                - cell "452,000" [ref=e132]
+                - cell "$0.000265" [ref=e133]
+                - cell "11.5" [ref=e134]
+              - row "300 1,210,000 $0.000248 17.36" [ref=e135]:
+                - cell "300" [ref=e136]
+                - cell "1,210,000" [ref=e137]
+                - cell "$0.000248" [ref=e138]
+                - cell "17.36" [ref=e139]
+          - paragraph [ref=e140]:
+            - text: For all credit packages go to
+            - link "Subscriptions and credits" [ref=e141] [cursor=pointer]:
+              - /url: https://fr24api.flightradar24.com/subscriptions-and-credits
+            - text: .
+          - heading "Endpoint pricing" [level=3] [ref=e142]
+          - paragraph [ref=e143]: "Our API offers various endpoints, each with specific credit costs per query, and dollar-cost with assumed $0.0003 cost per credit:"
+          - table [ref=e144]:
+            - rowgroup [ref=e145]:
+              - row "Endpoint Cost factor Credits Maximum $ cost (with $0.0003 per credit)" [ref=e146]:
+                - columnheader "Endpoint" [ref=e147]
+                - columnheader "Cost factor" [ref=e148]
+                - columnheader "Credits" [ref=e149]
+                - columnheader "Maximum $ cost (with $0.0003 per credit)" [ref=e150]
+            - rowgroup [ref=e151]:
+              - row "Flight summary - full Per returned live flight 2 $0.0006" [ref=e152]:
+                - cell "Flight summary - full" [ref=e153]
+                - cell "Per returned live flight" [ref=e154]
+                - cell "2" [ref=e155]
+                - cell "$0.0006" [ref=e156]
+              - row "Flight summary - full Per returned historical flight not older than 30 days 3 $0.0009" [ref=e157]:
+                - cell "Flight summary - full" [ref=e158]
+                - cell "Per returned historical flight not older than 30 days" [ref=e159]
+                - cell "3" [ref=e160]
+                - cell "$0.0009" [ref=e161]
+              - row "Flight summary - full Per returned historical flight older than 30 days 6 $0.0018" [ref=e162]:
+                - cell "Flight summary - full" [ref=e163]
+                - cell "Per returned historical flight older than 30 days" [ref=e164]
+                - cell "6" [ref=e165]
+                - cell "$0.0018" [ref=e166]
+              - row "Flight summary - light Per returned live flight 1 $0.0003" [ref=e167]:
+                - cell "Flight summary - light" [ref=e168]
+                - cell "Per returned live flight" [ref=e169]
+                - cell "1" [ref=e170]
+                - cell "$0.0003" [ref=e171]
+              - row "Flight summary - light Per returned historical flight not older than 30 days 2 $0.0006" [ref=e172]:
+                - cell "Flight summary - light" [ref=e173]
+                - cell "Per returned historical flight not older than 30 days" [ref=e174]
+                - cell "2" [ref=e175]
+                - cell "$0.0006" [ref=e176]
+              - row "Flight summary - light Per returned historical flight older than 30 days 3 $0.0009" [ref=e177]:
+                - cell "Flight summary - light" [ref=e178]
+                - cell "Per returned historical flight older than 30 days" [ref=e179]
+                - cell "3" [ref=e180]
+                - cell "$0.0009" [ref=e181]
+              - row "Live flight positions - full Per returned flight 8 $0.0024" [ref=e182]:
+                - cell "Live flight positions - full" [ref=e183]
+                - cell "Per returned flight" [ref=e184]
+                - cell "8" [ref=e185]
+                - cell "$0.0024" [ref=e186]
+              - row "Live flight positions - light Per returned flight 6 $0.0018" [ref=e187]:
+                - cell "Live flight positions - light" [ref=e188]
+                - cell "Per returned flight" [ref=e189]
+                - cell "6" [ref=e190]
+                - cell "$0.0018" [ref=e191]
+              - row "Historic flight positions - full Per returned flight 8 $0.0024" [ref=e192]:
+                - cell "Historic flight positions - full" [ref=e193]
+                - cell "Per returned flight" [ref=e194]
+                - cell "8" [ref=e195]
+                - cell "$0.0024" [ref=e196]
+              - row "Historic flight positions - light Per returned flight 6 $0.0018" [ref=e197]:
+                - cell "Historic flight positions - light" [ref=e198]
+                - cell "Per returned flight" [ref=e199]
+                - cell "6" [ref=e200]
+                - cell "$0.0018" [ref=e201]
+              - row "Historic flight events - full Per returned historical event not older than 30 days 3 $0.0009" [ref=e202]:
+                - cell "Historic flight events - full" [ref=e203]
+                - cell "Per returned historical event not older than 30 days" [ref=e204]
+                - cell "3" [ref=e205]
+                - cell "$0.0009" [ref=e206]
+              - row "Historic flight events - full Per returned historical event older than 30 days 4 $0.0012" [ref=e207]:
+                - cell "Historic flight events - full" [ref=e208]
+                - cell "Per returned historical event older than 30 days" [ref=e209]
+                - cell "4" [ref=e210]
+                - cell "$0.0012" [ref=e211]
+              - row "Historic flight events - light Per returned historical event not older than 30 days 2 $0.0006" [ref=e212]:
+                - cell "Historic flight events - light" [ref=e213]
+                - cell "Per returned historical event not older than 30 days" [ref=e214]
+                - cell "2" [ref=e215]
+                - cell "$0.0006" [ref=e216]
+              - row "Historic flight events - light Per returned historical event older than 30 days 3 $0.0009" [ref=e217]:
+                - cell "Historic flight events - light" [ref=e218]
+                - cell "Per returned historical event older than 30 days" [ref=e219]
+                - cell "3" [ref=e220]
+                - cell "$0.0009" [ref=e221]
+              - row "Flight tracks Per returned flight 40 $0.012" [ref=e222]:
+                - cell "Flight tracks" [ref=e223]
+                - cell "Per returned flight" [ref=e224]
+                - cell "40" [ref=e225]
+                - cell "$0.012" [ref=e226]
+              - row "Airports light Per query 1 $0.0003" [ref=e227]:
+                - cell "Airports light" [ref=e228]
+                - cell "Per query" [ref=e229]
+                - cell "1" [ref=e230]
+                - cell "$0.0003" [ref=e231]
+              - row "Airports full Per query 50 $0.015" [ref=e232]:
+                - cell "Airports full" [ref=e233]
+                - cell "Per query" [ref=e234]
+                - cell "50" [ref=e235]
+                - cell "$0.015" [ref=e236]
+              - row "Airlines light Per query 1 $0.0003" [ref=e237]:
+                - cell "Airlines light" [ref=e238]
+                - cell "Per query" [ref=e239]
+                - cell "1" [ref=e240]
+                - cell "$0.0003" [ref=e241]
+          - paragraph [ref=e242]:
+            - text: The
+            - code [ref=e243]: /count
+            - text: endpoints cost
+            - strong [ref=e244]: 15%
+            - text: of the corresponding “full” endpoint, rounded up to the next whole credit.
+          - paragraph [ref=e245]: If your request returns no results (an empty response), the call is charged a flat 1 credit for processing.
+          - heading "Cost examples" [level=4] [ref=e246]
+          - heading "Querying 1,000 flights for Live flight positions - light:" [level=4] [ref=e247]
+          - list [ref=e248]:
+            - listitem [ref=e249]:
+              - strong [ref=e250]: "Credits Used:"
+              - text: 6,000 credits (1,000 flights * 6 credits per flight)
+            - listitem [ref=e251]:
+              - strong [ref=e252]: "Cost:"
+              - text: $1.80 (6,000 credits * $0.0003 per credit)
+          - heading "Querying 500 flights for Historic flight positions - full:" [level=4] [ref=e253]
+          - list [ref=e254]:
+            - listitem [ref=e255]:
+              - strong [ref=e256]: "Credits Used:"
+              - text: 4,000 credits (500 flights * 8 credits per flight)
+            - listitem [ref=e257]:
+              - strong [ref=e258]: "Cost:"
+              - text: $1.20 (4,000 credits * $0.0003 per credit)
+          - heading "Querying 100 airports for Airports full data:" [level=4] [ref=e259]
+          - list [ref=e260]:
+            - listitem [ref=e261]:
+              - strong [ref=e262]: "Credits Used:"
+              - text: 5,000 credits (100 queries * 50 credits per query)
+            - listitem [ref=e263]:
+              - strong [ref=e264]: "Cost:"
+              - text: $1.50 (5,000 credits * $0.0003 per credit)
+          - heading "Credit usage optimization" [level=3] [ref=e265]
+          - heading "Maximize your subscription credits:" [level=4] [ref=e266]
+          - list [ref=e267]:
+            - listitem [ref=e268]: Plan your API usage to fully utilize your monthly subscription credits before they expire.
+            - listitem [ref=e269]: Regularly monitor your credit balance and consumption rate.
+          - heading "Efficient use of top-up credits:" [level=4] [ref=e270]
+          - list [ref=e271]:
+            - listitem [ref=e272]: Purchase top-up credits in increments that match your anticipated needs to avoid holding excess credits that may expire.
+            - listitem [ref=e273]: Utilize Automated top up feature to automatically top-up your account when credit balance is low.
+          - heading "Using limit to control credit costs" [level=4] [ref=e274]
+          - paragraph [ref=e275]:
+            - text: Utilize the
+            - code [ref=e276]: limit
+            - text: parameter in your API calls to restrict the amount of data retrieved and therefore limit the number of credits consumed. This is particularly useful for large datasets where you only need a subset of the data, allowing you to manage your credit usage more effectively.
+          - blockquote [ref=e277]:
+            - img [ref=e279]
+            - paragraph [ref=e281]: The limit parameter is applicable only for flight-positions endpoints.
+          - heading "Example of limit param usage" [level=4] [ref=e282]:
+            - text: Example of
+            - code [ref=e283]: limit
+            - text: param usage
+          - paragraph [ref=e284]:
+            - text: The
+            - code [ref=e285]: limit
+            - text: parameter is used to restrict the number of results returned by an API call, thereby controlling credit usage. Below is an example Python script that demonstrates how to use the
+            - code [ref=e286]: limit
+            - text: parameter to restrict the number of results returned by an API call.
+          - code [ref=e287]:
+            - text: "import requests import json # Define the API token and endpoint URL API_TOKEN = '<your_api_token>' BASE_URL = 'https://fr24api.flightradar24.com/api' ENDPOINT = '/historic/flight-positions/full' # Define the headers, including the Authorization header with your API token headers = { 'Accept': 'application/json', 'Authorization': 'Bearer {API_TOKEN}', 'Accept-Version': 'v1' } # Define any query parameters params = { 'bounds': '50.682,46.218,14.422,22.243', 'timestamp': '1702383145', 'limit': 10 } # Construct the full URL url ="
+            - generic [ref=e288]:
+              - text: f"
+              - generic [ref=e289]: "{BASE_URL}"
+              - generic [ref=e290]: "{ENDPOINT}"
+              - text: "\""
+            - text: "# Make the GET request to the API response = requests.get(url, headers=headers, params=params) # Check if the request was successful if response.status_code == 200: # Parse and print the JSON response response_data = response.json() print(\"Response Data:\") print(json.dumps(response_data, indent=2)) else: print("
+            - generic [ref=e291]:
+              - text: "f\"Error:"
+              - generic [ref=e292]: "{response.status_code}"
+              - text: "\""
+            - text: ) print(response.text)
+          - generic [ref=e293] [cursor=pointer]:
+            - generic [ref=e294]: Show all
+            - img [ref=e296]
+          - heading "Calculation of the cost of the call" [level=4] [ref=e299]
+          - paragraph [ref=e300]: "Given:"
+          - list [ref=e301]:
+            - listitem [ref=e302]: "Credits per returned flight: 8 credits"
+            - listitem [ref=e303]: "Price per credit: $0.0003 (assuming the highest price per credit)"
+          - paragraph [ref=e304]:
+            - text: Assume the API returns 10 results as specified by the
+            - code [ref=e305]: limit
+            - text: parameter.
+          - list [ref=e306]:
+            - listitem [ref=e307]: "Number of results returned: 10"
+            - listitem [ref=e308]: "Total credits used: 10 results * 8 credits per result = 80 credits"
+            - listitem [ref=e309]: "Total cost of the call: 80 credits * $0.0003 per credit = $0.024"
+          - paragraph [ref=e310]: Therefore, if the API returns 10 results, the total cost of the call would be $0.024.
+          - blockquote [ref=e311]:
+            - img [ref=e313]
+            - paragraph [ref=e315]: It's important to note that the cost is determined by the number of returned entities, not by the specified limit.
+          - heading "Exploring the calculated cost" [level=3] [ref=e316]
+          - paragraph [ref=e317]:
+            - text: After making the API call, you can explore the calculated cost using the
+            - code [ref=e318]: /usage
+            - text: endpoint and in the Usage Metrics tab. Here is an example of calling the
+            - code [ref=e319]: /usage
+            - text: "endpoint to get the usage details:"
+          - code [ref=e320]:
+            - text: "import requests import json # Define the API token and endpoint URL API_TOKEN = '<your_api_token>' BASE_URL = 'https://fr24api.flightradar24.com/api' ENDPOINT = '/usage' # Define the headers, including the Authorization header with your API token headers = { 'Accept': 'application/json', 'Authorization': 'Bearer {API_TOKEN}', 'Accept-Version': 'v1' } # Construct the full URL url ="
+            - generic [ref=e321]:
+              - text: f"
+              - generic [ref=e322]: "{BASE_URL}"
+              - generic [ref=e323]: "{ENDPOINT}"
+              - text: "\""
+            - text: "# Make the GET request to the API response = requests.get(url, headers=headers) # Check if the request was successful if response.status_code == 200: # Parse and print the JSON response usage_data = response.json() print(\"Usage Data:\") print(json.dumps(usage_data, indent=2)) else: print("
+            - generic [ref=e324]:
+              - text: "f\"Error:"
+              - generic [ref=e325]: "{response.status_code}"
+              - text: "\""
+            - text: ) print(response.text)
+          - paragraph [ref=e326]: "Example of output:"
+          - code [ref=e327]: "{ \"data\": [{ \"endpoint\": \"historic/flight-positions/full?{filters}\", \"request_count\": 1, \"credits\": 80 }] }"
+          - paragraph [ref=e328]:
+            - text: Please note that the usage endpoint has a rate limit of 1 call per minute. Additionally, you can check the
+            - link "Usage metrics tab" [ref=e329] [cursor=pointer]:
+              - /url: https://fr24api.flightradar24.com/usage-metrics
+            - text: in your account dashboard to view detailed insights into your credit usage, as shown in the screenshot below.
+          - paragraph [ref=e330]:
+            - img "Credit usage" [ref=e331]
+          - heading "Automated credit top-up" [level=2] [ref=e332]
+          - heading "What is Automated credit top-up?" [level=3] [ref=e333]
+          - paragraph [ref=e334]: Automated credit top-up is a feature designed to ensure that your API usage remains uninterrupted by automatically purchasing additional top-up credits when your credit balance falls below a predefined threshold.
+          - heading "Key Features" [level=3] [ref=e335]
+          - list [ref=e336]:
+            - listitem [ref=e337]:
+              - strong [ref=e338]: Threshold Setting
+              - text: ": Define a minimum credit balance threshold. When your available credits fall below this level, the system will automatically purchase selected, additional top-up credits for you."
+            - listitem [ref=e339]:
+              - strong [ref=e340]: Customizable Amounts
+              - text: ": Set the amount of top-up credits to be purchased automatically, ensuring it aligns with your usage patterns and budget."
+            - listitem [ref=e341]:
+              - strong [ref=e342]: Notification Alerts
+              - text: ": Receive notifications whenever an automated top-up is executed, providing transparency and control over your credit balance."
+          - heading "How to enable automated credit top-up" [level=3] [ref=e343]
+          - list [ref=e344]:
+            - listitem [ref=e345]:
+              - strong [ref=e346]: Access your account settings
+              - text: ": Log in to your account and navigate to the 'Credit overview' section."
+            - listitem [ref=e347]:
+              - strong [ref=e348]: Set threshold and top-up amount
+              - text: ": Define your minimum credit balance threshold and the amount of top-up credits to be automatically purchased. You can only specify a predefined credit package."
+            - listitem [ref=e349]:
+              - strong [ref=e350]: Save your settings
+              - text: ": Confirm and save your automated top-up settings."
+          - heading "Benefits" [level=3] [ref=e351]
+          - list [ref=e352]:
+            - listitem [ref=e353]:
+              - strong [ref=e354]: Continuous API cccess
+              - text: ": Ensure uninterrupted access to API services by preventing credit depletion."
+            - listitem [ref=e355]:
+              - strong [ref=e356]: Time-saving
+              - text: ": Automate the credit top-up process, reducing the need for manual intervention."
+            - listitem [ref=e357]:
+              - strong [ref=e358]: Budget control
+              - text: ": Manage your expenses by setting predefined top-up amounts and thresholds. This ensures that you only purchase credits when needed, which further reduces the risk of credit expiry, as you buy credits only when you use them."
+          - paragraph [ref=e359]:
+            - strong [ref=e360]: "Note:"
+            - text: Please be aware that the automated purchase process can take up to a few minutes to complete. To avoid any disruption in high-performance applications, it is recommended to set a higher threshold for automated top-ups. This ensures that your credit balance remains sufficient during the purchase process, maintaining continuous API access.
