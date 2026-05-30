@@ -7,7 +7,14 @@ defmodule LgaPredictor.Application do
   def start(_type, _args) do
     children =
       if Application.get_env(:lga_predictor, :start_workers, true) do
-        [LgaPredictor.Actuator, LgaPredictor.Poller]
+        port = Application.get_env(:lga_predictor, :api_port, 4040)
+
+        [
+          LgaPredictor.Actuator,
+          LgaPredictor.History,
+          LgaPredictor.Poller,
+          {Bandit, plug: LgaPredictor.API.Router, scheme: :http, ip: {127, 0, 0, 1}, port: port}
+        ]
       else
         []
       end

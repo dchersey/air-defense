@@ -23,7 +23,9 @@ defmodule LgaPredictor.MixProject do
   defp deps do
     [
       {:req, "~> 0.5"},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:plug, "~> 1.16"},
+      {:bandit, "~> 1.5"}
     ]
   end
 end

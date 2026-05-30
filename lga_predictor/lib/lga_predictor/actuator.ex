@@ -1,12 +1,15 @@
 defmodule LgaPredictor.Actuator do
   @moduledoc """
-  Owns the AirPods Max acoustic mode. Given predicted overhead windows it engages
-  ANC slightly before a pass and returns to Transparency after, **coalescing**
-  overlapping/back-to-back windows into one continuous ANC period (it tracks the
-  latest "off" time and keeps pushing the disengage).
+  Tracks the **desired** AirPods Max acoustic mode. Given predicted overhead
+  windows it sets the desired mode to `:anc` slightly before a pass and back to
+  `:transparency` after, **coalescing** overlapping/back-to-back windows into one
+  continuous ANC period (it tracks the latest "off" time and keeps pushing the
+  disengage).
 
-  In stub mode (default) it only logs "WOULD ENGAGE/DISENGAGE"; with `stub?: false`
-  it runs the macOS Shortcuts `ANC On` / `ANC Off`.
+  This process does NOT touch the headphones — the native macOS toggle requires
+  Accessibility and lives in the Swift menu-bar app, which reads `mode/0` (via the
+  localhost API) and mirrors it onto the AirPods. Here we only own the timing and
+  the desired-mode state machine.
   """
 
   use GenServer
@@ -31,17 +34,7 @@ defmodule LgaPredictor.Actuator do
 
   @impl true
   def init(_opts) do
-    cfg = Application.get_env(:lga_predictor, :actuator, %{})
-
-    {:ok,
-     %{
-       mode: :transparency,
-       anc_off_at: nil,
-       disengage_timer: nil,
-       stub?: Map.get(cfg, :stub?, true),
-       on_name: Map.get(cfg, :anc_on, "ANC On"),
-       off_name: Map.get(cfg, :anc_off, "ANC Off")
-     }}
+    {:ok, %{mode: :transparency, anc_off_at: nil, disengage_timer: nil}}
   end
 
   @impl true
@@ -85,14 +78,14 @@ defmodule LgaPredictor.Actuator do
   defp engage(%{mode: :anc} = state, _label), do: state
 
   defp engage(state, label) do
-    command(state, state.on_name, "ENGAGE ANC", label)
+    Logger.info("[actuator] desired mode -> ANC#{suffix(label)}")
     %{state | mode: :anc}
   end
 
   defp disengage(%{mode: :transparency} = state), do: %{state | anc_off_at: nil}
 
   defp disengage(state) do
-    command(state, state.off_name, "DISENGAGE ANC -> transparency", nil)
+    Logger.info("[actuator] desired mode -> transparency")
     %{state | mode: :transparency, anc_off_at: nil}
   end
 
@@ -100,16 +93,6 @@ defmodule LgaPredictor.Actuator do
     if state.disengage_timer, do: Process.cancel_timer(state.disengage_timer)
     delay = max((state.anc_off_at || now) - now, 0)
     %{state | disengage_timer: Process.send_after(self(), :disengage, delay)}
-  end
-
-  defp command(%{stub?: true}, _name, action, label) do
-    Logger.info("[actuator:stub] WOULD #{action}#{suffix(label)}")
-  end
-
-  defp command(%{stub?: false} = state, name, action, label) do
-    Logger.info("[actuator] #{action}#{suffix(label)} (shortcuts run #{inspect(name)})")
-    _ = System.cmd("shortcuts", ["run", name], stderr_to_stdout: true)
-    state
   end
 
   defp suffix(nil), do: ""

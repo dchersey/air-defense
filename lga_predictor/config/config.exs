@@ -24,12 +24,14 @@ config :lga_predictor,
   poll_interval_ms: 60_000,
   session_duration_ms: 4 * 60 * 60 * 1000,
 
-  # ANC window padding around the predicted overhead pass.
-  anc_lead_seconds: 8,
+  # ANC window padding around the predicted overhead pass (engage this many
+  # seconds before the path reaches the noise zone, release this many after it
+  # clears). Tunable from lived experience.
+  anc_lead_seconds: 15,
   anc_tail_seconds: 12,
   fr24: %{sandbox?: false},
-  # Stub mode logs "WOULD engage/disengage ANC" instead of calling Shortcuts.
-  actuator: %{stub?: true, anc_on: "ANC On", anc_off: "ANC Off"}
+  # Localhost JSON API the Swift menu-bar control panel talks to.
+  api_port: 4040
 
 if config_env() == :test do
   import_config "test.exs"

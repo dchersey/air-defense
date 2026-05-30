@@ -12,7 +12,7 @@ defmodule LgaPredictor.Poller do
   use GenServer
   require Logger
 
-  alias LgaPredictor.{Actuator, Predictor}
+  alias LgaPredictor.{Actuator, History, Predictor}
   alias LgaPredictor.FR24.Client
 
   @credits_per_aircraft 6
@@ -44,14 +44,30 @@ defmodule LgaPredictor.Poller do
     Logger.info("[poller] session START — polling every #{state.poll_interval}ms for #{div(state.session_duration, 60_000)} min")
 
     session_timer = Process.send_after(self(), :end_session, state.session_duration)
-    state = %{state | active?: true, polls: 0, credits: 0, session_timer: session_timer}
+    ends_at = System.os_time(:second) + div(state.session_duration, 1000)
+
+    state = %{
+      state
+      | active?: true,
+        polls: 0,
+        credits: 0,
+        session_timer: session_timer,
+        session_ends_at: ends_at
+    }
+
     {:reply, :ok, poll_now(state)}
   end
 
   def handle_call(:stop_session, _from, state), do: {:reply, :ok, end_session(state)}
 
   def handle_call(:status, _from, state) do
-    {:reply, %{active?: state.active?, polls: state.polls, approx_credits: state.credits}, state}
+    {:reply,
+     %{
+       active?: state.active?,
+       polls: state.polls,
+       approx_credits: state.credits,
+       session_ends_at: state.session_ends_at
+     }, state}
   end
 
   @impl true
@@ -105,7 +121,20 @@ defmodule LgaPredictor.Poller do
         "enters in #{round(window.enters_in)}s, dwell #{round(window.dwell_seconds)}s"
     )
 
+    record_history(%{
+      at: System.os_time(:second),
+      callsign: ac.callsign || ac.hex,
+      alt_ft: ac.alt_ft,
+      enters_in: round(window.enters_in),
+      dwell: round(window.dwell_seconds)
+    })
+
     Actuator.cover(on_ms, off_ms, ac.callsign || ac.hex)
+  end
+
+  # History is optional (tests may run Poller without it supervised).
+  defp record_history(event) do
+    if Process.whereis(History), do: History.record(event)
   end
 
   defp end_session(state) do
@@ -113,7 +142,7 @@ defmodule LgaPredictor.Poller do
     if state.session_timer, do: Process.cancel_timer(state.session_timer)
     Actuator.reset()
     Logger.info("[poller] session END — #{state.polls} polls, ~#{state.credits} credits")
-    %{state | active?: false, poll_timer: nil, session_timer: nil}
+    %{state | active?: false, poll_timer: nil, session_timer: nil, session_ends_at: nil}
   end
 
   defp log_error(state, reason) do
@@ -139,6 +168,7 @@ defmodule LgaPredictor.Poller do
       active?: false,
       poll_timer: nil,
       session_timer: nil,
+      session_ends_at: nil,
       polls: 0,
       credits: 0,
       fetcher: Keyword.get(opts, :fetcher, &default_fetch/1),
