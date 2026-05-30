@@ -5,8 +5,12 @@ defmodule LgaPredictor.Application do
 
   @impl true
   def start(_type, _args) do
+    start_workers? =
+      System.get_env("LGA_NO_SERVER") != "1" and
+        Application.get_env(:lga_predictor, :start_workers, true)
+
     children =
-      if Application.get_env(:lga_predictor, :start_workers, true) do
+      if start_workers? do
         port = Application.get_env(:lga_predictor, :api_port, 4040)
 
         [

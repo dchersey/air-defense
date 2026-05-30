@@ -4,15 +4,17 @@ config :lga_predictor,
   # Home: Thornton Pl, Rego Park
   home_coords: {40.727, -73.860},
 
-  # Noise zone — W→E band over the LIRR tracks ~1-2 blocks N of home,
-  # between Woodhaven Blvd and the tracks. {:polygon, [{lat, lon}, ...]}.
+  # Noise zone — W→E band over the LIRR tracks ~1-2 blocks N of home, from
+  # Woodhaven Blvd (west, ~-73.878) to the tracks. Widened west after live
+  # observation: planes are audibly overhead at Woodhaven, ~20s before they
+  # reached the old -73.870 edge. {:polygon, [{lat, lon}, ...]}.
   noise_zone:
     {:polygon,
      [
-       {40.729, -73.870},
-       {40.733, -73.870},
-       {40.733, -73.850},
-       {40.729, -73.850}
+       {40.728, -73.880},
+       {40.734, -73.880},
+       {40.734, -73.850},
+       {40.728, -73.850}
      ]},
 
   # FR24 query bounds {north, south, west, east}: Atlantic Ave (S), LIE/I-495 (N),
@@ -26,9 +28,10 @@ config :lga_predictor,
 
   # ANC window padding around the predicted overhead pass (engage this many
   # seconds before the path reaches the noise zone, release this many after it
-  # clears). Tunable from lived experience.
-  anc_lead_seconds: 15,
-  anc_tail_seconds: 12,
+  # clears). Bumped lead to 30s after a live pass engaged ~20s late; covers the
+  # mode-change latency + poll granularity. Tunable from lived experience.
+  anc_lead_seconds: 30,
+  anc_tail_seconds: 15,
   fr24: %{sandbox?: false},
   # Localhost JSON API the Swift menu-bar control panel talks to.
   api_port: 4040

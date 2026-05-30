@@ -130,6 +130,53 @@ func matchesLabel(_ e: AXUIElement, _ wanted: String) -> Bool {
   return false
 }
 
+func windowCount() -> Int {
+  guard let cc = controlCenterApp() else { return 0 }
+  return (attr(cc, kAXWindowsAttribute as String) as? [AXUIElement])?.count ?? 0
+}
+
+/// Print each CC window's subrole/size/position — to find a real visibility signal.
+func windowState(_ tag: String) {
+  guard let cc = controlCenterApp(),
+        let wins = attr(cc, kAXWindowsAttribute as String) as? [AXUIElement]
+  else { print("\(tag): no cc"); return }
+  print("\(tag): \(wins.count) window(s)")
+  for (i, w) in wins.enumerated() {
+    let sub = str(w, kAXSubroleAttribute as String) ?? "?"
+    var sz = CGSize.zero
+    if let v = attr(w, kAXSizeAttribute as String) { AXValueGetValue(v as! AXValue, .cgSize, &sz) }
+    let childCount = children(w).count
+    print("  [\(i)] subrole=\(sub) size=\(Int(sz.width))x\(Int(sz.height)) children=\(childCount)")
+  }
+}
+
+/// Open Sound, switch mode, then close by re-pressing the Sound item (Escape is
+/// unreliable on some machines). Reports the window count after, to verify close.
+func cycle(_ wanted: String) {
+  guard let cc = controlCenterApp(), let menuBar = firstMenuBar(cc),
+        let soundItem = children(menuBar).first(where: {
+          (str($0, kAXIdentifierAttribute as String) ?? "").lowercased().contains("sound")
+        })
+  else { print("ERROR: no Sound item"); return }
+
+  _ = press(soundItem)
+  Thread.sleep(forTimeInterval: 0.5)
+  print("after open: windows=\(windowCount())")
+
+  if let window = (attr(cc, kAXWindowsAttribute as String) as? [AXUIElement])?.first,
+     let target = find(window, { matchesLabel($0, wanted) }) {
+    print("activate \(wanted): \(press(target) || axPick(target))")
+  } else {
+    print("target \(wanted) not found")
+  }
+
+  Thread.sleep(forTimeInterval: 0.3)
+  _ = press(soundItem)  // re-press to close
+  Thread.sleep(forTimeInterval: 0.5)
+  let after = windowCount()
+  print("after close (re-press): windows=\(after) -> \(after == 0 ? "CLOSED ✓" : "STILL OPEN ✗")")
+}
+
 func setMode(_ wanted: String) {
   guard let window = openSound() else {
     print("ERROR: Sound popover did not open")

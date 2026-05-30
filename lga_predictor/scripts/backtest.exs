@@ -5,15 +5,20 @@
 #   STEP=120 mix run scripts/backtest.exs     # coarser/cheaper
 #   DRYRUN=1 mix run scripts/backtest.exs     # print plan + cost basis only, no fetches
 #
-# Window: 2026-05-28 08:00-12:00 EDT == 12:00-16:00 UTC.
+# Window defaults to 2026-05-28 12:00-16:00 UTC. Override (UTC):
+#   WINDOW_DATE=2026-05-28 START_UTC=13:00:00 END_UTC=14:00:00 mix run scripts/backtest.exs
+edt = fn ts -> DateTime.from_unix!(ts) |> DateTime.add(-4 * 3600) |> DateTime.to_time() |> Time.to_string() end
 alias LgaPredictor.{Predictor, FR24.Client}
 
 box = Application.get_env(:lga_predictor, :approach_box)
 zone = Application.get_env(:lga_predictor, :noise_zone)
 ceiling = Application.get_env(:lga_predictor, :altitude_ceiling_ft)
 
-{:ok, start_dt} = DateTime.new(~D[2026-05-28], ~T[12:00:00], "Etc/UTC")
-{:ok, end_dt} = DateTime.new(~D[2026-05-28], ~T[16:00:00], "Etc/UTC")
+date = Date.from_iso8601!(System.get_env("WINDOW_DATE", "2026-05-28"))
+start_t = Time.from_iso8601!(System.get_env("START_UTC", "12:00:00"))
+end_t = Time.from_iso8601!(System.get_env("END_UTC", "16:00:00"))
+{:ok, start_dt} = DateTime.new(date, start_t, "Etc/UTC")
+{:ok, end_dt} = DateTime.new(date, end_t, "Etc/UTC")
 start_ts = DateTime.to_unix(start_dt)
 end_ts = DateTime.to_unix(end_dt)
 step = String.to_integer(System.get_env("STEP", "60"))
@@ -36,7 +41,8 @@ cond do
     :ok
 end
 
-IO.puts("Backtest 2026-05-28 08:00-12:00 EDT (#{Float.round((now - start_ts) / 86_400, 1)} days ago), step #{step}s -> #{length(timestamps)} snapshots, box #{Client.bounds_param(box)}")
+edt = fn ts -> DateTime.from_unix!(ts) |> DateTime.add(-4 * 3600) |> DateTime.to_time() |> Time.to_string() end
+IO.puts("Backtest #{Date.to_string(date)} #{edt.(start_ts)}-#{edt.(end_ts)} EDT (#{Float.round((now - start_ts) / 86_400, 1)} days ago), step #{step}s -> #{length(timestamps)} snapshots, box #{Client.bounds_param(box)}")
 
 if dryrun do
   IO.puts("DRYRUN: would issue #{length(timestamps)} historic queries. Cost = 6 cr * (aircraft returned per snapshot).")

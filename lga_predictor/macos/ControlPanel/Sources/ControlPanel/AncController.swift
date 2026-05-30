@@ -25,11 +25,26 @@ enum AncController {
   /// Set the AirPods listening mode. Returns true if the control was found+pressed.
   @discardableResult
   static func set(_ mode: Mode) -> Bool {
-    guard let window = openSound() else { return false }
-    defer { closeControlCenter() }
+    guard let cc = controlCenterApp(), let soundItem = soundMenuBarItem() else { return false }
 
-    guard let target = find(window, { matchesLabel($0, mode.rawValue) }) else { return false }
-    return press(target) || axPick(target)
+    // Open the Sound popover (AXPress works for opening and doesn't move the cursor).
+    _ = press(soundItem)
+    Thread.sleep(forTimeInterval: 0.5)
+
+    let ok: Bool =
+      if let window = (attr(cc, kAXWindowsAttribute as String) as? [AXUIElement])?.first,
+         let target = find(window, { matchesLabel($0, mode.rawValue) }) {
+        press(target) || axPick(target)
+      } else {
+        false
+      }
+
+    // Close by a real synthetic click on the Sound item — AXPress and Escape do
+    // NOT dismiss the popover on this machine (verified via AncProbe). The click
+    // warps the cursor, so we save and restore it.
+    Thread.sleep(forTimeInterval: 0.2)
+    clickElement(soundItem)
+    return ok
   }
 
   // MARK: - AX helpers
@@ -86,24 +101,32 @@ enum AncController {
       .map { AXUIElementCreateApplication($0.processIdentifier) }
   }
 
-  private static func openSound() -> AXUIElement? {
+  /// The pinned Sound menu-bar item (id "com.apple.menuextra.sound").
+  private static func soundMenuBarItem() -> AXUIElement? {
     guard let cc = controlCenterApp(), let menuBar = find(cc, { role($0) == "AXMenuBar" })
     else { return nil }
 
-    let sound = children(menuBar).first {
+    return children(menuBar).first {
       (str($0, kAXIdentifierAttribute as String) ?? "").lowercased().contains("sound")
     }
-    guard let soundItem = sound else { return nil }
-
-    _ = press(soundItem)
-    Thread.sleep(forTimeInterval: 0.5)
-
-    return (attr(cc, kAXWindowsAttribute as String) as? [AXUIElement])?.first
   }
 
-  private static func closeControlCenter() {
-    if let cc = controlCenterApp(), let win = (attr(cc, kAXWindowsAttribute as String) as? [AXUIElement])?.first {
-      _ = press(win)  // dismiss; harmless if already closed
-    }
+  /// Real synthetic left-click at an element's center, restoring the cursor
+  /// afterward (the click warps it). Used to dismiss the Sound popover, which
+  /// AXPress/Escape don't close reliably on this machine.
+  private static func clickElement(_ e: AXUIElement) {
+    var pos = CGPoint.zero, size = CGSize.zero
+    guard let pv = attr(e, kAXPositionAttribute as String),
+          let sv = attr(e, kAXSizeAttribute as String) else { return }
+    AXValueGetValue(pv as! AXValue, .cgPoint, &pos)
+    AXValueGetValue(sv as! AXValue, .cgSize, &size)
+    let center = CGPoint(x: pos.x + size.width / 2, y: pos.y + size.height / 2)
+
+    let saved = CGEvent(source: nil)?.location
+    let src = CGEventSource(stateID: .combinedSessionState)
+    CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: center, mouseButton: .left)?.post(tap: .cghidEventTap)
+    CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: center, mouseButton: .left)?.post(tap: .cghidEventTap)
+    if let saved { CGWarpMouseCursorPosition(saved) }
   }
+
 }
