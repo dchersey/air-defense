@@ -1,7 +1,0 @@
-[   11769ms] [LOG] %craven%c Raven v1.20.0-69wxiu background-color:#000;margin-left:1px;padding:1px 3px;font-size:0.75em;color:#ffffff; font-size:0.9em; @ https://raven-static.aditude.io/prod/1.20.0-69wxiu/raven.js:1
-[   11930ms] [WARNING] [GPT] PubAdsService.setTargeting is deprecated, use googletag.setConfig({targeting: ...}) instead.
-https://goo.gle/gpt-message#170 @ https://securepubads.g.doubleclick.net/pagead/managed/js/gpt/m202605260101/pubads_impl.js?cb=31098798:18
-[   12179ms] [INFO] [REFRESH PATCH] pubads.refresh patched @ https://static.anonymised.io/light/loader.js?ref=aps&d=www.flightradar24.com:6
-[   12365ms] [LOG] Starting 3pc test @ https://static.anonm.io/light/check3pc.html:9
-[   12365ms] [LOG] 3PC enabled: true @ https://static.anonm.io/light/check3pc.html:32
-[   12365ms] [LOG] Storage API: cookie access granted @ https://static.anonm.io/light/check3pc.html:15
