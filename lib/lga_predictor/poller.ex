@@ -128,12 +128,27 @@ defmodule LgaPredictor.Poller do
       MapSet.member?(state.actioned, key) ->
         state
 
+      (ac.alt_ft || 0) >= ceiling ->
+        state
+
+      zoneset.trigger == :assume ->
+        dispatch(assume_window(zoneset), ac, key, config.anc_latency_seconds, state)
+
       true ->
         case first_window(ac, zoneset, ceiling, state.window) do
           nil -> state
           window -> dispatch(window, ac, key, config.anc_latency_seconds, state)
         end
     end
+  end
+
+  # :assume — detection in the monitor zone IS the trigger (for banking
+  # departures where projecting a path into the ANC zone is unreliable). Engage
+  # after a calibrated delay, hold for a calibrated duration.
+  defp assume_window(zoneset) do
+    enters = zoneset.assume_delay_seconds
+    exits = enters + zoneset.assume_duration_seconds
+    %{enters_in: enters, exits_in: exits, dwell_seconds: zoneset.assume_duration_seconds}
   end
 
   # The earliest engage/release window across this zoneset's ANC zones.

@@ -134,6 +134,7 @@ defmodule LgaPredictor.ConfigStore do
       not is_list(zs["anc_zones"]) -> {:error, "zoneset #{zs["id"]}: anc_zones must be a list"}
       not Enum.all?(zs["anc_zones"], &valid_geojson?/1) -> {:error, "zoneset #{zs["id"]}: invalid anc_zone GeoJSON"}
       (zs["reckoning"] || "constant") not in ["constant", "accelerating"] -> {:error, "zoneset #{zs["id"]}: bad reckoning"}
+      (zs["trigger"] || "predict") not in ["predict", "assume"] -> {:error, "zoneset #{zs["id"]}: bad trigger"}
       true -> :ok
     end
   end
@@ -164,6 +165,9 @@ defmodule LgaPredictor.ConfigStore do
       enabled: Map.get(zs, "enabled", true),
       reckoning: reckoning_atom(zs["reckoning"]),
       accel_kt_s: zs["accel_kt_s"] || 0.0,
+      trigger: trigger_atom(zs["trigger"]),
+      assume_delay_seconds: zs["assume_delay_seconds"] || 0.0,
+      assume_duration_seconds: zs["assume_duration_seconds"] || 30.0,
       altitude_ceiling_ft: zs["altitude_ceiling_ft"],
       notes: zs["notes"],
       monitor_zone: monitor,
@@ -174,6 +178,12 @@ defmodule LgaPredictor.ConfigStore do
 
   defp reckoning_atom("accelerating"), do: :accelerating
   defp reckoning_atom(_), do: :constant
+
+  # :assume — any qualifying detection in the monitor zone triggers ANC (for
+  # banking departures where straight-line projection into the ANC zone fails);
+  # :predict (default) — dead-reckon the path into the ANC zone.
+  defp trigger_atom("assume"), do: :assume
+  defp trigger_atom(_), do: :predict
 
   # Accept a GeoJSON Feature, a bare Polygon geometry, or already-extracted coords.
   defp to_polygon(%{"geometry" => %{"coordinates" => coords}}), do: Geo.geojson_polygon(coords)

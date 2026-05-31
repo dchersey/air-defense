@@ -4,7 +4,6 @@ defmodule LgaPredictor.PollerTest do
   alias LgaPredictor.{Actuator, Poller}
   alias LgaPredictor.FR24.Aircraft
 
-  @home {40.728, -73.864}
   # ANC zone: a box around home. The monitor zone is a wider box to its south.
   @anc_zone {:polygon, [{40.724, -73.870}, {40.732, -73.870}, {40.732, -73.858}, {40.724, -73.858}]}
   @monitor_box {40.738, 40.700, -73.880, -73.850}
@@ -35,6 +34,9 @@ defmodule LgaPredictor.PollerTest do
           enabled: true,
           reckoning: :constant,
           accel_kt_s: 0.0,
+          trigger: Keyword.get(opts, :trigger, :predict),
+          assume_delay_seconds: Keyword.get(opts, :assume_delay, 0.0),
+          assume_duration_seconds: Keyword.get(opts, :assume_duration, 30.0),
           altitude_ceiling_ft: nil,
           monitor_zone: nil,
           monitor_box: @monitor_box,
@@ -96,6 +98,35 @@ defmodule LgaPredictor.PollerTest do
     :ok = Poller.start_session()
     Process.sleep(80)
     # inbound is at 3000 ft, ceiling 2000 -> ignored
+    assert Actuator.mode() == :transparency
+  end
+
+  test "assume-trigger engages ANC for any detected flight, no path prediction" do
+    # A flight in the monitor box but heading AWAY (would never reach the ANC
+    # zone by prediction) still triggers under :assume.
+    away = %{inbound() | lat: 40.745, lon: -73.870, track_deg: 350.0, callsign: "DEP", hex: "DEP1"}
+
+    start(
+      config_fun: fn -> config(trigger: :assume, assume_delay: 0.0, assume_duration: 5.0) end,
+      fetcher: fn _ -> {:ok, [away]} end
+    )
+
+    :ok = Poller.start_session()
+    Process.sleep(80)
+    assert Actuator.mode() == :anc
+  end
+
+  test "assume-trigger ignores ramp traffic and high flights" do
+    parked = %{inbound() | alt_ft: 0.0, gspeed_kt: 0.0, hex: "R"}
+    high = %{inbound() | alt_ft: 9000.0, hex: "H"}
+
+    start(
+      config_fun: fn -> config(trigger: :assume) end,
+      fetcher: fn _ -> {:ok, [parked, high]} end
+    )
+
+    :ok = Poller.start_session()
+    Process.sleep(80)
     assert Actuator.mode() == :transparency
   end
 
