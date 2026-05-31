@@ -1,4 +1,4 @@
-# Calibration-by-tracking + popover-close fix — design
+# Per-flight ETA timing + popover-close fix — design
 
 Date: 2026-05-31
 Status: approved (design); not yet implemented
@@ -17,134 +17,101 @@ Two problems surfaced in live testing:
    monitor zone is big and far from the noise zone, so flights are detected at
    widely varying distances from the ANC zone. ANC fired immediately on monitor
    entry and dropped 10s later, while the plane reached the noise zone minutes
-   later. The fix is to **measure** the real delay/dwell per zoneset by tracking
-   flights, rather than guessing a constant.
+   later.
 
 2. **Popover-close regression.** When the app drives the switch, it sometimes
    leaves the Control Center popover open and doesn't return focus to the
    previous app — though the same code path closed cleanly earlier the same day.
 
-This supersedes the discarded fixed-delay tuning and the `:eta` idea.
+## The timing model: per-flight ETA (not learned calibration)
+
+The fix is per-flight geometry, not a learned per-zoneset constant. The exact
+thing that broke fixed-delay — flights detected at varying distances — is handled
+for free: **each flight carries its own delay = (distance to the ANC zone) ÷ (its
+own groundspeed)**, computed from a single detection poll.
+
+This also errs in the safe direction. A banking/curving plane travels *more*
+ground distance than the straight-line distance, and arrivals decelerate on final
+approach — both mean the real plane arrives *later* than constant-speed math
+predicts, so ANC engages slightly early rather than late. Early is tolerable;
+late was the observed failure.
+
+No learning, no sample buffer, no tracking process, no recalibration. Verification
+("did it show up when predicted?") is done **by eye** on a live pass first (we log
+the prediction inputs); an automated correction loop is deferred until the math is
+shown to be biased.
 
 ## Relevant existing interfaces (do not break)
 
-- `Poller` (`lib/lga_predictor/poller.ex`): iterates enabled zonesets each tick;
-  `consider/4` branches on `trigger`; `:assume` fires `assume_window/1` using
-  `assume_delay_seconds`/`assume_duration_seconds`. Reads config fresh each poll
-  via injectable `config_fun`; FR24 via injectable `fetcher`.
-- `ConfigStore` (`config_store.ex`): GenServer, JSON at
-  `~/Library/Application Support/noise-defence/config.json`. `get/1` returns the
-  derived (polygon + `monitor_box`) form; `raw/1` returns string-keyed JSON;
-  `put/1` validates + atomic-writes + bumps `version`.
-- `Predictor.predict_overflight/2`: dead-reckons; returns
-  `%{enters_in, exits_in, dwell_seconds}` or nil. Honors `:accel_kt_s`.
-- `AircraftRegistry.observe/3`: enriches aircraft with `:accel_kt_s` across polls.
-- `Geo`: `haversine_km/2`, `project/3` (accel-aware), `point_in_zone?/2`,
-  `geojson_polygon/1`, `bbox/1`.
-- `FR24.Client.positions(box, :light, opts)`: queries a **bounding box** (there
-  is no per-hex lookup); 6 cr per returned aircraft.
-- Swift `AncController.set(_:)` + `Model.applyModeIfChanged/1`.
+- `Poller` (`lib/lga_predictor/poller.ex`): `consider/4` branches on `trigger`;
+  the `:assume` branch currently calls `assume_window/1` (fixed delay/duration).
+  Reads config fresh each poll via injectable `config_fun`; FR24 via injectable
+  `fetcher`; dedupes by hex; applies ramp filter + altitude ceiling; fires the
+  `Actuator` `anc_latency_seconds` early.
+- `Predictor.predict_overflight/2`: path-based dead reckoning (steps along the
+  track). Stays as-is for `:predict` zonesets.
+- `Geo`: `haversine_km/2`, `point_in_zone?/2`, `geojson_polygon/1`, `bbox/1`.
+- `FR24.Aircraft`: has `:lat`, `:lon`, `:gspeed_kt`, `:track_deg`, `:alt_ft`,
+  `:hex`.
 
-## Part 1 — Calibration-by-tracking
+## Part 1 — Per-flight ETA timing
 
-### Module: `LgaPredictor.Calibration` (new GenServer)
+Two small pure functions plus a Poller wiring change. **No new process; no
+`ConfigStore`, `application.ex`, or `AircraftRegistry` changes.**
 
-A dedicated GenServer, not folded into `Poller`. The Poller does cheap per-flight
-detection on one cadence; tracking is a stateful, variable-cadence side activity
-running ~5 flights/hour. Separation keeps the Poller simple and the tracker
-testable with an injected fetcher + clock. The Poller only *notifies* the tracker.
+### `Geo` — distance to a zone
 
-#### State
+- **`distance_to_zone(point, {:polygon, pts}) :: float`** — kilometres from
+  `point` to the nearest polygon boundary; `0.0` if inside. Implemented as the
+  minimum point-to-segment great-circle distance over the polygon edges (planar
+  approximation is fine at city scale).
+- **`zone_distance_range(point, zone) :: {near, far}`** — `near` = above; `far` =
+  the maximum distance from `point` to the zone's vertices. Used for dwell.
 
-Per `:assume` zoneset:
-- `armed?` — collecting samples this hour (true from session-start / hourly tick
-  until 5 samples gathered).
-- `samples` — list of `%{delay, dwell}`, target 5.
-- `last_calibrated_at`.
+### `Predictor.predict_eta/3`
 
-In-flight tracked aircraft: `hex => %{zoneset_id, first_seen_ts, entry_ts | nil, last_ac}`.
+`predict_eta(aircraft, anc_zones, opts) :: %{enters_in, exits_in, dwell_seconds} | nil`
 
-Injectable: `:fetcher` (`box -> {:ok,[ac]} | {:error,_}`), `:config_fun`, `:clock`
-(unix seconds), for offline tests.
+- `gs_km_s = gspeed_kt * 1.852 / 3600`. If `gspeed_kt` is nil or ~0 → `nil`
+  (the Poller falls back to the manual fixed delay/duration).
+- For each zone in `anc_zones`, take `{near, far} = Geo.zone_distance_range`.
+  Across zones: `near = min(near_i)`, `far = max(far_i)` (single ANC zone is the
+  common case).
+- `enters_in = near / gs_km_s`
+- `dwell_seconds = (far − near) / gs_km_s`  (chord-through-zone estimate)
+- `exits_in = enters_in + dwell_seconds`
+- A plane already inside a zone gives `near = 0` → `enters_in = 0` (engage now).
 
-#### API
+Heading-independent by construction — this is the key difference from
+`predict_overflight` and why it survives banking/vectoring approaches.
 
-- `track(zoneset_id, aircraft, first_seen_ts)` — called by `Poller` on each
-  `:assume` detection. Begins tracking iff that zoneset is `armed?`, has <5
-  samples, and the hex isn't already tracked.
-- `arm_all/0`, `reset/0` — driven by `Poller` on session start / stop.
-- `status/0` — samples collected + `last_calibrated_at` per zoneset (for API/UI).
+### `Poller.consider` — `:assume` branch
 
-#### Re-poll loop (union box, adaptive cadence)
+Replace the fixed `assume_window(zoneset)` with:
 
-1. The tracker runs its timer only while ≥1 in-flight tracked aircraft exists
-   (idle otherwise → zero credits).
-2. Each tick, for every zoneset that has tracked flights, fetch its **union box**
-   = bbox of `monitor_zone ∪ anc_zones` (one FR24 call covers all that zoneset's
-   tracked flights). Add `length(results) * 6` to a calibration credit counter.
-   Match tracked hexes within the results.
-3. For each tracked flight, test `Geo.point_in_zone?` against the zoneset's
-   `anc_zones`:
-   - first sample inside → set `entry_ts`; `delay = entry_ts − first_seen_ts`.
-   - first sample back outside after entry → `dwell = exit_ts − entry_ts`; push
-     `%{delay, dwell}` and stop tracking that flight.
-4. **Adaptive cadence:** for flights not yet in-zone, predict seconds-to-entry by
-   reusing `Predictor.predict_overflight(ac, noise_zone: anc_zone, …).enters_in`
-   (min across `anc_zones`; pass `accel_kt_s` from `AircraftRegistry` when the
-   zoneset reckons `:accelerating`). Next tick = **2s** if the soonest predicted
-   entry across all tracked flights ≤ 10s, else **10s**.
-5. **Safety:** drop a tracked flight that never enters within `window_seconds`
-   (120s) or that disappears from the box for several consecutive ticks
-   (go-arounds / wrong-runway). Logged.
+```
+case Predictor.predict_eta(ac, zoneset.anc_zones, ...) do
+  nil    -> dispatch(assume_window(zoneset), ...)   # fallback: gs missing
+  window -> dispatch(window, ...)
+end
+```
 
-#### On 5 samples for a zoneset
+Everything else in the branch is unchanged: latency offset, hex dedupe, ceiling,
+ramp filter. The `TRIGGER` log line gains `distance_km` and `gs_kt` so accuracy
+can be judged by eye on a live pass (the "see if it showed up when predicted"
+step). `assume_delay_seconds` / `assume_duration_seconds` remain in the config as
+the fallback only; no config migration needed (`arr1`/`dep1` already
+`trigger: :assume`).
 
-- `delay = min(delays)` (earliest — engage no later than the soonest observed).
-- `dwell = max(dwells)` (longest — hold no shorter than the longest observed).
-- `ConfigStore.update_zoneset(id, %{"assume_delay_seconds" => delay,
-  "assume_duration_seconds" => dwell, "calibrated_at" => now})` — **overwrites**
-  the manual `assume_*` values (user's choice).
-- Disarm that zoneset; `log` result + calibration credits spent.
-
-#### Hourly recalibration
-
-A `:recalibrate` timer started on `arm_all`, cancelled on `reset`, re-arms every
-zoneset and clears its samples once per hour while the session is active.
-
-### Supporting changes
-
-- **`ConfigStore.update_zoneset(name \\ __MODULE__, id, merge_map)`** — atomic
-  read-modify-write inside the GenServer: find zoneset by `id`, `Map.merge` the
-  string-keyed fields, validate, persist, bump `version`. Returns
-  `{:ok, derived}` / `{:error, reason}` (bad id → error). Avoids a
-  read-modify-write race from the tracker.
-- **Validation/derivation:** `validate_zoneset` tolerates the new `calibrated_at`
-  key; `derive_zoneset` surfaces it.
-- **Union bbox:** reuse `Patterns.union_box/1` if it fits; else add
-  `Geo.union_box([zone]) :: {n,s,w,e}`.
-- **`Poller.consider`** — for `:assume` zonesets, after `dispatch`, also
-  `Calibration.track(zoneset.id, ac, now)` guarded by `Process.whereis`
-  (like `History`). Normal ANC firing is unchanged: it keeps using the current
-  `assume_*` values; once calibration overwrites them the next poll picks them up
-  (Poller reads config fresh each tick).
-- **`Poller` session lifecycle** — `Calibration.arm_all()` on start_session,
-  `Calibration.reset()` on end_session (both guarded by `Process.whereis`).
-- **`application.ex`** — supervise `Calibration` after `ConfigStore` /
-  `AircraftRegistry` and before `Poller`.
-
-### Cost
-
-The union box is large for `arr1`, so 2s-cadence re-polls near entry can return
-several aircraft each. Bounded to ~5 flights/hour, idle otherwise. Calibration
-credits are logged separately so they can be watched on the first live run.
+`:predict` zonesets are untouched.
 
 ## Part 2 — Popover-close regression
 
 Debugging task — evidence before structural change:
 
-1. **Logging first** (`AncController.set` → `Log.line`): log `previousApp`
-   bundle id, whether it equals our own bundle, each AX step's result, and a line
-   after the reactivate. Confirms root cause from
+1. **Logging first** (`AncController.set` → `Log.line`): log `previousApp` bundle
+   id, whether it equals our own bundle, each AX step's result, and a line after
+   the reactivate. Confirms root cause from
    `~/Library/Logs/noise-defence-app.log` on the next live pass.
 2. **Guard `previousApp == self / nil`** — prime suspect: when the menu-bar app
    has been clicked, `frontmostApplication` is our LSUIElement agent, so
@@ -161,19 +128,22 @@ No unit tests for the AX path (untestable); verified by ear/eye on a live pass.
 
 ## Testing (TDD, commit-per-unit, suite stays green)
 
-- **`Calibration`**: injected fetcher replays a flight crossing monitor → ANC
-  zone + injected clock. Assert delay/dwell capture; earliest-delay/longest-dwell
-  aggregation after 5 samples (and the `ConfigStore.update_zoneset` write);
-  adaptive 2s-vs-10s decision; hourly re-arm; never-enters timeout; idle when no
-  tracked flights.
-- **`ConfigStore.update_zoneset`**: temp path — persist + version bump + bad-id
-  error + `calibrated_at` round-trips.
-- **`Poller`**: detection notifies `Calibration`; no-ops cleanly when
-  `Calibration` isn't running.
-- **`Geo.union_box`** (if added): bbox of multiple zones.
+- **`Geo.distance_to_zone` / `zone_distance_range`**: point outside → known
+  distance; point inside → 0; point nearest an edge midpoint (not a vertex) →
+  correct point-to-segment distance; `far` ≥ `near`.
+- **`Predictor.predict_eta`**: aircraft at a known distance/gs → `enters_in ≈
+  distance / gs`; dwell from `far − near`; multiple zones picks the soonest
+  `enters_in`; `gspeed_kt` nil/0 → nil; already-inside → `enters_in = 0`.
+- **`Poller`**: an `:assume` zoneset with an injected flight at a known
+  distance/gs dispatches `Actuator.cover` with `on_ms ≈ (enters_in − latency)*1000`;
+  falls back to the fixed window when groundspeed is missing.
 
-## Out of scope (fast-follow)
+## Out of scope (fast-follow, only if live testing shows bias)
 
-- Adaptive per-zoneset main poll interval (separate request).
-- Swift settings pane surfacing `calibrated_at` / a manual Calibrate button.
-- GitHub backup of `config.json`; flight-capture map.
+- Automated verification: widen the poll to the union box (monitor∪ANC) and log
+  predicted-vs-actual entry per flight.
+- Per-zoneset correction factor applied to future ETAs.
+- Direction sanity (skip a plane receding from the ANC zone).
+- Accel-aware ETA for accelerating departures (constant-gs is the safe-early
+  baseline).
+- Adaptive per-zoneset poll interval; Swift settings pane; config backup.
