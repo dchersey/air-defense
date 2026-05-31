@@ -92,11 +92,26 @@ defmodule LgaPredictor.FR24.Client do
     :lga_predictor |> Application.get_env(:fr24, %{}) |> Map.get(:sandbox?, false)
   end
 
-  defp api_key(true = _sandbox?) do
-    System.get_env("FR24_SANDBOX_KEY") || raise "FR24_SANDBOX_KEY environment variable is not set"
+  # Resolve the FR24 token: macOS Keychain first (no secret in env/plist), then
+  # the env var as a fallback for tests, scripts, and non-macOS/CI.
+  defp api_key(sandbox?) do
+    {service, env} =
+      if sandbox?,
+        do: {"noise-defence-fr24-sandbox", "FR24_SANDBOX_KEY"},
+        else: {"noise-defence-fr24", "FR24_API_KEY"}
+
+    keychain_key(service) || System.get_env(env) ||
+      raise "FR24 key not found (keychain service #{inspect(service)} or env #{env})"
   end
 
-  defp api_key(false = _sandbox?) do
-    System.get_env("FR24_API_KEY") || raise "FR24_API_KEY environment variable is not set"
+  defp keychain_key(service) do
+    case System.cmd("security", ["find-generic-password", "-s", service, "-w"],
+           stderr_to_stdout: true) do
+      {out, 0} -> String.trim(out)
+      _ -> nil
+    end
+  rescue
+    # `security` absent (e.g. CI/Linux) — fall through to the env var.
+    _ -> nil
   end
 end
