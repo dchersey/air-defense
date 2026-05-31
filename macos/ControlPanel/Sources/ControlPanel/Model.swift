@@ -38,7 +38,11 @@ final class StatusModel {
 
   private let base = "http://127.0.0.1:4040"
   private var timer: Timer?
-  private var appliedMode: String?
+  // Seeded to the assumed starting mode. The actuator is a BLIND toggle
+  // (Ctrl-Shift-A), so we must not fire it on the first poll: we assume the
+  // AirPods begin in Transparency when a session starts. If that assumption is
+  // wrong the state can invert — toggle manually once to resync.
+  private var appliedMode: String = "transparency"
 
   init() {
     AncController.ensureTrusted()
@@ -73,8 +77,8 @@ final class StatusModel {
   }
 
   /// Mirror the backend's desired mode onto the headphones, but only on a change
-  /// (pressing a Control Center control opens the popover, so we avoid doing it
-  /// every poll).
+  /// (the actuator posts AirBuddy's toggle hotkey, so firing every poll would
+  /// flip the mode back and forth).
   private func applyModeIfChanged(_ desired: String) {
     guard desired != appliedMode else { return }
     let target: AncController.Mode = (desired == "anc") ? .anc : .transparency

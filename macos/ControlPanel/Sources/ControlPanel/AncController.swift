@@ -2,19 +2,23 @@ import AppKit
 import ApplicationServices
 
 /// Drives AirPods Max noise control by automating the macOS Control Center Sound
-/// popover via the native Accessibility API. Verified working on macOS 26 (Tahoe):
-/// the Listening Mode rows are AXCheckBoxes whose AXDescription is
-/// "Noise Cancellation" / "Transparency". Pressing one is idempotent.
+/// popover via the Accessibility API. This is the ONLY mechanism confirmed to
+/// actually change the listening mode on macOS 26 (Tahoe) — Shortcuts, the private
+/// AVFoundation/IOBluetooth APIs, and AirBuddy's synthetic hotkey all failed.
 ///
-/// Requires Accessibility permission for this app, the Sound module pinned to the
-/// menu bar (com.apple.menuextra.sound), and AirPods connected as output.
+/// To avoid the two warts of naive Control Center automation (it steals keyboard
+/// focus and the popover lingers), `set(_:)` captures the frontmost app before
+/// opening Control Center and **reactivates it afterward**. Reactivating another
+/// app makes the Control Center popover resign key — which both dismisses it and
+/// returns keyboard focus to wherever the user was working.
+///
+/// Requires Accessibility permission, the Sound module pinned to the menu bar
+/// (com.apple.menuextra.sound), and AirPods connected as output.
 enum AncController {
   enum Mode: String {
     case anc = "Noise Cancellation"
     case transparency = "Transparency"
   }
-
-  // MARK: - Public
 
   /// Whether this process is trusted for Accessibility (prompts if not).
   @discardableResult
@@ -22,12 +26,14 @@ enum AncController {
     AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
   }
 
-  /// Set the AirPods listening mode. Returns true if the control was found+pressed.
+  /// Set the AirPods listening mode. Returns true if the control was pressed.
   @discardableResult
   static func set(_ mode: Mode) -> Bool {
     guard let cc = controlCenterApp(), let soundItem = soundMenuBarItem() else { return false }
 
-    // Open the Sound popover (AXPress works for opening and doesn't move the cursor).
+    // Remember who had focus so we can hand it back (and dismiss the popover).
+    let previousApp = NSWorkspace.shared.frontmostApplication
+
     _ = press(soundItem)
     Thread.sleep(forTimeInterval: 0.5)
 
@@ -39,11 +45,14 @@ enum AncController {
         false
       }
 
-    // Close by a real synthetic click on the Sound item — AXPress and Escape do
-    // NOT dismiss the popover on this machine (verified via AncProbe). The click
-    // warps the cursor, so we save and restore it.
+    // Reactivate the previously-frontmost app: dismisses the Control Center
+    // popover (it resigns key) and restores the user's keyboard focus.
+    // NOTE: bare `activate()` is deprecated and a no-op on Tahoe — the popover
+    // lingers and focus stays stolen. `.activateIgnoringOtherApps` is what
+    // actually works (verified by ear/eye 2026-05-31).
     Thread.sleep(forTimeInterval: 0.2)
-    clickElement(soundItem)
+    previousApp?.activate(options: [.activateIgnoringOtherApps])
+
     return ok
   }
 
@@ -101,7 +110,7 @@ enum AncController {
       .map { AXUIElementCreateApplication($0.processIdentifier) }
   }
 
-  /// The pinned Sound menu-bar item (id "com.apple.menuextra.sound").
+  /// The pinned Sound menu-bar item (id contains "sound").
   private static func soundMenuBarItem() -> AXUIElement? {
     guard let cc = controlCenterApp(), let menuBar = find(cc, { role($0) == "AXMenuBar" })
     else { return nil }
@@ -110,23 +119,4 @@ enum AncController {
       (str($0, kAXIdentifierAttribute as String) ?? "").lowercased().contains("sound")
     }
   }
-
-  /// Real synthetic left-click at an element's center, restoring the cursor
-  /// afterward (the click warps it). Used to dismiss the Sound popover, which
-  /// AXPress/Escape don't close reliably on this machine.
-  private static func clickElement(_ e: AXUIElement) {
-    var pos = CGPoint.zero, size = CGSize.zero
-    guard let pv = attr(e, kAXPositionAttribute as String),
-          let sv = attr(e, kAXSizeAttribute as String) else { return }
-    AXValueGetValue(pv as! AXValue, .cgPoint, &pos)
-    AXValueGetValue(sv as! AXValue, .cgSize, &size)
-    let center = CGPoint(x: pos.x + size.width / 2, y: pos.y + size.height / 2)
-
-    let saved = CGEvent(source: nil)?.location
-    let src = CGEventSource(stateID: .combinedSessionState)
-    CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: center, mouseButton: .left)?.post(tap: .cghidEventTap)
-    CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: center, mouseButton: .left)?.post(tap: .cghidEventTap)
-    if let saved { CGWarpMouseCursorPosition(saved) }
-  }
-
 }
