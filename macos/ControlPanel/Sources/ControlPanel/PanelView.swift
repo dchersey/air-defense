@@ -62,18 +62,54 @@ struct PanelView: View {
   // MARK: - Controls
 
   private var controls: some View {
-    HStack {
-      Button(action: model.start) {
-        Label("Start 4h session", systemImage: "play.fill")
+    VStack(alignment: .leading, spacing: 8) {
+      if !model.reachable {
+        Text("service offline").font(.caption).foregroundStyle(.tertiary)
+      } else if model.zonesets.isEmpty {
+        Text("no zones configured").font(.caption).foregroundStyle(.tertiary)
+      } else {
+        ForEach(model.zonesets) { zone in
+          zoneRow(zone)
+        }
       }
-      .disabled(model.active || !model.reachable)
+    }
+  }
 
-      Button(action: model.stop) {
-        Label("Stop", systemImage: "stop.fill")
+  // One Start 4h / Stop control per zoneset, with a live/idle indicator. Each
+  // zone runs an independent session (start the one matching the active runway).
+  private func zoneRow(_ zone: ZonesetStatus) -> some View {
+    HStack(spacing: 8) {
+      Circle()
+        .fill(zone.active ? Color.green : Color.secondary.opacity(0.4))
+        .frame(width: 8, height: 8)
+
+      VStack(alignment: .leading, spacing: 1) {
+        Text(zone.name).font(.subheadline)
+        Text(zone.active ? "monitoring · \(zoneCountdown(zone)) left" : "idle")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
       }
-      .disabled(!model.active)
+
+      Spacer()
+
+      if zone.active {
+        Button { model.stop(zone.id) } label: {
+          Label("Stop", systemImage: "stop.fill")
+        }
+      } else {
+        Button { model.start(zone.id) } label: {
+          Label("Start 4h", systemImage: "play.fill")
+        }
+      }
     }
     .buttonStyle(.bordered)
+    .controlSize(.small)
+  }
+
+  private func zoneCountdown(_ zone: ZonesetStatus) -> String {
+    guard let ends = zone.endsAt else { return "—" }
+    let remaining = max(0, ends - Int(Date().timeIntervalSince1970))
+    return "\(remaining / 3600)h \((remaining % 3600) / 60)m"
   }
 
   // MARK: - Chart

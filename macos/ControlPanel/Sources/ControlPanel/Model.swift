@@ -11,12 +11,20 @@ struct Flight: Codable, Identifiable {
   var id: String { "\(callsign ?? "?")-\(at)" }
 }
 
+struct ZonesetStatus: Codable, Identifiable {
+  let id: String
+  let name: String
+  let active: Bool
+  let endsAt: Int?
+}
+
 struct StatusResponse: Codable {
   let active: Bool
   let mode: String
   let sessionEndsAt: Int?
   let polls: Int
   let approxCredits: Int
+  let zonesets: [ZonesetStatus]
   let recent: [Flight]
   let history: [Int]
 }
@@ -32,6 +40,7 @@ final class StatusModel {
   var sessionEndsAt: Int?
   var polls = 0
   var approxCredits = 0
+  var zonesets: [ZonesetStatus] = []
   var recent: [Flight] = []
   var history: [Int] = []
   var reachable = false
@@ -70,6 +79,7 @@ final class StatusModel {
       sessionEndsAt = status.sessionEndsAt
       polls = status.polls
       approxCredits = status.approxCredits
+      zonesets = status.zonesets
       recent = status.recent
       history = status.history
       reachable = true
@@ -102,13 +112,17 @@ final class StatusModel {
     }
   }
 
-  func start() { post("/api/session/start") }
-  func stop() { post("/api/session/stop") }
+  func start(_ zoneset: String) { post("/api/session/start", body: ["zoneset": zoneset]) }
+  func stop(_ zoneset: String) { post("/api/session/stop", body: ["zoneset": zoneset]) }
 
-  private func post(_ path: String) {
+  private func post(_ path: String, body: [String: String]? = nil) {
     guard let url = URL(string: base + path) else { return }
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
+    if let body {
+      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+      request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+    }
     Task {
       _ = try? await URLSession.shared.data(for: request)
       await refresh()
