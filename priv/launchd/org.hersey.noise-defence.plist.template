@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for the headless LGA overflight predictor service.
+  Boots idle at login (no polling, no FR24 credits) and waits for the menu-bar
+  app to POST /api/session/start. No secret here — the FR24 key is read from the
+  macOS Keychain (service "noise-defence-fr24") at request time.
+
+  Placeholders @REPO@, @ELIXIR@, @PATH@, @HOME@ are filled in by install.sh.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>org.hersey.noise-defence</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>@ELIXIR@</string>
+    <string>-S</string>
+    <string>mix</string>
+    <string>run</string>
+    <string>--no-halt</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>@REPO@</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- elixir needs erl on PATH; launchd's default PATH is minimal. -->
+    <key>PATH</key>
+    <string>@PATH@</string>
+    <key>HOME</key>
+    <string>@HOME@</string>
+    <key>MIX_ENV</key>
+    <string>prod</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>@HOME@/Library/Logs/noise-defence.log</string>
+  <key>StandardErrorPath</key>
+  <string>@HOME@/Library/Logs/noise-defence.log</string>
+</dict>
+</plist>
