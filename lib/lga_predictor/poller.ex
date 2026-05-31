@@ -132,7 +132,11 @@ defmodule LgaPredictor.Poller do
         state
 
       zoneset.trigger == :assume ->
-        dispatch(assume_window(zoneset), ac, key, config.anc_latency_seconds, state)
+        # Per-flight ETA from distance ÷ groundspeed (heading-independent). Falls
+        # back to the fixed assume window only if ETA can't be computed (no
+        # groundspeed / no ANC zones).
+        window = Predictor.predict_eta(ac, zoneset.anc_zones) || assume_window(zoneset)
+        dispatch(window, ac, key, config.anc_latency_seconds, state)
 
       true ->
         case first_window(ac, zoneset, ceiling, state.window) do
@@ -173,8 +177,12 @@ defmodule LgaPredictor.Poller do
     on_ms = max(round((window.enters_in - latency) * 1000), 0)
     off_ms = max(round((window.exits_in - latency) * 1000), 0)
 
+    # Distance to entry along ground (enters_in × groundspeed) — logged so ETA
+    # accuracy can be judged by eye against the FR24 map on a live pass.
+    dist_km = Float.round(window.enters_in * (ac.gspeed_kt || 0) * 1.852 / 3600, 2)
+
     Logger.info(
-      "[poller] TRIGGER #{key} alt=#{ac.alt_ft}ft gs=#{ac.gspeed_kt}kt " <>
+      "[poller] TRIGGER #{key} alt=#{ac.alt_ft}ft gs=#{ac.gspeed_kt}kt dist=#{dist_km}km " <>
         "enters in #{round(window.enters_in)}s, dwell #{round(window.dwell_seconds)}s"
     )
 

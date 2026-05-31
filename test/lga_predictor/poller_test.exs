@@ -101,10 +101,10 @@ defmodule LgaPredictor.PollerTest do
     assert Actuator.mode() == :transparency
   end
 
-  test "assume-trigger engages ANC for any detected flight, no path prediction" do
-    # A flight in the monitor box but heading AWAY (would never reach the ANC
-    # zone by prediction) still triggers under :assume.
-    away = %{inbound() | lat: 40.745, lon: -73.870, track_deg: 350.0, callsign: "DEP", hex: "DEP1"}
+  test "assume-trigger engages ANC regardless of heading (ETA is distance-based)" do
+    # Already inside the ANC zone but heading AWAY — :predict would miss it; under
+    # :assume the distance-based ETA is ~0 s, so ANC engages now.
+    away = %{inbound() | track_deg: 350.0, callsign: "DEP", hex: "DEP1"}
 
     start(
       config_fun: fn -> config(trigger: :assume, assume_delay: 0.0, assume_duration: 5.0) end,
@@ -114,6 +114,21 @@ defmodule LgaPredictor.PollerTest do
     :ok = Poller.start_session()
     Process.sleep(80)
     assert Actuator.mode() == :anc
+  end
+
+  test "assume-trigger times engagement by distance over groundspeed" do
+    # In the monitor box but ~3 km north of the ANC zone at 100 kt -> ~60 s out.
+    # Under the old fixed assume_delay=0 this engaged immediately; ETA must not.
+    far = %{inbound() | lat: 40.760, callsign: "FAR", hex: "FAR1"}
+
+    start(
+      config_fun: fn -> config(trigger: :assume, assume_delay: 0.0, assume_duration: 5.0) end,
+      fetcher: fn _ -> {:ok, [far]} end
+    )
+
+    :ok = Poller.start_session()
+    Process.sleep(80)
+    assert Actuator.mode() == :transparency
   end
 
   test "assume-trigger ignores ramp traffic and high flights" do
