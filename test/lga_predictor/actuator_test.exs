@@ -35,6 +35,24 @@ defmodule LgaPredictor.ActuatorTest do
     assert Actuator.mode() == :transparency
   end
 
+  test "phase reflects idle -> armed (window scheduled) -> engaged" do
+    assert Actuator.phase() == :idle
+
+    # A future window: ANC scheduled but not yet engaged -> armed.
+    Actuator.cover(120, 300, "SOON")
+    Process.sleep(20)
+    assert Actuator.phase() == :armed
+    assert Actuator.mode() == :transparency
+
+    # Once it engages -> engaged.
+    Process.sleep(150)
+    assert Actuator.phase() == :engaged
+
+    # After the window -> idle again.
+    Process.sleep(200)
+    assert Actuator.phase() == :idle
+  end
+
   test "reset forces transparency immediately" do
     Actuator.cover(0, 5_000, "LONG")
     Process.sleep(20)

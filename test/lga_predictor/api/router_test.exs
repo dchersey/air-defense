@@ -82,9 +82,10 @@ defmodule LgaPredictor.API.RouterTest do
     assert Jason.decode!(call(:get, "/api/status").resp_body)["active"] == false
   end
 
-  test "POST /api/actuator/cover drives the desired mode to anc" do
+  test "POST /api/actuator/cover drives the desired mode + phase to anc/engaged" do
     assert post_json("/api/actuator/cover", %{"on_ms" => 0, "off_ms" => 10_000}).status == 200
     assert eventually(fn -> Jason.decode!(call(:get, "/api/status").resp_body)["mode"] == "anc" end)
+    assert Jason.decode!(call(:get, "/api/status").resp_body)["anc_phase"] == "engaged"
   end
 
   test "unknown route 404s as JSON" do

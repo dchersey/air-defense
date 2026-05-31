@@ -18,10 +18,18 @@ struct ZonesetStatus: Codable, Identifiable {
   let endsAt: Int?
 }
 
+/// Menu-bar indicator state. Drives icon + colour:
+/// idle = white/default, pending = amber (flight detected, ANC scheduled),
+/// engaged = red (ANC on), offline = service unreachable.
+enum AncPhase {
+  case offline, idle, pending, engaged
+}
+
 struct StatusResponse: Codable {
   let active: Bool
   let mode: String
   let sessionEndsAt: Int?
+  let ancPhase: String
   let polls: Int
   let approxCredits: Int
   let zonesets: [ZonesetStatus]
@@ -37,6 +45,7 @@ struct StatusResponse: Codable {
 final class StatusModel {
   var active = false
   var mode = "transparency"
+  var ancPhase = "idle"
   var sessionEndsAt: Int?
   var polls = 0
   var approxCredits = 0
@@ -55,6 +64,18 @@ final class StatusModel {
   // Guards against a second AX sequence starting before the first finishes
   // (back-to-back desired-mode changes), which left the popover open.
   private var isApplying = false
+
+  /// Current menu-bar phase from the backend actuator: engaged = ANC on (red),
+  /// pending = a flight detected and ANC scheduled but not yet on (amber),
+  /// idle = nothing scheduled (default).
+  var phase: AncPhase {
+    if !reachable { return .offline }
+    switch ancPhase {
+    case "engaged": return .engaged
+    case "armed": return .pending
+    default: return .idle
+    }
+  }
 
   init() {
     let trusted = AncController.ensureTrusted()
@@ -76,6 +97,7 @@ final class StatusModel {
 
       active = status.active
       mode = status.mode
+      ancPhase = status.ancPhase
       sessionEndsAt = status.sessionEndsAt
       polls = status.polls
       approxCredits = status.approxCredits

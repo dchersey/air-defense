@@ -72,6 +72,7 @@ defmodule LgaPredictor.API.Router do
     %{
       active: status.active?,
       mode: Actuator.mode(),
+      anc_phase: Actuator.phase(),
       session_ends_at: status.session_ends_at,
       polls: status.polls,
       approx_credits: status.approx_credits,

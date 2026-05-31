@@ -27,6 +27,13 @@ defmodule LgaPredictor.Actuator do
   @doc "Current acoustic mode (`:anc` | `:transparency`)."
   def mode, do: GenServer.call(__MODULE__, :mode)
 
+  @doc """
+  Coarse phase for the UI: `:engaged` (ANC on), `:armed` (a window is scheduled
+  but ANC hasn't engaged yet — i.e. a flight has been detected and ANC is
+  pending), or `:idle` (nothing scheduled).
+  """
+  def phase, do: GenServer.call(__MODULE__, :phase)
+
   @doc "Force back to Transparency and clear any pending window (e.g. session end)."
   def reset, do: GenServer.call(__MODULE__, :reset)
 
@@ -67,6 +74,17 @@ defmodule LgaPredictor.Actuator do
 
   @impl true
   def handle_call(:mode, _from, state), do: {:reply, state.mode, state}
+
+  def handle_call(:phase, _from, state) do
+    phase =
+      cond do
+        state.mode == :anc -> :engaged
+        state.anc_off_at != nil -> :armed
+        true -> :idle
+      end
+
+    {:reply, phase, state}
+  end
 
   def handle_call(:reset, _from, state) do
     if state.disengage_timer, do: Process.cancel_timer(state.disengage_timer)
