@@ -33,18 +33,26 @@ defmodule LgaPredictor.Geo do
   @deg_per_kt_second 216_000.0
 
   @doc """
-  Straight-line dead-reckoning projection `t` seconds ahead.
+  Dead-reckoning projection `t` seconds ahead.
 
   Takes a kinematic state map (`:lat`, `:lon`, `:track_deg`, `:gspeed_kt`,
   `:vspeed_fpm`, `:alt_ft`) and returns `%{lat:, lon:, alt_ft:}` projected forward.
   `track_deg` is course over ground (FR24 `track`), measured clockwise from true north.
+
+  `:accel_kt_s` (default 0) is along-track acceleration in knots/second — for
+  departing aircraft that speed up along the arc. Ground distance covered is the
+  integral of `gs0 + accel·t`, i.e. `gs0·t + ½·accel·t²` (in kt·s units).
   """
-  @spec project(map(), number()) :: %{lat: float(), lon: float(), alt_ft: float()}
-  def project(%{lat: lat, lon: lon, track_deg: track, gspeed_kt: gs, vspeed_fpm: vs, alt_ft: alt}, t_seconds) do
+  @spec project(map(), number(), keyword()) :: %{lat: float(), lon: float(), alt_ft: float()}
+  def project(%{lat: lat, lon: lon, track_deg: track, gspeed_kt: gs, vspeed_fpm: vs, alt_ft: alt}, t_seconds, opts \\ []) do
+    accel = Keyword.get(opts, :accel_kt_s, 0.0)
     track_rad = deg_to_rad(track)
 
-    dlat = gs * :math.cos(track_rad) * t_seconds / @deg_per_kt_second
-    dlon = gs * :math.sin(track_rad) * t_seconds / (@deg_per_kt_second * :math.cos(deg_to_rad(lat)))
+    # ∫(gs + accel·τ) dτ from 0..t, in knot·seconds.
+    distance_kt_s = gs * t_seconds + 0.5 * accel * t_seconds * t_seconds
+
+    dlat = distance_kt_s * :math.cos(track_rad) / @deg_per_kt_second
+    dlon = distance_kt_s * :math.sin(track_rad) / (@deg_per_kt_second * :math.cos(deg_to_rad(lat)))
 
     %{
       lat: lat + dlat,

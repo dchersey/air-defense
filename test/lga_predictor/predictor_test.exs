@@ -46,6 +46,13 @@ defmodule LgaPredictor.PredictorTest do
       assert %{enters_in: enters} = Predictor.predict_overflight(overhead, @opts)
       assert enters <= 1
     end
+
+    test "an accelerating aircraft reaches the zone sooner than constant speed" do
+      ac = inbound()
+      %{enters_in: constant} = Predictor.predict_overflight(ac, @opts)
+      %{enters_in: accel} = Predictor.predict_overflight(ac, @opts ++ [accel_kt_s: 5.0])
+      assert accel < constant
+    end
   end
 
   describe "overflight_windows/2" do

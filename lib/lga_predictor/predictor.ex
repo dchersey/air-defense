@@ -20,6 +20,7 @@ defmodule LgaPredictor.Predictor do
     window = Keyword.get(opts, :window_seconds, 90)
     ceiling = Keyword.get(opts, :altitude_ceiling_ft, 4500)
     step = Keyword.get(opts, :step_seconds, 5)
+    accel = Keyword.get(opts, :accel_kt_s, 0.0)
 
     if missing_kinematics?(aircraft) do
       nil
@@ -27,7 +28,7 @@ defmodule LgaPredictor.Predictor do
       0
       |> Stream.iterate(&(&1 + step))
       |> Enum.take_while(&(&1 <= window))
-      |> Enum.filter(&inside_and_low?(aircraft, &1, zone, ceiling))
+      |> Enum.filter(&inside_and_low?(aircraft, &1, zone, ceiling, accel))
       |> summarise()
     end
   end
@@ -45,8 +46,8 @@ defmodule LgaPredictor.Predictor do
     |> Enum.map(fn {ac, result} -> Map.put(result, :aircraft, ac) end)
   end
 
-  defp inside_and_low?(aircraft, t, zone, ceiling) do
-    projected = Geo.project(aircraft, t)
+  defp inside_and_low?(aircraft, t, zone, ceiling, accel) do
+    projected = Geo.project(aircraft, t, accel_kt_s: accel)
     projected.alt_ft < ceiling and Geo.point_in_zone?({projected.lat, projected.lon}, zone)
   end
 
