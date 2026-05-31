@@ -41,6 +41,16 @@ defmodule LgaPredictor.API.Router do
     send_json(conn, 200, %{ok: true})
   end
 
+  # Manual ANC trigger — drives the same Actuator.cover the Poller uses, so the
+  # menu-bar app mirrors it onto the headphones exactly as in a real session.
+  # Engage in `on_ms`, release in `off_ms` (defaults 0). For testing without a flight.
+  post "/api/actuator/cover" do
+    on = trunc(conn.body_params["on_ms"] || 0)
+    off = trunc(conn.body_params["off_ms"] || 0)
+    Actuator.cover(on, off, conn.body_params["label"] || "manual")
+    send_json(conn, 200, %{ok: true})
+  end
+
   get "/api/config" do
     send_json(conn, 200, config_payload())
   end

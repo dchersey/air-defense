@@ -40,6 +40,14 @@ defmodule LgaPredictor.API.RouterTest do
 
   defp call(method, path), do: conn(method, path) |> Router.call(@opts)
 
+  # Spin (no sleep) until `fun` is true or we run out of tries — the actuator
+  # engages via an async self-message, so the mode flips a beat after the cast.
+  defp eventually(fun, tries \\ 100) do
+    Enum.reduce_while(1..tries, false, fn _, _ ->
+      if fun.(), do: {:halt, true}, else: {:cont, false}
+    end)
+  end
+
   test "GET /api/status returns session + mode JSON" do
     conn = call(:get, "/api/status")
     assert conn.status == 200
@@ -72,6 +80,11 @@ defmodule LgaPredictor.API.RouterTest do
 
     assert post_json("/api/session/stop", %{"zoneset" => "z1"}).status == 200
     assert Jason.decode!(call(:get, "/api/status").resp_body)["active"] == false
+  end
+
+  test "POST /api/actuator/cover drives the desired mode to anc" do
+    assert post_json("/api/actuator/cover", %{"on_ms" => 0, "off_ms" => 10_000}).status == 200
+    assert eventually(fn -> Jason.decode!(call(:get, "/api/status").resp_body)["mode"] == "anc" end)
   end
 
   test "unknown route 404s as JSON" do
