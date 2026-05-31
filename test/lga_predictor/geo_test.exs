@@ -82,4 +82,39 @@ defmodule LgaPredictor.GeoTest do
       refute Geo.point_in_zone?({-0.5, 0.5}, @square)
     end
   end
+
+  describe "distance_to_zone/2" do
+    # Unit square with lon edges at 0 and 1, lat edges at 0 and 1.
+    @square {:polygon, [{0.0, 0.0}, {0.0, 1.0}, {1.0, 1.0}, {1.0, 0.0}]}
+
+    test "a point inside the polygon is zero distance" do
+      assert Geo.distance_to_zone({0.5, 0.5}, @square) == 0.0
+    end
+
+    test "a point due east projects onto the edge interior (not a vertex)" do
+      # {0.5, 2.0} is one degree of longitude east of the east edge at lat 0.5.
+      assert_in_delta Geo.distance_to_zone({0.5, 2.0}, @square), 111.18, 0.1
+    end
+
+    test "a point off the corner clamps to the nearest vertex" do
+      # {0.0, 2.0} is nearest the {0.0, 1.0} corner — one degree of longitude away.
+      assert_in_delta Geo.distance_to_zone({0.0, 2.0}, @square), 111.19, 0.05
+    end
+  end
+
+  describe "zone_distance_range/2" do
+    @square {:polygon, [{0.0, 0.0}, {0.0, 1.0}, {1.0, 1.0}, {1.0, 0.0}]}
+    @verts [{0.0, 0.0}, {0.0, 1.0}, {1.0, 1.0}, {1.0, 0.0}]
+
+    test "near is the boundary distance and far is the farthest vertex" do
+      point = {0.5, 2.0}
+      {near, far} = Geo.zone_distance_range(point, @square)
+
+      far_expected = @verts |> Enum.map(&Geo.haversine_km(point, &1)) |> Enum.max()
+
+      assert_in_delta near, Geo.distance_to_zone(point, @square), 1.0e-9
+      assert_in_delta far, far_expected, 1.0e-9
+      assert near < far
+    end
+  end
 end

@@ -88,6 +88,64 @@ defmodule LgaPredictor.Geo do
     end)
   end
 
+  # Kilometres per degree of latitude (great-circle, R=6371 km) — also the
+  # north/south scale for the local equirectangular projection below.
+  @km_per_deg 6371.0 * :math.pi() / 180.0
+
+  @doc """
+  Shortest distance in kilometres from `point` to the boundary of `zone`,
+  or `0.0` if the point is inside it. Distance is the minimum point-to-segment
+  distance over the polygon edges, computed in a local equirectangular frame
+  about the point's latitude (planar approximation, fine at city scale).
+  """
+  @spec distance_to_zone(point(), zone()) :: float()
+  def distance_to_zone(point, {:polygon, vertices} = zone) do
+    if point_in_zone?(point, zone) do
+      0.0
+    else
+      vertices
+      |> Enum.zip(rotate(vertices))
+      |> Enum.map(fn {a, b} -> point_to_segment_km(point, a, b) end)
+      |> Enum.min()
+    end
+  end
+
+  @doc """
+  The `{near, far}` distances in kilometres from `point` to a polygon zone:
+  `near` is `distance_to_zone/2` (the nearest boundary, 0 if inside) and `far`
+  is the great-circle distance to the farthest vertex. Used to estimate how long
+  a straight pass through the zone takes (`(far - near) / groundspeed`).
+  """
+  @spec zone_distance_range(point(), zone()) :: {float(), float()}
+  def zone_distance_range(point, {:polygon, vertices} = zone) do
+    near = distance_to_zone(point, zone)
+    far = vertices |> Enum.map(&haversine_km(point, &1)) |> Enum.max()
+    {near, far}
+  end
+
+  # Distance from `point` to segment A–B, in km, via a local equirectangular
+  # projection centred on the point's latitude (origin = the point itself).
+  defp point_to_segment_km({plat, plon}, {alat, alon}, {blat, blon}) do
+    kx = @km_per_deg * :math.cos(deg_to_rad(plat))
+    ax = (alon - plon) * kx
+    ay = (alat - plat) * @km_per_deg
+    bx = (blon - plon) * kx
+    by = (blat - plat) * @km_per_deg
+
+    dx = bx - ax
+    dy = by - ay
+    seg_len_sq = dx * dx + dy * dy
+
+    t =
+      if seg_len_sq == 0.0,
+        do: 0.0,
+        else: max(0.0, min(1.0, -(ax * dx + ay * dy) / seg_len_sq))
+
+    cx = ax + t * dx
+    cy = ay + t * dy
+    :math.sqrt(cx * cx + cy * cy)
+  end
+
   @doc """
   Convert a GeoJSON Polygon `coordinates` value into a `{:polygon, [{lat, lon}]}`
   zone. GeoJSON points are `[lon, lat]` and the first ring is the outer boundary;
