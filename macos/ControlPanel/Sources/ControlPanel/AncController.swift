@@ -6,11 +6,12 @@ import ApplicationServices
 /// actually change the listening mode on macOS 26 (Tahoe) — Shortcuts, the private
 /// AVFoundation/IOBluetooth APIs, and AirBuddy's synthetic hotkey all failed.
 ///
-/// To avoid the two warts of naive Control Center automation (it steals keyboard
-/// focus and the popover lingers), `set(_:)` captures the frontmost app before
-/// opening Control Center and **reactivates it afterward**. Reactivating another
-/// app makes the Control Center popover resign key — which both dismisses it and
-/// returns keyboard focus to wherever the user was working.
+/// The Sound popover becomes the key window (it grabs the keyboard) but does NOT
+/// change the active application — so `set(_:)` dismisses it by pressing the same
+/// menu-bar item again, which toggles it shut and returns the keyboard to the
+/// still-frontmost app the user was working in. (App-activation APIs don't help:
+/// the active app never changed, and they're ignored for a background agent under
+/// macOS 14+ cooperative activation anyway.)
 ///
 /// Requires Accessibility permission, the Sound module pinned to the menu bar
 /// (com.apple.menuextra.sound), and AirPods connected as output.
@@ -34,15 +35,7 @@ enum AncController {
       return false
     }
 
-    // Remember who had focus so we can hand it back (and dismiss the popover).
-    // If WE are frontmost (user just clicked our menu-bar item), reactivating
-    // ourselves does NOT make Control Center resign key — so the popover lingers
-    // and focus stays stolen. Detect that and fall back to Finder.
-    let previousApp = NSWorkspace.shared.frontmostApplication
-    let prevId = previousApp?.bundleIdentifier
-    let prevIsSelf = prevId == nil || prevId == Bundle.main.bundleIdentifier
-    Log.line("set(\(mode.rawValue)) open: previousApp=\(prevId ?? "nil") isSelf=\(prevIsSelf)")
-
+    // Open the Sound popover.
     let pressed = press(soundItem)
     Thread.sleep(forTimeInterval: 0.5)
 
@@ -53,17 +46,35 @@ enum AncController {
       } else {
         false
       }
-    Log.line("set(\(mode.rawValue)) pressedSound=\(pressed) toggled=\(ok)")
 
-    // Activate another app to dismiss the popover (it resigns key) and restore
-    // keyboard focus. NOTE: bare `activate()` is deprecated and a no-op on Tahoe;
-    // `.activateIgnoringOtherApps` is what actually works (verified 2026-05-31).
-    Thread.sleep(forTimeInterval: 0.2)
-    let dismisser = prevIsSelf ? finderApp() : previousApp
-    dismisser?.activate(options: [.activateIgnoringOtherApps])
-    Log.line("set(\(mode.rawValue)) close: activated=\(dismisser?.bundleIdentifier ?? "nil")")
+    // Close the popover by toggling the same menu-bar item again. The popover is
+    // a Control Center *window* that becomes the key window (it grabs the
+    // keyboard) WITHOUT changing the active application — the previously-frontmost
+    // app stays frontmost the whole time. So there is nothing to "re-focus", and
+    // activating another app cannot dismiss it; pressing the item that opened it
+    // toggles it shut, which returns key-window status (the keyboard) to the user.
+    //
+    // Selecting a mode does NOT auto-close it. The close press is timing-sensitive
+    // right after selection (it no-ops mid-animation), so settle, then verify the
+    // popover actually went away and retry a few times.
+    Thread.sleep(forTimeInterval: 0.35)
+    var closeAttempts = 0
+    while ccWindowCount(cc) > 0 && closeAttempts < 5 {
+      _ = press(soundItem)
+      closeAttempts += 1
+      Thread.sleep(forTimeInterval: 0.3)
+    }
 
+    Log.line(
+      "set(\(mode.rawValue)) pressedSound=\(pressed) toggled=\(ok) " +
+        "closeAttempts=\(closeAttempts) ccWindowsAfter=\(ccWindowCount(cc))")
     return ok
+  }
+
+  // How many windows Control Center exposes — its Sound popover IS such a window,
+  // so >0 after we try to dismiss means the popover is still open.
+  private static func ccWindowCount(_ cc: AXUIElement) -> Int {
+    (attr(cc, kAXWindowsAttribute as String) as? [AXUIElement])?.count ?? 0
   }
 
   // MARK: - AX helpers
@@ -118,12 +129,6 @@ enum AncController {
       .runningApplications(withBundleIdentifier: "com.apple.controlcenter")
       .first
       .map { AXUIElementCreateApplication($0.processIdentifier) }
-  }
-
-  /// Finder — a guaranteed-running app to activate when we can't hand focus back
-  /// to a real previous app (e.g. we were frontmost), forcing the popover closed.
-  private static func finderApp() -> NSRunningApplication? {
-    NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first
   }
 
   /// The pinned Sound menu-bar item (id contains "sound").
