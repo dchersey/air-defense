@@ -2,6 +2,7 @@ defmodule LgaPredictor.PredictorTest do
   use ExUnit.Case, async: true
 
   alias LgaPredictor.FR24.Aircraft
+  alias LgaPredictor.Geo
   alias LgaPredictor.Predictor
 
   @home {40.728, -73.864}
@@ -90,6 +91,53 @@ defmodule LgaPredictor.PredictorTest do
     test "ignores aircraft above the altitude ceiling" do
       high = %{inbound() | alt_ft: 7000.0}
       assert Predictor.predict_traversal(high, @topts) == nil
+    end
+  end
+
+  describe "predict_eta/3 (distance ÷ groundspeed, heading-independent)" do
+    # Square ANC zone east of the origin: lon 1..2, lat -0.5..0.5.
+    @anc {:polygon, [{-0.5, 1.0}, {0.5, 1.0}, {0.5, 2.0}, {-0.5, 2.0}]}
+
+    defp flying(gs) do
+      %Aircraft{
+        callsign: "ETA1",
+        lat: 0.0,
+        lon: 0.0,
+        track_deg: 90.0,
+        gspeed_kt: gs,
+        vspeed_fpm: 0.0,
+        alt_ft: 2000.0
+      }
+    end
+
+    test "entry is near-edge distance over groundspeed; dwell is the chord over gs" do
+      {near, far} = Geo.zone_distance_range({0.0, 0.0}, @anc)
+      gs_km_s = 120.0 * 1.852 / 3600
+
+      assert %{enters_in: enters, exits_in: exits, dwell_seconds: dwell} =
+               Predictor.predict_eta(flying(120.0), [@anc], [])
+
+      assert_in_delta enters, near / gs_km_s, 1.0e-6
+      assert_in_delta dwell, (far - near) / gs_km_s, 1.0e-6
+      assert_in_delta exits, enters + dwell, 1.0e-6
+    end
+
+    test "no usable groundspeed yields nil (fallback handled by the caller)" do
+      assert Predictor.predict_eta(flying(0.0), [@anc], []) == nil
+      assert Predictor.predict_eta(%{flying(120.0) | gspeed_kt: nil}, [@anc], []) == nil
+    end
+
+    test "a flight already inside the zone enters at 0 s" do
+      inside = %{flying(120.0) | lon: 1.5}
+      assert %{enters_in: +0.0} = Predictor.predict_eta(inside, [@anc], [])
+    end
+
+    test "with multiple zones it picks the soonest entry" do
+      # A nearer zone (lon 0.5..1) west of @anc.
+      near_zone = {:polygon, [{-0.5, 0.5}, {0.5, 0.5}, {0.5, 1.0}, {-0.5, 1.0}]}
+      %{enters_in: far_only} = Predictor.predict_eta(flying(120.0), [@anc], [])
+      %{enters_in: with_near} = Predictor.predict_eta(flying(120.0), [near_zone, @anc], [])
+      assert with_near < far_only
     end
   end
 

@@ -70,6 +70,47 @@ defmodule LgaPredictor.Predictor do
   end
 
   @doc """
+  Per-flight ETA timing, **heading-independent**: instead of stepping along the
+  track (which misses banking/vectoring planes), estimate when the aircraft will
+  reach the ANC zone from its straight-line distance ÷ its own groundspeed.
+
+  `enters_in` = nearest-boundary distance ÷ groundspeed; `dwell_seconds` =
+  `(far - near)` chord ÷ groundspeed; `exits_in` = `enters_in + dwell_seconds`.
+  Across multiple `anc_zones` the soonest entry (and farthest exit) is used.
+  Returns `nil` when groundspeed is missing/zero (the caller falls back to its
+  fixed timing) or when no zones are given. A flight already inside a zone gives
+  `enters_in: 0.0`.
+
+  Errs safe: a curving path or a decelerating arrival covers more ground / takes
+  longer than this constant-speed estimate, so ANC engages slightly early.
+  """
+  @spec predict_eta(map(), [Geo.zone()], keyword()) :: result() | nil
+  def predict_eta(aircraft, anc_zones, _opts \\ []) do
+    gs = Map.get(aircraft, :gspeed_kt)
+
+    cond do
+      anc_zones == [] ->
+        nil
+
+      not is_number(gs) or gs <= 0 ->
+        nil
+
+      true ->
+        point = {aircraft.lat, aircraft.lon}
+        # 1 knot = 1.852 km/h -> km/s.
+        gs_km_s = gs * 1.852 / 3600
+
+        ranges = Enum.map(anc_zones, &Geo.zone_distance_range(point, &1))
+        near = ranges |> Enum.map(&elem(&1, 0)) |> Enum.min()
+        far = ranges |> Enum.map(&elem(&1, 1)) |> Enum.max()
+
+        enters = near / gs_km_s
+        dwell = (far - near) / gs_km_s
+        %{enters_in: enters, exits_in: enters + dwell, dwell_seconds: dwell}
+    end
+  end
+
+  @doc """
   Map a list of aircraft to overflight windows, dropping those that won't pass
   through the noise zone. Each result is the `predict_overflight/2` map with the
   originating `:aircraft` attached.
