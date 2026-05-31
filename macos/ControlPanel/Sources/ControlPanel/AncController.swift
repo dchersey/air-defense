@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import CoreAudio
 
 /// Drives AirPods Max noise control by automating the macOS Control Center Sound
 /// popover via the Accessibility API. This is the ONLY mechanism confirmed to
@@ -19,6 +20,41 @@ enum AncController {
   enum Mode: String {
     case anc = "Noise Cancellation"
     case transparency = "Transparency"
+  }
+
+  /// Whether AirPods are the current default audio output. The Control Center
+  /// listening-mode controls only exist when AirPods are the active output, so
+  /// when this is false there's nothing to switch — the caller should skip.
+  static func airPodsAreOutput() -> Bool {
+    guard let name = defaultOutputDeviceName() else { return false }
+    return name.range(of: "airpods", options: .caseInsensitive) != nil
+  }
+
+  private static func defaultOutputDeviceName() -> String? {
+    var deviceID = AudioDeviceID(0)
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    var addr = AudioObjectPropertyAddress(
+      mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain)
+
+    guard
+      AudioObjectGetPropertyData(
+        AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &deviceID) == noErr,
+      deviceID != 0
+    else { return nil }
+
+    var name = "" as CFString
+    var nameSize = UInt32(MemoryLayout<CFString>.size)
+    var nameAddr = AudioObjectPropertyAddress(
+      mSelector: kAudioObjectPropertyName,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMain)
+
+    let status = withUnsafeMutablePointer(to: &name) {
+      AudioObjectGetPropertyData(deviceID, &nameAddr, 0, nil, &nameSize, $0)
+    }
+    return status == noErr ? (name as String) : nil
   }
 
   /// Whether this process is trusted for Accessibility (prompts if not).

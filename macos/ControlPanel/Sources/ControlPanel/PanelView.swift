@@ -12,6 +12,12 @@ struct PanelView: View {
       header
       Divider()
       controls
+      if model.active && !model.headphonesConnected {
+        Label("AirPods not connected — monitoring paused (timer still running)", systemImage: "headphones")
+          .font(.caption2)
+          .foregroundStyle(.orange)
+          .fixedSize(horizontal: false, vertical: true)
+      }
       if model.history.contains(where: { $0 > 0 }) {
         chart
       }

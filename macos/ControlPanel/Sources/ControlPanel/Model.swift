@@ -38,7 +38,7 @@ enum ZoneSlot { case monitor, anc }
 /// idle = white/default, pending = amber (flight detected, ANC scheduled),
 /// engaged = red (ANC on), offline = service unreachable.
 enum AncPhase {
-  case offline, idle, pending, engaged
+  case offline, idle, pending, engaged, disconnected
 }
 
 struct StatusResponse: Codable {
@@ -70,6 +70,10 @@ final class StatusModel {
   var history: [Int] = []
   var reachable = false
 
+  // AirPods presence (the active output), checked locally via CoreAudio.
+  var headphonesConnected = true
+  private var lastSentHeadphones: Bool?
+
   // Zoneset editor state.
   var editZones: [EditableZone] = []
   var editError: String?
@@ -90,6 +94,7 @@ final class StatusModel {
   /// idle = nothing scheduled (default).
   var phase: AncPhase {
     if !reachable { return .offline }
+    if active && !headphonesConnected { return .disconnected }
     switch ancPhase {
     case "engaged": return .engaged
     case "armed": return .pending
@@ -126,10 +131,29 @@ final class StatusModel {
       history = status.history
       reachable = true
 
+      updateHeadphones()
       applyModeIfChanged(status.mode)
     } catch {
       reachable = false
     }
+  }
+
+  /// Detect whether AirPods are the active output; push the state to the service
+  /// when it changes so it can pause/resume monitoring.
+  private func updateHeadphones() {
+    let connected = AncController.airPodsAreOutput()
+    headphonesConnected = connected
+
+    guard connected != lastSentHeadphones else { return }
+    lastSentHeadphones = connected
+    Log.line("headphones \(connected ? "connected" : "disconnected") -> notifying service")
+
+    guard let url = URL(string: "\(base)/api/headphones") else { return }
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = try? JSONSerialization.data(withJSONObject: ["connected": connected])
+    Task { _ = try? await URLSession.shared.data(for: request) }
   }
 
   /// Mirror the backend's desired mode onto the headphones. Only acts on a change
@@ -137,6 +161,9 @@ final class StatusModel {
   /// Control Center "set mode" is idempotent and absolute, so if a previous apply
   /// failed we retry next poll (appliedMode only advances on success).
   private func applyModeIfChanged(_ desired: String) {
+    // Nothing to switch if AirPods aren't the active output — leave appliedMode
+    // pending so the desired mode applies the instant they reconnect.
+    guard headphonesConnected else { return }
     guard desired != appliedMode else { return }
     guard !isApplying else {
       Log.line("applyMode skipped (busy) desired=\(desired)")

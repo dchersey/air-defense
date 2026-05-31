@@ -20,6 +20,7 @@ struct ControlPanelApp: App {
   private var menuImage: NSImage {
     switch model.phase {
     case .offline: return symbol("airplane.slash", tint: nil)
+    case .disconnected: return symbol("headphones", tint: .systemGray)
     case .engaged: return symbol("airpodsmax", tint: .systemRed)
     case .pending: return symbol("airplane.circle.fill", tint: .systemOrange)
     case .idle: return symbol(model.active ? "airplane.circle.fill" : "airplane", tint: nil)
