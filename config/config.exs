@@ -23,7 +23,7 @@ config :lga_predictor,
   altitude_ceiling_ft: 4500,
   altitude_floor_ft: 0,
   prediction_window_seconds: 120,
-  poll_interval_ms: 60_000,
+  poll_interval_ms: 15_000,
   session_duration_ms: 4 * 60 * 60 * 1000,
 
   # ANC window padding around the predicted overhead pass (engage this many
