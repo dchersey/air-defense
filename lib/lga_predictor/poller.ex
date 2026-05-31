@@ -25,7 +25,7 @@ defmodule LgaPredictor.Poller do
   use GenServer
   require Logger
 
-  alias LgaPredictor.{Actuator, ConfigStore, History, Predictor}
+  alias LgaPredictor.{Actuator, ConfigStore, History, KeepAlive, Predictor}
   alias LgaPredictor.FR24.Client
 
   @credits_per_aircraft 6
@@ -110,11 +110,15 @@ defmodule LgaPredictor.Poller do
   ## Session lifecycle
 
   defp start_one(state, id) do
-    # Reset stats only when starting from fully idle; otherwise accumulate.
+    # Reset stats only when starting from fully idle; otherwise accumulate. The
+    # first session also asks keep-alive to hold the audio route.
     state =
-      if map_size(state.sessions) == 0,
-        do: %{state | polls: 0, credits: 0, actioned: MapSet.new()},
-        else: state
+      if map_size(state.sessions) == 0 do
+        notify_keep_alive(state, :on)
+        %{state | polls: 0, credits: 0, actioned: MapSet.new()}
+      else
+        state
+      end
 
     timer = Process.send_after(self(), {:end_session, id}, state.session_duration)
     ends_at = System.os_time(:second) + div(state.session_duration, 1000)
@@ -146,8 +150,25 @@ defmodule LgaPredictor.Poller do
   defp go_idle(state) do
     if state.poll_timer, do: Process.cancel_timer(state.poll_timer)
     Actuator.reset()
+    notify_keep_alive(state, :off)
     Logger.info("[poller] all sessions ended — #{state.polls} polls, ~#{state.credits} credits")
     %{state | poll_timer: nil}
+  end
+
+  # Best-effort — must never crash the session loop if keep-alive is down.
+  defp notify_keep_alive(state, which) do
+    state.keep_alive_fun.(which)
+  rescue
+    _ -> :ok
+  end
+
+  defp default_keep_alive(which) do
+    if Application.get_env(:lga_predictor, :keep_alive_enabled, true) do
+      case which do
+        :on -> KeepAlive.on()
+        :off -> KeepAlive.off()
+      end
+    end
   end
 
   # Start the shared poll loop if it isn't already running.
@@ -327,6 +348,7 @@ defmodule LgaPredictor.Poller do
       actioned: MapSet.new(),
       fetcher: Keyword.get(opts, :fetcher, &default_fetch(&1, sandbox?)),
       config_fun: Keyword.get(opts, :config_fun, fn -> ConfigStore.get() end),
+      keep_alive_fun: Keyword.get(opts, :keep_alive_fun, &default_keep_alive/1),
       window: Keyword.get(opts, :window_seconds, Application.get_env(:lga_predictor, :prediction_window_seconds, 120)),
       poll_interval: Keyword.get(opts, :poll_interval_ms, Application.get_env(:lga_predictor, :poll_interval_ms, 60_000)),
       session_duration: Keyword.get(opts, :session_duration_ms, Application.get_env(:lga_predictor, :session_duration_ms, 4 * 60 * 60 * 1000))

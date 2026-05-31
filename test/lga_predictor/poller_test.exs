@@ -258,6 +258,44 @@ defmodule LgaPredictor.PollerTest do
     assert status.active?
   end
 
+  test "keep-alive: on at first session start, off at last session end, once each" do
+    test_pid = self()
+
+    start(
+      config_fun: fn -> config2() end,
+      fetcher: fn _ -> {:ok, []} end,
+      keep_alive_fun: fn which -> send(test_pid, {:keep_alive, which}) end
+    )
+
+    :ok = Poller.start_session("z1")
+    assert_receive {:keep_alive, :on}
+
+    # second concurrent zone — no extra :on
+    :ok = Poller.start_session("z2")
+    refute_receive {:keep_alive, :on}, 50
+
+    # stopping one of two running zones — not off yet
+    :ok = Poller.stop_session("z1")
+    refute_receive {:keep_alive, :off}, 50
+
+    # last one ends — off, once
+    :ok = Poller.stop_session("z2")
+    assert_receive {:keep_alive, :off}
+  end
+
+  test "keep-alive failures never block a session" do
+    start(
+      config_fun: fn -> config2() end,
+      fetcher: fn _ -> {:ok, []} end,
+      keep_alive_fun: fn _ -> raise "boom" end
+    )
+
+    assert :ok = Poller.start_session("z1")
+    assert Poller.status().active?
+    assert :ok = Poller.stop_session("z1")
+    refute Poller.status().active?
+  end
+
   test "stopping a session goes idle and returns to transparency" do
     start([])
     :ok = Poller.start_session()
