@@ -14,6 +14,8 @@ defmodule LgaPredictor.Application do
         port = Application.get_env(:lga_predictor, :api_port, 4040)
 
         [
+          LgaPredictor.ConfigStore,
+          {LgaPredictor.AircraftRegistry, name: LgaPredictor.AircraftRegistry},
           LgaPredictor.Actuator,
           LgaPredictor.History,
           LgaPredictor.Poller,
