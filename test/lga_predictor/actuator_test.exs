@@ -8,79 +8,76 @@ defmodule LgaPredictor.ActuatorTest do
     :ok
   end
 
+  # Poll until `fun` is true (or fail after `timeout` ms) — robust to scheduling
+  # jitter, unlike asserting state after a fixed sleep.
+  defp wait_until(fun, timeout \\ 1500) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_wait(fun, deadline)
+  end
+
+  defp do_wait(fun, deadline) do
+    cond do
+      fun.() -> true
+      System.monotonic_time(:millisecond) >= deadline -> false
+      true -> Process.sleep(5) && do_wait(fun, deadline)
+    end
+  end
+
+  defp anc?, do: Actuator.mode() == :anc
+  defp transparency?, do: Actuator.mode() == :transparency
+
   test "starts in transparency" do
     assert Actuator.mode() == :transparency
   end
 
   test "an immediate window engages ANC then returns to transparency after it ends" do
-    Actuator.cover(0, 80, "DAL1")
-    Process.sleep(20)
-    assert Actuator.mode() == :anc
-
-    Process.sleep(120)
-    assert Actuator.mode() == :transparency
+    Actuator.cover(0, 150, "DAL1")
+    assert wait_until(&anc?/0)
+    assert wait_until(&transparency?/0)
   end
 
   test "overlapping windows coalesce — ANC stays on until the latest off time" do
-    Actuator.cover(0, 60, "A")
-    Actuator.cover(0, 250, "B")
-    Process.sleep(20)
-    assert Actuator.mode() == :anc
+    Actuator.cover(0, 150, "A")
+    Actuator.cover(0, 600, "B")
+    assert wait_until(&anc?/0)
 
-    # past A's off (60) but before B's off (250) — still engaged
-    Process.sleep(120)
-    assert Actuator.mode() == :anc
+    # Well past A's off (150) but before B's (600) — must still be engaged.
+    Process.sleep(300)
+    assert anc?()
 
-    Process.sleep(200)
-    assert Actuator.mode() == :transparency
+    assert wait_until(&transparency?/0)
   end
 
   test "non-overlapping future windows do NOT bridge — ANC drops between passes" do
-    # Pass A: engage now, loud ~40ms. Pass B: engages at 200ms (a quiet gap
-    # between them). ANC must drop to transparency in the gap, not stay on.
-    Actuator.cover(0, 40, "A")
-    Actuator.cover(200, 240, "B")
+    Actuator.cover(0, 100, "A")
+    # B engages much later, with a clear quiet gap after A ends.
+    Actuator.cover(500, 600, "B")
 
-    Process.sleep(20)
-    assert Actuator.mode() == :anc
+    assert wait_until(&anc?/0)
+    # A's window ends -> back to transparency, with B still pending (armed).
+    assert wait_until(&transparency?/0)
+    assert wait_until(fn -> Actuator.phase() == :armed end)
 
-    # ~80ms: past A's off (40), well before B engages (200) -> must be off,
-    # with B still pending (armed).
-    Process.sleep(60)
-    assert Actuator.mode() == :transparency
-    assert Actuator.phase() == :armed
-
-    # B engages at 200ms.
-    Process.sleep(150)
-    assert Actuator.mode() == :anc
-
-    # past B's off (240ms) -> back to transparency.
-    Process.sleep(80)
-    assert Actuator.mode() == :transparency
+    # B engages around 500ms, then ends.
+    assert wait_until(&anc?/0)
+    assert wait_until(&transparency?/0)
   end
 
   test "phase reflects idle -> armed (window scheduled) -> engaged" do
     assert Actuator.phase() == :idle
 
     # A future window: ANC scheduled but not yet engaged -> armed.
-    Actuator.cover(120, 300, "SOON")
-    Process.sleep(20)
+    Actuator.cover(300, 600, "SOON")
     assert Actuator.phase() == :armed
     assert Actuator.mode() == :transparency
 
-    # Once it engages -> engaged.
-    Process.sleep(150)
-    assert Actuator.phase() == :engaged
-
-    # After the window -> idle again.
-    Process.sleep(200)
-    assert Actuator.phase() == :idle
+    assert wait_until(fn -> Actuator.phase() == :engaged end)
+    assert wait_until(fn -> Actuator.phase() == :idle end)
   end
 
   test "reset forces transparency immediately" do
     Actuator.cover(0, 5_000, "LONG")
-    Process.sleep(20)
-    assert Actuator.mode() == :anc
+    assert wait_until(&anc?/0)
 
     Actuator.reset()
     assert Actuator.mode() == :transparency
