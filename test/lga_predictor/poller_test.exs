@@ -7,6 +7,8 @@ defmodule LgaPredictor.PollerTest do
   # ANC zone: a box around home. The monitor zone is a wider box to its south.
   @anc_zone {:polygon, [{40.724, -73.870}, {40.732, -73.870}, {40.732, -73.858}, {40.724, -73.858}]}
   @monitor_box {40.738, 40.700, -73.880, -73.850}
+  # A second, disjoint monitor box for the two-zoneset (independent sessions) tests.
+  @z2_box {40.800, 40.780, -73.900, -73.880}
 
   # A flight already over home (inside the ANC zone at t=0) so ANC engages now.
   defp inbound do
@@ -44,6 +46,14 @@ defmodule LgaPredictor.PollerTest do
         }
       ]
     }
+  end
+
+  # Two zonesets (arr-like z1 + a second z2 with a disjoint monitor box).
+  defp config2 do
+    base = config()
+    [z1] = base.zonesets
+    z2 = %{z1 | id: "z2", name: "two", monitor_box: @z2_box}
+    %{base | zonesets: [z1, z2]}
   end
 
   defp start(opts) do
@@ -143,6 +153,54 @@ defmodule LgaPredictor.PollerTest do
     :ok = Poller.start_session()
     Process.sleep(80)
     assert Actuator.mode() == :transparency
+  end
+
+  test "start_session/1 activates only the named zoneset" do
+    test_pid = self()
+
+    start(
+      config_fun: fn -> config2() end,
+      fetcher: fn box ->
+        send(test_pid, {:queried, box})
+        {:ok, []}
+      end
+    )
+
+    assert :ok = Poller.start_session("z1")
+    assert_receive {:queried, @monitor_box}, 500
+    refute_receive {:queried, @z2_box}, 100
+
+    zonesets = Poller.status().zonesets
+    assert Enum.find(zonesets, &(&1.id == "z1")).active
+    refute Enum.find(zonesets, &(&1.id == "z2")).active
+  end
+
+  test "zonesets run independent sessions; stopping one leaves the other active" do
+    start(config_fun: fn -> config2() end, fetcher: fn _ -> {:ok, []} end)
+
+    :ok = Poller.start_session("z1")
+    :ok = Poller.start_session("z2")
+    assert Enum.all?(Poller.status().zonesets, & &1.active)
+
+    :ok = Poller.stop_session("z1")
+    zonesets = Poller.status().zonesets
+    refute Enum.find(zonesets, &(&1.id == "z1")).active
+    assert Enum.find(zonesets, &(&1.id == "z2")).active
+    assert Poller.status().active?
+  end
+
+  test "starting an unknown zoneset errors; starting an active one errors" do
+    start(config_fun: fn -> config2() end, fetcher: fn _ -> {:ok, []} end)
+
+    assert {:error, :unknown_zoneset} = Poller.start_session("nope")
+    :ok = Poller.start_session("z1")
+    assert {:error, :already_active} = Poller.start_session("z1")
+  end
+
+  test "status lists all configured zonesets with their session state" do
+    start(config_fun: fn -> config2() end, fetcher: fn _ -> {:ok, []} end)
+    ids = Poller.status().zonesets |> Enum.map(& &1.id) |> Enum.sort()
+    assert ids == ["z1", "z2"]
   end
 
   test "stopping a session goes idle and returns to transparency" do

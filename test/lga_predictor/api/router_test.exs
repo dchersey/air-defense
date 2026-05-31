@@ -49,13 +49,28 @@ defmodule LgaPredictor.API.RouterTest do
     assert body["mode"] == "transparency"
     assert is_list(body["recent"])
     assert is_list(body["history"])
+    assert is_list(body["zonesets"])
   end
 
-  test "POST /api/session/start then /stop toggles active" do
-    assert call(:post, "/api/session/start").status == 200
-    assert Jason.decode!(call(:get, "/api/status").resp_body)["active"] == true
+  test "POST /api/session/start with a zoneset id then /stop toggles active" do
+    put_json("/api/config", %{
+      "zonesets" => [
+        %{
+          "id" => "z1",
+          "name" => "SW",
+          "enabled" => true,
+          "monitor_zone" => geojson_box(),
+          "anc_zones" => [geojson_box()]
+        }
+      ]
+    })
 
-    assert call(:post, "/api/session/stop").status == 200
+    assert post_json("/api/session/start", %{"zoneset" => "z1"}).status == 200
+    status = Jason.decode!(call(:get, "/api/status").resp_body)
+    assert status["active"] == true
+    assert Enum.find(status["zonesets"], &(&1["id"] == "z1"))["active"] == true
+
+    assert post_json("/api/session/stop", %{"zoneset" => "z1"}).status == 200
     assert Jason.decode!(call(:get, "/api/status").resp_body)["active"] == false
   end
 
@@ -104,6 +119,12 @@ defmodule LgaPredictor.API.RouterTest do
 
   defp put_json(path, map) do
     conn(:put, path, Jason.encode!(map))
+    |> put_req_header("content-type", "application/json")
+    |> Router.call(@opts)
+  end
+
+  defp post_json(path, map) do
+    conn(:post, path, Jason.encode!(map))
     |> put_req_header("content-type", "application/json")
     |> Router.call(@opts)
   end

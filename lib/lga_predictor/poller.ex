@@ -1,12 +1,17 @@
 defmodule LgaPredictor.Poller do
   @moduledoc """
-  The session loop. While a session is active it polls FR24 once per
-  `poll_interval_ms` for each **enabled zoneset's monitor zone** (the only thing
-  that costs credits), predicts whether each detected flight will pass through that
-  zoneset's ANC zones, and schedules ANC engage/release with the `Actuator`. A
-  session runs for `session_duration_ms` (4 h) or until `stop_session/0`.
+  The session loop. Each **zoneset** can have its own independent monitoring
+  session (started/stopped by id from the control panel); both arrival and
+  departure zonesets can run at once. While any session is active the poller
+  polls FR24 once per `poll_interval_ms` for each **running** zoneset's monitor
+  zone (the only thing that costs credits), predicts whether each detected flight
+  will pass through that zoneset's ANC zones, and schedules ANC engage/release
+  with the `Actuator`. Each session runs for `session_duration_ms` (4 h) or until
+  stopped.
 
-  Idle by default — nothing is polled (and no credits spent) until `start_session/0`.
+  Idle by default — nothing is polled (and no credits spent) until a session is
+  started. Stats (`polls`, `credits`, the actioned-dedupe set) reset when starting
+  from fully idle and accumulate across concurrently-running sessions.
 
   Config (zonesets, global ceiling, ANC latency) comes from `ConfigStore` via an
   injectable `:config_fun`. FR24 fetching is injectable via `:fetcher` (a
@@ -29,13 +34,21 @@ defmodule LgaPredictor.Poller do
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
-  @doc "Begin a monitoring session (polling + ANC control)."
+  @doc "Begin a monitoring session for a single zoneset by id."
+  def start_session(zoneset_id) when is_binary(zoneset_id),
+    do: GenServer.call(__MODULE__, {:start_session, zoneset_id})
+
+  @doc "Begin sessions for every enabled zoneset."
   def start_session, do: GenServer.call(__MODULE__, :start_session)
 
-  @doc "End the session, stop polling, return to Transparency."
+  @doc "End the monitoring session for a single zoneset by id."
+  def stop_session(zoneset_id) when is_binary(zoneset_id),
+    do: GenServer.call(__MODULE__, {:stop_session, zoneset_id})
+
+  @doc "End all sessions, stop polling, return to Transparency."
   def stop_session, do: GenServer.call(__MODULE__, :stop_session)
 
-  @doc "Session status: active?, polls run, approximate credits spent."
+  @doc "Session status: active?, per-zoneset session state, polls, credits."
   def status, do: GenServer.call(__MODULE__, :status)
 
   ## Server
@@ -44,57 +57,92 @@ defmodule LgaPredictor.Poller do
   def init(opts), do: {:ok, build_state(opts)}
 
   @impl true
-  def handle_call(:start_session, _from, %{active?: true} = state) do
-    {:reply, {:error, :already_active}, state}
+  def handle_call({:start_session, id}, _from, state) do
+    cond do
+      Map.has_key?(state.sessions, id) -> {:reply, {:error, :already_active}, state}
+      not zoneset_exists?(id, state) -> {:reply, {:error, :unknown_zoneset}, state}
+      true -> {:reply, :ok, start_one(state, id)}
+    end
   end
 
   def handle_call(:start_session, _from, state) do
-    Logger.info("[poller] session START — polling every #{state.poll_interval}ms for #{div(state.session_duration, 60_000)} min")
+    state =
+      Enum.reduce(enabled_ids(state), state, fn id, st ->
+        if Map.has_key?(st.sessions, id), do: st, else: start_one(st, id)
+      end)
 
-    session_timer = Process.send_after(self(), :end_session, state.session_duration)
-    ends_at = System.os_time(:second) + div(state.session_duration, 1000)
-
-    state = %{
-      state
-      | active?: true,
-        polls: 0,
-        credits: 0,
-        actioned: MapSet.new(),
-        session_timer: session_timer,
-        session_ends_at: ends_at
-    }
-
-    {:reply, :ok, poll_now(state)}
+    {:reply, :ok, state}
   end
 
-  def handle_call(:stop_session, _from, state), do: {:reply, :ok, end_session(state)}
+  def handle_call({:stop_session, id}, _from, state), do: {:reply, :ok, stop_one(state, id)}
+  def handle_call(:stop_session, _from, state), do: {:reply, :ok, stop_all(state)}
 
-  def handle_call(:status, _from, state) do
-    {:reply,
-     %{
-       active?: state.active?,
-       polls: state.polls,
-       approx_credits: state.credits,
-       session_ends_at: state.session_ends_at
-     }, state}
-  end
+  def handle_call(:status, _from, state), do: {:reply, status_of(state), state}
 
   @impl true
-  def handle_info(:poll, %{active?: true} = state), do: {:noreply, poll_now(state)}
-  def handle_info(:poll, state), do: {:noreply, state}
-
-  def handle_info(:end_session, state) do
-    Logger.info("[poller] session auto-ended after duration")
-    {:noreply, end_session(state)}
+  def handle_info(:poll, state) do
+    if map_size(state.sessions) == 0, do: {:noreply, state}, else: {:noreply, poll_now(state)}
   end
 
-  ## Internals
+  def handle_info({:end_session, id}, state) do
+    Logger.info("[poller] session #{id} auto-ended after duration")
+    {:noreply, stop_one(state, id)}
+  end
+
+  ## Session lifecycle
+
+  defp start_one(state, id) do
+    # Reset stats only when starting from fully idle; otherwise accumulate.
+    state =
+      if map_size(state.sessions) == 0,
+        do: %{state | polls: 0, credits: 0, actioned: MapSet.new()},
+        else: state
+
+    timer = Process.send_after(self(), {:end_session, id}, state.session_duration)
+    ends_at = System.os_time(:second) + div(state.session_duration, 1000)
+
+    Logger.info("[poller] session START #{id} — #{div(state.session_duration, 60_000)} min")
+
+    state = %{state | sessions: Map.put(state.sessions, id, %{ends_at: ends_at, timer: timer})}
+    ensure_polling(state)
+  end
+
+  defp stop_one(state, id) do
+    case Map.pop(state.sessions, id) do
+      {nil, _} ->
+        state
+
+      {%{timer: timer}, sessions} ->
+        Process.cancel_timer(timer)
+        Logger.info("[poller] session END #{id}")
+        state = %{state | sessions: sessions}
+        if map_size(sessions) == 0, do: go_idle(state), else: state
+    end
+  end
+
+  defp stop_all(state) do
+    Enum.each(state.sessions, fn {_id, %{timer: t}} -> Process.cancel_timer(t) end)
+    go_idle(%{state | sessions: %{}})
+  end
+
+  defp go_idle(state) do
+    if state.poll_timer, do: Process.cancel_timer(state.poll_timer)
+    Actuator.reset()
+    Logger.info("[poller] all sessions ended — #{state.polls} polls, ~#{state.credits} credits")
+    %{state | poll_timer: nil}
+  end
+
+  # Start the shared poll loop if it isn't already running.
+  defp ensure_polling(%{poll_timer: nil} = state), do: poll_now(state)
+  defp ensure_polling(state), do: state
+
+  ## Polling
 
   defp poll_now(state) do
     config = state.config_fun.()
-    enabled = Enum.filter(config.zonesets, & &1.enabled)
+    running = Enum.filter(config.zonesets, &Map.has_key?(state.sessions, &1.id))
 
-    state = Enum.reduce(enabled, state, &poll_zoneset(&1, config, &2))
+    state = Enum.reduce(running, state, &poll_zoneset(&1, config, &2))
 
     Logger.info("[poller] poll ##{state.polls + 1} done; session ~#{state.credits} cr")
     state = %{state | polls: state.polls + 1}
@@ -203,12 +251,34 @@ defmodule LgaPredictor.Poller do
     if Process.whereis(History), do: History.record(event)
   end
 
-  defp end_session(state) do
-    if state.poll_timer, do: Process.cancel_timer(state.poll_timer)
-    if state.session_timer, do: Process.cancel_timer(state.session_timer)
-    Actuator.reset()
-    Logger.info("[poller] session END — #{state.polls} polls, ~#{state.credits} credits")
-    %{state | active?: false, poll_timer: nil, session_timer: nil, session_ends_at: nil}
+  ## Status
+
+  defp status_of(state) do
+    config = state.config_fun.()
+
+    zonesets =
+      Enum.map(config.zonesets, fn zs ->
+        session = Map.get(state.sessions, zs.id)
+        %{id: zs.id, name: zs.name, active: session != nil, ends_at: session && session.ends_at}
+      end)
+
+    ends = state.sessions |> Map.values() |> Enum.map(& &1.ends_at)
+
+    %{
+      active?: map_size(state.sessions) > 0,
+      polls: state.polls,
+      approx_credits: state.credits,
+      session_ends_at: if(ends == [], do: nil, else: Enum.max(ends)),
+      zonesets: zonesets
+    }
+  end
+
+  ## Helpers
+
+  defp zoneset_exists?(id, state), do: Enum.any?(state.config_fun.().zonesets, &(&1.id == id))
+
+  defp enabled_ids(state) do
+    state.config_fun.().zonesets |> Enum.filter(& &1.enabled) |> Enum.map(& &1.id)
   end
 
   defp build_state(opts) do
@@ -216,10 +286,8 @@ defmodule LgaPredictor.Poller do
     sandbox? = Keyword.get(opts, :sandbox?, Map.get(fr24, :sandbox?, false))
 
     %{
-      active?: false,
+      sessions: %{},
       poll_timer: nil,
-      session_timer: nil,
-      session_ends_at: nil,
       polls: 0,
       credits: 0,
       actioned: MapSet.new(),

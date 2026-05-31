@@ -3,9 +3,11 @@ defmodule LgaPredictor.API.Router do
   Localhost-only JSON API for the SwiftUI menu-bar control panel. Bound to
   127.0.0.1 by Bandit (see `LgaPredictor.Application`), so no auth is needed.
 
-    GET  /api/status          -> session state + desired acoustic mode + flights + graph
-    POST /api/session/start   -> begin a 4h monitoring session
-    POST /api/session/stop    -> end the session, return to Transparency
+    GET  /api/status          -> session state (incl. per-zoneset) + mode + flights + graph
+    POST /api/session/start   -> begin a 4h session; body {"zoneset": id} for one
+                                 zoneset, or no body for all enabled zonesets
+    POST /api/session/stop    -> end a session; body {"zoneset": id} for one,
+                                 or no body for all
   """
 
   use Plug.Router
@@ -21,12 +23,21 @@ defmodule LgaPredictor.API.Router do
   end
 
   post "/api/session/start" do
-    result = Poller.start_session()
+    result =
+      case conn.body_params do
+        %{"zoneset" => id} when is_binary(id) -> Poller.start_session(id)
+        _ -> Poller.start_session()
+      end
+
     send_json(conn, 200, %{ok: result == :ok, result: inspect(result)})
   end
 
   post "/api/session/stop" do
-    Poller.stop_session()
+    case conn.body_params do
+      %{"zoneset" => id} when is_binary(id) -> Poller.stop_session(id)
+      _ -> Poller.stop_session()
+    end
+
     send_json(conn, 200, %{ok: true})
   end
 
@@ -54,6 +65,7 @@ defmodule LgaPredictor.API.Router do
       session_ends_at: status.session_ends_at,
       polls: status.polls,
       approx_credits: status.approx_credits,
+      zonesets: status.zonesets,
       recent: History.recent(50),
       # 12 buckets x 5 min = last hour of trigger counts, oldest -> newest
       history: History.counts_per_bucket(300, buckets: 12)
