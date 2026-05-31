@@ -32,8 +32,19 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 PLIST
 
 echo "Built $app"
-echo "Run:  open \"$app\""
-echo "Rebuild+relaunch:  killall LgaPredictor 2>/dev/null; ./macos/build_app.sh; open \"$app\""
+
+# Install to /Applications unless --here was passed.
+if [ "${1:-}" != "--here" ]; then
+  dest="/Applications/LGA Overflight.app"
+  killall LgaPredictor 2>/dev/null || true
+  rm -rf "$dest"
+  cp -R "$app" "$dest"
+  echo "Installed → $dest  (launch from Launchpad/Spotlight: \"LGA Overflight\")"
+  echo "NOTE: re-grant Accessibility to this copy on first launch (TCC is per-path)."
+  echo "Open now:  open -a \"LGA Overflight\""
+else
+  echo "Run:  open \"$app\""
+fi
 echo
 echo "First launch: grant Accessibility to LgaPredictor.app in"
 echo "  System Settings → Privacy & Security → Accessibility"
