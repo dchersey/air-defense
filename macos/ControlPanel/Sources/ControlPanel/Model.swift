@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -17,6 +18,21 @@ struct ZonesetStatus: Codable, Identifiable {
   let active: Bool
   let endsAt: Int?
 }
+
+/// A zoneset as seen by the editor — GeoJSON kept as opaque strings (the backend
+/// encodes/decodes/validates; the app only shuttles clipboard text).
+struct EditableZone: Identifiable, Codable {
+  let id: String
+  var name: String
+  var monitorGeojson: String
+  var ancGeojson: String
+}
+
+private struct ZonesetsResponse: Codable {
+  let zonesets: [EditableZone]
+}
+
+enum ZoneSlot { case monitor, anc }
 
 /// Menu-bar indicator state. Drives icon + colour:
 /// idle = white/default, pending = amber (flight detected, ANC scheduled),
@@ -53,6 +69,10 @@ final class StatusModel {
   var recent: [Flight] = []
   var history: [Int] = []
   var reachable = false
+
+  // Zoneset editor state.
+  var editZones: [EditableZone] = []
+  var editError: String?
 
   private let base = "http://127.0.0.1:4040"
   private var timer: Timer?
@@ -136,6 +156,80 @@ final class StatusModel {
 
   func start(_ zoneset: String) { post("/api/session/start", body: ["zoneset": zoneset]) }
   func stop(_ zoneset: String) { post("/api/session/stop", body: ["zoneset": zoneset]) }
+
+  // MARK: - Zoneset editor
+
+  func loadZones() async {
+    guard let url = URL(string: "\(base)/api/zonesets") else { return }
+    do {
+      let (data, _) = try await URLSession.shared.data(from: url)
+      let decoder = JSONDecoder()
+      decoder.keyDecodingStrategy = .convertFromSnakeCase
+      editZones = try decoder.decode(ZonesetsResponse.self, from: data).zonesets
+      editError = nil
+    } catch {
+      editError = "Couldn't load zones (service offline?)"
+    }
+  }
+
+  func copyToClipboard(_ string: String) {
+    let pb = NSPasteboard.general
+    pb.clearContents()
+    pb.setString(string, forType: .string)
+  }
+
+  func pasteZone(_ id: String, slot: ZoneSlot) async {
+    guard let clip = NSPasteboard.general.string(forType: .string), !clip.isEmpty else {
+      editError = "Clipboard is empty — copy a polygon from geojson.io first."
+      return
+    }
+    let field = slot == .monitor ? "monitor_geojson" : "anc_geojson"
+    await mutate("PATCH", "/api/zonesets/\(id)", [field: clip])
+  }
+
+  func renameZone(_ id: String, to name: String) async {
+    await mutate("PATCH", "/api/zonesets/\(id)", ["name": name])
+  }
+
+  func deleteZone(_ id: String) async {
+    await mutate("DELETE", "/api/zonesets/\(id)", nil)
+  }
+
+  @discardableResult
+  func addZone(name: String, monitor: String, anc: String) async -> Bool {
+    await mutate("POST", "/api/zonesets", [
+      "name": name, "monitor_geojson": monitor, "anc_geojson": anc,
+    ])
+  }
+
+  /// Fire a write request; on success clear the error and reload the list, else
+  /// surface the backend's validation message. Returns whether it succeeded.
+  @discardableResult
+  private func mutate(_ method: String, _ path: String, _ body: [String: String]?) async -> Bool {
+    guard let url = URL(string: base + path) else { return false }
+    var request = URLRequest(url: url)
+    request.httpMethod = method
+    if let body {
+      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+      request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+    }
+
+    do {
+      let (data, response) = try await URLSession.shared.data(for: request)
+      let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+      if code == 200 {
+        editError = nil
+        await loadZones()
+        return true
+      }
+      let message = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
+      editError = message ?? "Request failed (\(code))"
+      return false
+    } catch {
+      editError = "Request failed"
+      return false
+    }
+  }
 
   private func post(_ path: String, body: [String: String]? = nil) {
     guard let url = URL(string: base + path) else { return }

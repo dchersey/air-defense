@@ -5,6 +5,7 @@ import SwiftUI
 struct PanelView: View {
   let model: StatusModel
   @State private var launchAtLogin = LoginItem.isEnabled
+  @State private var showEditor = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -17,10 +18,46 @@ struct PanelView: View {
       Divider()
       flights
       Divider()
+      zoneEditor
+      Divider()
       footer
     }
     .padding(14)
     .frame(width: 320)
+  }
+
+  // MARK: - Zone editor
+
+  private var zoneEditor: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Button {
+        showEditor.toggle()
+        if showEditor { Task { await model.loadZones() } }
+      } label: {
+        Label(showEditor ? "Done editing zones" : "Edit zones", systemImage: "slider.horizontal.3")
+          .font(.caption)
+      }
+      .buttonStyle(.borderless)
+
+      if showEditor {
+        if let err = model.editError {
+          Text(err)
+            .font(.caption2).foregroundStyle(.red)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+
+        ForEach(model.editZones) { zone in
+          ZoneEditRow(zone: zone, model: model)
+        }
+
+        Divider()
+        AddZoneForm(model: model)
+
+        Text("Draw one polygon in geojson.io, Copy it, then Paste into Monitor or ANC.")
+          .font(.caption2).foregroundStyle(.tertiary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
   }
 
   // MARK: - Header
@@ -169,6 +206,86 @@ struct PanelView: View {
       Button("Quit") { NSApplication.shared.terminate(nil) }
         .buttonStyle(.bordered)
         .controlSize(.small)
+    }
+  }
+}
+
+/// One editable zoneset: rename (on submit), copy/paste each zone's GeoJSON, delete.
+private struct ZoneEditRow: View {
+  let zone: EditableZone
+  let model: StatusModel
+  @State private var name: String
+
+  init(zone: EditableZone, model: StatusModel) {
+    self.zone = zone
+    self.model = model
+    _name = State(initialValue: zone.name)
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack {
+        TextField("name", text: $name)
+          .textFieldStyle(.roundedBorder)
+          .onSubmit { Task { await model.renameZone(zone.id, to: name) } }
+        Button(role: .destructive) {
+          Task { await model.deleteZone(zone.id) }
+        } label: {
+          Image(systemName: "trash")
+        }
+        .buttonStyle(.borderless)
+      }
+
+      slotRow("Monitor", copy: zone.monitorGeojson, slot: .monitor)
+      slotRow("ANC", copy: zone.ancGeojson, slot: .anc)
+    }
+    .padding(.vertical, 2)
+  }
+
+  private func slotRow(_ label: String, copy: String, slot: ZoneSlot) -> some View {
+    HStack(spacing: 6) {
+      Text(label).font(.caption2).foregroundStyle(.secondary).frame(width: 56, alignment: .leading)
+      Button("Copy") { model.copyToClipboard(copy) }
+      Button("Paste") { Task { await model.pasteZone(zone.id, slot: slot) } }
+    }
+    .controlSize(.small)
+    .buttonStyle(.bordered)
+  }
+}
+
+/// Add a new zoneset: name + paste a Monitor polygon + paste an ANC polygon → Create.
+private struct AddZoneForm: View {
+  let model: StatusModel
+  @State private var name = ""
+  @State private var monitor: String?
+  @State private var anc: String?
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text("Add a zone").font(.caption).foregroundStyle(.secondary)
+      TextField("name", text: $name).textFieldStyle(.roundedBorder)
+
+      HStack(spacing: 6) {
+        Button(monitor == nil ? "Paste Monitor" : "Monitor ✓") {
+          monitor = NSPasteboard.general.string(forType: .string)
+        }
+        Button(anc == nil ? "Paste ANC" : "ANC ✓") {
+          anc = NSPasteboard.general.string(forType: .string)
+        }
+        Spacer()
+        Button("Create") {
+          Task {
+            if await model.addZone(name: name, monitor: monitor ?? "", anc: anc ?? "") {
+              name = ""
+              monitor = nil
+              anc = nil
+            }
+          }
+        }
+        .disabled(name.isEmpty || monitor == nil || anc == nil)
+      }
+      .controlSize(.small)
+      .buttonStyle(.bordered)
     }
   }
 }
