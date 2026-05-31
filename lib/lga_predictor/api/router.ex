@@ -10,9 +10,10 @@ defmodule LgaPredictor.API.Router do
 
   use Plug.Router
 
-  alias LgaPredictor.{Actuator, History, Poller}
+  alias LgaPredictor.{Actuator, ConfigStore, History, Poller}
 
   plug(:match)
+  plug(Plug.Parsers, parsers: [:json], json_decoder: Jason)
   plug(:dispatch)
 
   get "/api/status" do
@@ -27,6 +28,17 @@ defmodule LgaPredictor.API.Router do
   post "/api/session/stop" do
     Poller.stop_session()
     send_json(conn, 200, %{ok: true})
+  end
+
+  get "/api/config" do
+    send_json(conn, 200, config_payload())
+  end
+
+  put "/api/config" do
+    case ConfigStore.put(conn.body_params) do
+      {:ok, _derived} -> send_json(conn, 200, %{ok: true, config: config_payload()})
+      {:error, reason} -> send_json(conn, 422, %{error: to_string(reason)})
+    end
   end
 
   match _ do
@@ -47,6 +59,10 @@ defmodule LgaPredictor.API.Router do
       history: History.counts_per_bucket(300, buckets: 12)
     }
   end
+
+  # Echo the persisted config back as plain JSON (the raw form, so the UI
+  # round-trips the GeoJSON it sent rather than the derived polygons/tuples).
+  defp config_payload, do: ConfigStore.raw()
 
   defp send_json(conn, code, body) do
     conn

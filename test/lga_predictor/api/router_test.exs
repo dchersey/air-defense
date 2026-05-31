@@ -3,7 +3,7 @@ defmodule LgaPredictor.API.RouterTest do
   import Plug.Test
   import Plug.Conn
 
-  alias LgaPredictor.{Actuator, History, Poller}
+  alias LgaPredictor.{Actuator, ConfigStore, History, Poller}
   alias LgaPredictor.API.Router
 
   @opts Router.init([])
@@ -22,10 +22,14 @@ defmodule LgaPredictor.API.RouterTest do
   end
 
   setup do
-    Enum.each([Poller, Actuator, History], &ensure_stopped/1)
+    Enum.each([Poller, Actuator, History, ConfigStore], &ensure_stopped/1)
+
+    path = Path.join(System.tmp_dir!(), "ndapi_#{System.unique_integer([:positive])}.json")
+    on_exit(fn -> File.rm(path) end)
 
     start_supervised!(Actuator)
     start_supervised!({History, max: 50})
+    start_supervised!({ConfigStore, path: path})
 
     start_supervised!(
       {Poller, fetcher: fn _ -> {:ok, []} end, poll_interval_ms: 50, session_duration_ms: 5_000}
@@ -59,5 +63,61 @@ defmodule LgaPredictor.API.RouterTest do
     conn = call(:get, "/nope")
     assert conn.status == 404
     assert Jason.decode!(conn.resp_body)["error"]
+  end
+
+  test "GET /api/config returns the current config" do
+    body = Jason.decode!(call(:get, "/api/config").resp_body)
+    assert body["global_ceiling_ft"] == 6000
+    assert body["anc_latency_seconds"] == 2.0
+    assert body["zonesets"] == []
+  end
+
+  test "PUT /api/config saves a zoneset and GET reflects it" do
+    payload = %{
+      "global_ceiling_ft" => 5000,
+      "zonesets" => [
+        %{
+          "id" => "z1",
+          "name" => "SW",
+          "enabled" => true,
+          "reckoning" => "constant",
+          "monitor_zone" => geojson_box(),
+          "anc_zones" => [geojson_box()]
+        }
+      ]
+    }
+
+    put = put_json("/api/config", payload)
+    assert put.status == 200
+    assert Jason.decode!(put.resp_body)["ok"] == true
+
+    body = Jason.decode!(call(:get, "/api/config").resp_body)
+    assert body["global_ceiling_ft"] == 5000
+    assert [%{"id" => "z1"}] = body["zonesets"]
+  end
+
+  test "PUT /api/config with invalid data returns 422" do
+    conn = put_json("/api/config", %{"zonesets" => [%{"name" => "no id"}]})
+    assert conn.status == 422
+    assert Jason.decode!(conn.resp_body)["error"]
+  end
+
+  defp put_json(path, map) do
+    conn(:put, path, Jason.encode!(map))
+    |> put_req_header("content-type", "application/json")
+    |> Router.call(@opts)
+  end
+
+  defp geojson_box do
+    %{
+      "type" => "Feature",
+      "properties" => %{},
+      "geometry" => %{
+        "type" => "Polygon",
+        "coordinates" => [
+          [[-73.88, 40.73], [-73.85, 40.73], [-73.85, 40.75], [-73.88, 40.75], [-73.88, 40.73]]
+        ]
+      }
+    }
   end
 end

@@ -33,6 +33,9 @@ defmodule LgaPredictor.ConfigStore do
   @doc "Current config, with derived engine fields (polygons + monitor_box)."
   def get(name \\ __MODULE__), do: GenServer.call(name, :get)
 
+  @doc "Raw, JSON-serialisable config (string keys, original GeoJSON) for the API/UI."
+  def raw(name \\ __MODULE__), do: GenServer.call(name, :raw)
+
   @doc """
   Replace config from a (string-keyed) map — typically the API body. Validates,
   persists atomically, bumps `version`. Returns `{:ok, derived}` or `{:error, reason}`.
@@ -51,6 +54,10 @@ defmodule LgaPredictor.ConfigStore do
   @impl true
   def handle_call(:get, _from, state) do
     {:reply, derive(state.raw), state}
+  end
+
+  def handle_call(:raw, _from, state) do
+    {:reply, state.raw, state}
   end
 
   def handle_call({:put, incoming}, _from, state) do
