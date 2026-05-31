@@ -85,6 +85,85 @@ defmodule LgaPredictor.ConfigStoreTest do
     assert zs.accel_kt_s == 5.0
   end
 
+  test "add_zoneset assigns an id, defaults trigger, persists, bumps version", %{name: name} do
+    v0 = ConfigStore.get(name).version
+
+    assert {:ok, id} =
+             ConfigStore.add_zoneset(name, %{
+               "name" => "Arrivals SW",
+               "monitor_zone" => geojson_box(),
+               "anc_zones" => [geojson_box()]
+             })
+
+    assert is_binary(id)
+    cfg = ConfigStore.get(name)
+    assert cfg.version == v0 + 1
+    assert [%{id: ^id, name: "Arrivals SW", trigger: :assume, enabled: true}] = cfg.zonesets
+  end
+
+  test "add_zoneset accepts a FeatureCollection for a zone", %{name: name} do
+    fc = %{"type" => "FeatureCollection", "features" => [geojson_box()]}
+
+    assert {:ok, _id} =
+             ConfigStore.add_zoneset(name, %{
+               "name" => "FC",
+               "monitor_zone" => fc,
+               "anc_zones" => [fc]
+             })
+
+    assert [%{monitor_zone: {:polygon, [_ | _]}}] = ConfigStore.get(name).zonesets
+  end
+
+  test "add_zoneset rejects invalid GeoJSON", %{name: name} do
+    assert {:error, _} =
+             ConfigStore.add_zoneset(name, %{
+               "name" => "bad",
+               "monitor_zone" => %{"not" => "geojson"},
+               "anc_zones" => [geojson_box()]
+             })
+  end
+
+  test "update_zoneset renames / replaces a zone; unknown id errors", %{name: name} do
+    {:ok, id} =
+      ConfigStore.add_zoneset(name, %{
+        "name" => "A",
+        "monitor_zone" => geojson_box(),
+        "anc_zones" => [geojson_box()]
+      })
+
+    assert :ok = ConfigStore.update_zoneset(name, id, %{"name" => "Renamed"})
+    assert [%{name: "Renamed"}] = ConfigStore.get(name).zonesets
+
+    assert {:error, :not_found} = ConfigStore.update_zoneset(name, "nope", %{"name" => "x"})
+    assert {:error, _} = ConfigStore.update_zoneset(name, id, %{"monitor_zone" => %{"bad" => 1}})
+  end
+
+  test "delete_zoneset removes it; unknown id errors", %{name: name} do
+    {:ok, id} =
+      ConfigStore.add_zoneset(name, %{
+        "name" => "A",
+        "monitor_zone" => geojson_box(),
+        "anc_zones" => [geojson_box()]
+      })
+
+    assert :ok = ConfigStore.delete_zoneset(name, id)
+    assert ConfigStore.get(name).zonesets == []
+    assert {:error, :not_found} = ConfigStore.delete_zoneset(name, "nope")
+  end
+
+  test "list_zonesets returns raw zonesets with original GeoJSON (for copy-out)", %{name: name} do
+    {:ok, id} =
+      ConfigStore.add_zoneset(name, %{
+        "name" => "A",
+        "monitor_zone" => geojson_box(),
+        "anc_zones" => [geojson_box()]
+      })
+
+    assert [zs] = ConfigStore.list_zonesets(name)
+    assert zs["id"] == id
+    assert zs["monitor_zone"]["type"] == "Feature"
+  end
+
   # A minimal GeoJSON Polygon Feature (a small box near home).
   defp geojson_box do
     %{

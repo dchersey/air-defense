@@ -45,6 +45,25 @@ defmodule LgaPredictor.ConfigStore do
   """
   def put(name \\ __MODULE__, raw) when is_map(raw), do: GenServer.call(name, {:put, raw})
 
+  @doc "Raw zonesets (string keys, original GeoJSON) — for listing + copy-out."
+  def list_zonesets(name \\ __MODULE__), do: GenServer.call(name, :list_zonesets)
+
+  @doc """
+  Add a zoneset from `attrs` (`"name"`, `"monitor_zone"`, `"anc_zones"`, optional
+  `"trigger"`). Assigns an id from the name, defaults trigger `:assume` + enabled.
+  Returns `{:ok, id}` or `{:error, reason}` (invalid/duplicate geometry).
+  """
+  def add_zoneset(name \\ __MODULE__, attrs) when is_map(attrs),
+    do: GenServer.call(name, {:add_zoneset, attrs})
+
+  @doc "Merge `fields` into zoneset `id` (rename, replace a zone). Validated."
+  def update_zoneset(name \\ __MODULE__, id, fields) when is_binary(id) and is_map(fields),
+    do: GenServer.call(name, {:update_zoneset, id, fields})
+
+  @doc "Delete zoneset `id`. `{:error, :not_found}` if it doesn't exist."
+  def delete_zoneset(name \\ __MODULE__, id) when is_binary(id),
+    do: GenServer.call(name, {:delete_zoneset, id})
+
   ## Server
 
   @impl true
@@ -77,6 +96,43 @@ defmodule LgaPredictor.ConfigStore do
     end
   end
 
+  def handle_call(:list_zonesets, _from, state), do: {:reply, zonesets(state), state}
+
+  def handle_call({:add_zoneset, attrs}, _from, state) do
+    id = gen_id(attrs["name"], Enum.map(zonesets(state), & &1["id"]))
+
+    zoneset =
+      attrs
+      |> Map.put("id", id)
+      |> Map.put_new("enabled", true)
+      |> Map.put_new("trigger", "assume")
+
+    raw = Map.put(state.raw, "zonesets", zonesets(state) ++ [zoneset])
+    persist_if_valid(raw, state, {:ok, id})
+  end
+
+  def handle_call({:update_zoneset, id, fields}, _from, state) do
+    if Enum.any?(zonesets(state), &(&1["id"] == id)) do
+      updated =
+        Enum.map(zonesets(state), fn zs ->
+          if zs["id"] == id, do: Map.merge(zs, fields), else: zs
+        end)
+
+      persist_if_valid(Map.put(state.raw, "zonesets", updated), state, :ok)
+    else
+      {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  def handle_call({:delete_zoneset, id}, _from, state) do
+    if Enum.any?(zonesets(state), &(&1["id"] == id)) do
+      kept = Enum.reject(zonesets(state), &(&1["id"] == id))
+      persist_if_valid(Map.put(state.raw, "zonesets", kept), state, :ok)
+    else
+      {:reply, {:error, :not_found}, state}
+    end
+  end
+
   ## Persistence
 
   defp default_path do
@@ -92,6 +148,39 @@ defmodule LgaPredictor.ConfigStore do
         write!(path, @global_defaults)
         @global_defaults
     end
+  end
+
+  defp zonesets(state), do: state.raw["zonesets"] || []
+
+  # Validate the candidate config; persist + bump version only if it's valid.
+  defp persist_if_valid(raw, state, ok_reply) do
+    case validate(raw) do
+      :ok ->
+        raw = Map.put(raw, "version", (state.raw["version"] || 0) + 1)
+        write!(state.path, raw)
+        {:reply, ok_reply, %{state | raw: raw}}
+
+      {:error, _} = err ->
+        {:reply, err, state}
+    end
+  end
+
+  # A url-safe id derived from the name, made unique against existing ids.
+  defp gen_id(name, existing) do
+    base =
+      name
+      |> to_string()
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9]+/, "-")
+      |> String.trim("-")
+
+    base = if base == "", do: "zone", else: base
+    dedupe(base, existing, 0)
+  end
+
+  defp dedupe(base, existing, n) do
+    candidate = if n == 0, do: base, else: "#{base}-#{n}"
+    if candidate in existing, do: dedupe(base, existing, n + 1), else: candidate
   end
 
   defp write!(path, raw) do
@@ -194,7 +283,11 @@ defmodule LgaPredictor.ConfigStore do
   defp trigger_atom("assume"), do: :assume
   defp trigger_atom(_), do: :predict
 
-  # Accept a GeoJSON Feature, a bare Polygon geometry, or already-extracted coords.
+  # Accept a GeoJSON FeatureCollection (use its first polygon — geojson.io's export
+  # for a single drawn shape), a Feature, a bare Polygon geometry, or raw coords.
+  defp to_polygon(%{"type" => "FeatureCollection", "features" => [feature | _]}),
+    do: to_polygon(feature)
+
   defp to_polygon(%{"geometry" => %{"coordinates" => coords}}), do: Geo.geojson_polygon(coords)
   defp to_polygon(%{"coordinates" => coords}), do: Geo.geojson_polygon(coords)
   defp to_polygon(coords) when is_list(coords), do: Geo.geojson_polygon(coords)
