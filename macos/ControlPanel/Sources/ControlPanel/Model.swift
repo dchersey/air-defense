@@ -45,7 +45,8 @@ final class StatusModel {
   private var appliedMode: String = "transparency"
 
   init() {
-    AncController.ensureTrusted()
+    let trusted = AncController.ensureTrusted()
+    Log.line("StatusModel init — accessibility trusted=\(trusted)")
     timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
       Task { await self?.refresh() }
     }
@@ -76,13 +77,16 @@ final class StatusModel {
     }
   }
 
-  /// Mirror the backend's desired mode onto the headphones, but only on a change
-  /// (the actuator posts AirBuddy's toggle hotkey, so firing every poll would
-  /// flip the mode back and forth).
+  /// Mirror the backend's desired mode onto the headphones. Only acts on a change
+  /// (the AX switch opens Control Center briefly, so we don't do it every poll).
+  /// Control Center "set mode" is idempotent and absolute, so if a previous apply
+  /// failed we retry next poll (appliedMode only advances on success).
   private func applyModeIfChanged(_ desired: String) {
     guard desired != appliedMode else { return }
     let target: AncController.Mode = (desired == "anc") ? .anc : .transparency
-    if AncController.set(target) {
+    let ok = AncController.set(target)
+    Log.line("applyMode desired=\(desired) applied=\(appliedMode) -> set(\(target.rawValue)) ok=\(ok)")
+    if ok {
       appliedMode = desired
     }
   }
