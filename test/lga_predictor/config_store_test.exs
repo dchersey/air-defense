@@ -15,9 +15,26 @@ defmodule LgaPredictor.ConfigStoreTest do
     cfg = ConfigStore.get(name)
     assert cfg.global_ceiling_ft == 6000
     assert cfg.anc_latency_seconds == 2.0
+    assert cfg.max_dwell_seconds == 30
     assert cfg.zonesets == []
     # persisted to disk
     assert File.exists?(path)
+  end
+
+  test "zoneset min_gspeed_kt defaults to 150 and round-trips a custom value", %{name: name} do
+    base = %{
+      "id" => "z1",
+      "name" => "T",
+      "enabled" => true,
+      "monitor_zone" => geojson_box(),
+      "anc_zones" => [geojson_box()]
+    }
+
+    {:ok, cfg} = ConfigStore.put(name, %{"zonesets" => [base]})
+    assert [%{min_gspeed_kt: 150}] = cfg.zonesets
+
+    {:ok, cfg} = ConfigStore.put(name, %{"zonesets" => [Map.put(base, "min_gspeed_kt", 180)]})
+    assert [%{min_gspeed_kt: 180}] = cfg.zonesets
   end
 
   test "put validates, persists, and bumps version", %{name: name, path: path} do

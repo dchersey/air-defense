@@ -132,6 +132,18 @@ defmodule LgaPredictor.PredictorTest do
       assert %{enters_in: +0.0} = Predictor.predict_eta(inside, [@anc], [])
     end
 
+    test "caps dwell at :max_dwell_seconds and exits follows the cap" do
+      # A slow aircraft yields a large uncapped dwell.
+      %{dwell_seconds: uncapped} = Predictor.predict_eta(flying(30.0), [@anc], [])
+      assert uncapped > 30
+
+      assert %{enters_in: enters, exits_in: exits, dwell_seconds: dwell} =
+               Predictor.predict_eta(flying(30.0), [@anc], max_dwell_seconds: 30)
+
+      assert dwell == 30
+      assert_in_delta exits, enters + 30, 1.0e-6
+    end
+
     test "with multiple zones it picks the soonest entry" do
       # A nearer zone (lon 0.5..1) west of @anc.
       near_zone = {:polygon, [{-0.5, 0.5}, {0.5, 0.5}, {0.5, 1.0}, {-0.5, 1.0}]}

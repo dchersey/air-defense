@@ -19,9 +19,12 @@ defmodule LgaPredictor.ConfigStore do
   @global_defaults %{
     "global_ceiling_ft" => 6000,
     "anc_latency_seconds" => 2.0,
+    "max_dwell_seconds" => 30,
     "version" => 0,
     "zonesets" => []
   }
+
+  @default_min_gspeed_kt 150
 
   ## API
 
@@ -100,7 +103,7 @@ defmodule LgaPredictor.ConfigStore do
 
   # Accept only the keys we manage; ignore unknown top-level keys.
   defp normalize_keys(incoming) do
-    Map.take(incoming, ["global_ceiling_ft", "anc_latency_seconds", "zonesets"])
+    Map.take(incoming, ["global_ceiling_ft", "anc_latency_seconds", "max_dwell_seconds", "zonesets"])
   end
 
   ## Validation
@@ -112,6 +115,9 @@ defmodule LgaPredictor.ConfigStore do
 
       not is_number(raw["anc_latency_seconds"]) ->
         {:error, "anc_latency_seconds must be a number"}
+
+      not is_number(raw["max_dwell_seconds"]) ->
+        {:error, "max_dwell_seconds must be a number"}
 
       not is_list(raw["zonesets"]) ->
         {:error, "zonesets must be a list"}
@@ -135,6 +141,7 @@ defmodule LgaPredictor.ConfigStore do
       not Enum.all?(zs["anc_zones"], &valid_geojson?/1) -> {:error, "zoneset #{zs["id"]}: invalid anc_zone GeoJSON"}
       (zs["reckoning"] || "constant") not in ["constant", "accelerating"] -> {:error, "zoneset #{zs["id"]}: bad reckoning"}
       (zs["trigger"] || "predict") not in ["predict", "assume"] -> {:error, "zoneset #{zs["id"]}: bad trigger"}
+      not is_nil(zs["min_gspeed_kt"]) and not is_number(zs["min_gspeed_kt"]) -> {:error, "zoneset #{zs["id"]}: min_gspeed_kt must be a number"}
       true -> :ok
     end
   end
@@ -151,6 +158,7 @@ defmodule LgaPredictor.ConfigStore do
     %{
       global_ceiling_ft: raw["global_ceiling_ft"],
       anc_latency_seconds: raw["anc_latency_seconds"],
+      max_dwell_seconds: raw["max_dwell_seconds"],
       version: raw["version"],
       zonesets: Enum.map(raw["zonesets"], &derive_zoneset/1)
     }
@@ -166,6 +174,7 @@ defmodule LgaPredictor.ConfigStore do
       reckoning: reckoning_atom(zs["reckoning"]),
       accel_kt_s: zs["accel_kt_s"] || 0.0,
       trigger: trigger_atom(zs["trigger"]),
+      min_gspeed_kt: zs["min_gspeed_kt"] || @default_min_gspeed_kt,
       assume_delay_seconds: zs["assume_delay_seconds"] || 0.0,
       assume_duration_seconds: zs["assume_duration_seconds"] || 30.0,
       altitude_ceiling_ft: zs["altitude_ceiling_ft"],

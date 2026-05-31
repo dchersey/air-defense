@@ -85,7 +85,7 @@ defmodule LgaPredictor.Predictor do
   longer than this constant-speed estimate, so ANC engages slightly early.
   """
   @spec predict_eta(map(), [Geo.zone()], keyword()) :: result() | nil
-  def predict_eta(aircraft, anc_zones, _opts \\ []) do
+  def predict_eta(aircraft, anc_zones, opts \\ []) do
     gs = Map.get(aircraft, :gspeed_kt)
 
     cond do
@@ -105,10 +105,15 @@ defmodule LgaPredictor.Predictor do
         far = ranges |> Enum.map(&elem(&1, 1)) |> Enum.max()
 
         enters = near / gs_km_s
-        dwell = (far - near) / gs_km_s
+        dwell = cap_dwell((far - near) / gs_km_s, Keyword.get(opts, :max_dwell_seconds))
         %{enters_in: enters, exits_in: enters + dwell, dwell_seconds: dwell}
     end
   end
+
+  # Clamp the (far-near)/gs chord estimate to a sane maximum so a slow or
+  # awkwardly-shaped pass can't hold ANC on for minutes (defense-in-depth).
+  defp cap_dwell(dwell, cap) when is_number(cap), do: min(dwell, cap)
+  defp cap_dwell(dwell, _), do: dwell
 
   @doc """
   Map a list of aircraft to overflight windows, dropping those that won't pass

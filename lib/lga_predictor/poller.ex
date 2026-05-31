@@ -179,11 +179,19 @@ defmodule LgaPredictor.Poller do
       (ac.alt_ft || 0) >= ceiling ->
         state
 
+      # Below the zoneset's groundspeed floor — slow non-jet traffic
+      # (helicopters / GA / junk) we don't want driving ANC.
+      (ac.gspeed_kt || 0) < (zoneset.min_gspeed_kt || 0) ->
+        state
+
       zoneset.trigger == :assume ->
-        # Per-flight ETA from distance ÷ groundspeed (heading-independent). Falls
-        # back to the fixed assume window only if ETA can't be computed (no
-        # groundspeed / no ANC zones).
-        window = Predictor.predict_eta(ac, zoneset.anc_zones) || assume_window(zoneset)
+        # Per-flight ETA from distance ÷ groundspeed (heading-independent), with
+        # dwell capped (max_dwell_seconds). Falls back to the fixed assume window
+        # only if ETA can't be computed (no groundspeed / no ANC zones).
+        window =
+          Predictor.predict_eta(ac, zoneset.anc_zones, max_dwell_seconds: config.max_dwell_seconds) ||
+            assume_window(zoneset)
+
         dispatch(window, ac, key, config.anc_latency_seconds, state)
 
       true ->

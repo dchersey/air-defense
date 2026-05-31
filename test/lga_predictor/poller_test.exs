@@ -29,6 +29,7 @@ defmodule LgaPredictor.PollerTest do
     %{
       global_ceiling_ft: Keyword.get(opts, :ceiling, 6000),
       anc_latency_seconds: Keyword.get(opts, :latency, 0.0),
+      max_dwell_seconds: Keyword.get(opts, :max_dwell, 30),
       zonesets: [
         %{
           id: "z1",
@@ -37,6 +38,8 @@ defmodule LgaPredictor.PollerTest do
           reckoning: :constant,
           accel_kt_s: 0.0,
           trigger: Keyword.get(opts, :trigger, :predict),
+          # Default 0 so existing fixtures (inbound is 100 kt) still trigger.
+          min_gspeed_kt: Keyword.get(opts, :min_gspeed, 0),
           assume_delay_seconds: Keyword.get(opts, :assume_delay, 0.0),
           assume_duration_seconds: Keyword.get(opts, :assume_duration, 30.0),
           altitude_ceiling_ft: nil,
@@ -134,6 +137,21 @@ defmodule LgaPredictor.PollerTest do
     start(
       config_fun: fn -> config(trigger: :assume, assume_delay: 0.0, assume_duration: 5.0) end,
       fetcher: fn _ -> {:ok, [far]} end
+    )
+
+    :ok = Poller.start_session()
+    Process.sleep(80)
+    assert Actuator.mode() == :transparency
+  end
+
+  test "skips aircraft below the zoneset minimum groundspeed" do
+    # Inside the ANC zone (would engage) but at 100 kt, below the 150 kt floor —
+    # a helicopter / slow GA target we don't want driving ANC.
+    slow = %{inbound() | gspeed_kt: 100.0, callsign: "SLOW", hex: "SLOW1"}
+
+    start(
+      config_fun: fn -> config(trigger: :assume, min_gspeed: 150) end,
+      fetcher: fn _ -> {:ok, [slow]} end
     )
 
     :ok = Poller.start_session()
