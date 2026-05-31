@@ -41,26 +41,47 @@ defmodule LgaPredictor.Actuator do
 
   @impl true
   def init(_opts) do
-    {:ok, %{mode: :transparency, anc_off_at: nil, disengage_timer: nil}}
+    {:ok, %{mode: :transparency, anc_off_at: nil, disengage_timer: nil, pending: 0, epoch: 0}}
   end
 
   @impl true
   def handle_cast({:cover, on_in_ms, off_in_ms, label}, state) do
-    now = mono()
+    # `hold_ms` is the dwell AFTER engagement. We defer setting `anc_off_at` until
+    # the plane actually engages, so a plane that isn't loud yet can't extend a
+    # window running now — that previously bridged the quiet gaps between
+    # non-overlapping passes and held ANC on for minutes. `epoch` lets `reset`
+    # neutralize any engage still scheduled.
+    hold_ms = max(off_in_ms - max(on_in_ms, 0), 0)
+    msg = {:engage, label, hold_ms, state.epoch}
 
     if on_in_ms <= 0 do
-      send(self(), {:engage, label})
+      send(self(), msg)
     else
-      Process.send_after(self(), {:engage, label}, on_in_ms)
+      Process.send_after(self(), msg, on_in_ms)
     end
 
-    off_at = now + max(off_in_ms, 0)
-    state = %{state | anc_off_at: max(state.anc_off_at || off_at, off_at)}
-    {:noreply, reschedule_disengage(state, now)}
+    {:noreply, %{state | pending: state.pending + 1}}
   end
 
   @impl true
-  def handle_info({:engage, label}, state), do: {:noreply, engage(state, label)}
+  def handle_info({:engage, _label, _hold_ms, epoch}, %{epoch: current} = state)
+      when epoch != current do
+    # Stale engage from before a reset — drop it (pending was already cleared).
+    {:noreply, state}
+  end
+
+  def handle_info({:engage, label, hold_ms, _epoch}, state) do
+    now = mono()
+    off_at = now + hold_ms
+
+    state = %{
+      state
+      | pending: max(state.pending - 1, 0),
+        anc_off_at: max(state.anc_off_at || off_at, off_at)
+    }
+
+    {:noreply, reschedule_disengage(engage(state, label), now)}
+  end
 
   def handle_info(:disengage, state) do
     now = mono()
@@ -79,7 +100,7 @@ defmodule LgaPredictor.Actuator do
     phase =
       cond do
         state.mode == :anc -> :engaged
-        state.anc_off_at != nil -> :armed
+        state.pending > 0 -> :armed
         true -> :idle
       end
 
@@ -88,7 +109,9 @@ defmodule LgaPredictor.Actuator do
 
   def handle_call(:reset, _from, state) do
     if state.disengage_timer, do: Process.cancel_timer(state.disengage_timer)
-    {:reply, :ok, disengage(%{state | disengage_timer: nil})}
+    # Bump epoch so any engage still scheduled is ignored; clear pending.
+    state = disengage(%{state | disengage_timer: nil})
+    {:reply, :ok, %{state | pending: 0, epoch: state.epoch + 1}}
   end
 
   ## Internals

@@ -35,6 +35,30 @@ defmodule LgaPredictor.ActuatorTest do
     assert Actuator.mode() == :transparency
   end
 
+  test "non-overlapping future windows do NOT bridge — ANC drops between passes" do
+    # Pass A: engage now, loud ~40ms. Pass B: engages at 200ms (a quiet gap
+    # between them). ANC must drop to transparency in the gap, not stay on.
+    Actuator.cover(0, 40, "A")
+    Actuator.cover(200, 240, "B")
+
+    Process.sleep(20)
+    assert Actuator.mode() == :anc
+
+    # ~80ms: past A's off (40), well before B engages (200) -> must be off,
+    # with B still pending (armed).
+    Process.sleep(60)
+    assert Actuator.mode() == :transparency
+    assert Actuator.phase() == :armed
+
+    # B engages at 200ms.
+    Process.sleep(150)
+    assert Actuator.mode() == :anc
+
+    # past B's off (240ms) -> back to transparency.
+    Process.sleep(80)
+    assert Actuator.mode() == :transparency
+  end
+
   test "phase reflects idle -> armed (window scheduled) -> engaged" do
     assert Actuator.phase() == :idle
 
