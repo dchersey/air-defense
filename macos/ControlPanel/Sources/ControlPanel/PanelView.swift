@@ -1,8 +1,10 @@
+import AppKit
 import Charts
 import SwiftUI
 
 struct PanelView: View {
   let model: StatusModel
+  @State private var launchAtLogin = LoginItem.isEnabled
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -14,6 +16,8 @@ struct PanelView: View {
       }
       Divider()
       flights
+      Divider()
+      footer
     }
     .padding(14)
     .frame(width: 320)
@@ -112,6 +116,23 @@ struct PanelView: View {
         }
         .frame(maxHeight: 160)
       }
+    }
+  }
+
+  // MARK: - Footer
+
+  private var footer: some View {
+    HStack {
+      Toggle("Launch at Login", isOn: $launchAtLogin)
+        .toggleStyle(.checkbox)
+        .font(.caption)
+        .onChange(of: launchAtLogin) { _, newValue in
+          launchAtLogin = LoginItem.setEnabled(newValue)
+        }
+      Spacer()
+      Button("Quit") { NSApplication.shared.terminate(nil) }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
     }
   }
 }
