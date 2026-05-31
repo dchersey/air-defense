@@ -88,6 +88,41 @@ defmodule LgaPredictor.API.RouterTest do
     assert Jason.decode!(call(:get, "/api/status").resp_body)["anc_phase"] == "engaged"
   end
 
+  test "zoneset CRUD: POST creates, GET lists with geojson strings, PATCH renames, DELETE removes" do
+    box = Jason.encode!(geojson_box())
+
+    created = post_json("/api/zonesets", %{"name" => "Arrivals SW", "monitor_geojson" => box, "anc_geojson" => box})
+    assert created.status == 200
+    out = Jason.decode!(created.resp_body)
+    assert out["ok"] == true
+    id = out["id"]
+    assert is_binary(id)
+
+    list = Jason.decode!(call(:get, "/api/zonesets").resp_body)["zonesets"]
+    assert [z] = list
+    assert z["id"] == id
+    assert z["name"] == "Arrivals SW"
+    # geojson comes back as a STRING, ready for the clipboard
+    assert is_binary(z["monitor_geojson"])
+    assert Jason.decode!(z["monitor_geojson"])["type"] == "Feature"
+
+    assert patch_json("/api/zonesets/#{id}", %{"name" => "Renamed"}).status == 200
+    assert [%{"name" => "Renamed"}] = Jason.decode!(call(:get, "/api/zonesets").resp_body)["zonesets"]
+
+    assert call(:delete, "/api/zonesets/#{id}").status == 200
+    assert Jason.decode!(call(:get, "/api/zonesets").resp_body)["zonesets"] == []
+  end
+
+  test "zoneset writes validate: bad JSON / bad GeoJSON -> 422, unknown id -> 404" do
+    box = Jason.encode!(geojson_box())
+
+    assert post_json("/api/zonesets", %{"name" => "x", "monitor_geojson" => "{not json", "anc_geojson" => box}).status == 422
+    assert post_json("/api/zonesets", %{"name" => "x", "monitor_geojson" => Jason.encode!(%{"foo" => 1}), "anc_geojson" => box}).status == 422
+
+    assert patch_json("/api/zonesets/nope", %{"name" => "x"}).status == 404
+    assert call(:delete, "/api/zonesets/nope").status == 404
+  end
+
   test "unknown route 404s as JSON" do
     conn = call(:get, "/nope")
     assert conn.status == 404
@@ -139,6 +174,12 @@ defmodule LgaPredictor.API.RouterTest do
 
   defp post_json(path, map) do
     conn(:post, path, Jason.encode!(map))
+    |> put_req_header("content-type", "application/json")
+    |> Router.call(@opts)
+  end
+
+  defp patch_json(path, map) do
+    conn(:patch, path, Jason.encode!(map))
     |> put_req_header("content-type", "application/json")
     |> Router.call(@opts)
   end

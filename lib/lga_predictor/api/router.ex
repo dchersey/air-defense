@@ -62,9 +62,86 @@ defmodule LgaPredictor.API.Router do
     end
   end
 
+  get "/api/zonesets" do
+    zonesets =
+      Enum.map(ConfigStore.list_zonesets(), fn zs ->
+        %{
+          id: zs["id"],
+          name: zs["name"],
+          monitor_geojson: Jason.encode!(zs["monitor_zone"]),
+          anc_geojson: Jason.encode!(List.first(zs["anc_zones"] || []))
+        }
+      end)
+
+    send_json(conn, 200, %{zonesets: zonesets})
+  end
+
+  post "/api/zonesets" do
+    with {:ok, attrs} <- zoneset_attrs(conn.body_params),
+         {:ok, id} <- ConfigStore.add_zoneset(attrs) do
+      send_json(conn, 200, %{ok: true, id: id})
+    else
+      {:error, reason} -> send_json(conn, 422, %{error: to_string(reason)})
+    end
+  end
+
+  patch "/api/zonesets/:id" do
+    with {:ok, fields} <- zoneset_fields(conn.body_params),
+         :ok <- ConfigStore.update_zoneset(id, fields) do
+      send_json(conn, 200, %{ok: true})
+    else
+      {:error, :not_found} -> send_json(conn, 404, %{error: "unknown zoneset"})
+      {:error, reason} -> send_json(conn, 422, %{error: to_string(reason)})
+    end
+  end
+
+  delete "/api/zonesets/:id" do
+    case ConfigStore.delete_zoneset(id) do
+      :ok -> send_json(conn, 200, %{ok: true})
+      {:error, :not_found} -> send_json(conn, 404, %{error: "unknown zoneset"})
+    end
+  end
+
   match _ do
     send_json(conn, 404, %{error: "not found"})
   end
+
+  # Build zoneset attrs for a create (name + both zones required).
+  defp zoneset_attrs(params) do
+    with {:ok, monitor} <- decode_geojson(params["monitor_geojson"]),
+         {:ok, anc} <- decode_geojson(params["anc_geojson"]) do
+      {:ok, %{"name" => params["name"] || "", "monitor_zone" => monitor, "anc_zones" => [anc]}}
+    end
+  end
+
+  # Build a partial update map: only the fields present in the request.
+  defp zoneset_fields(params) do
+    acc = if name = params["name"], do: %{"name" => name}, else: %{}
+
+    with {:ok, acc} <- maybe_geojson(acc, params, "monitor_geojson", "monitor_zone", & &1),
+         {:ok, acc} <- maybe_geojson(acc, params, "anc_geojson", "anc_zones", &[&1]) do
+      {:ok, acc}
+    end
+  end
+
+  defp maybe_geojson(acc, params, in_key, out_key, wrap) do
+    case Map.fetch(params, in_key) do
+      :error ->
+        {:ok, acc}
+
+      {:ok, str} ->
+        with {:ok, obj} <- decode_geojson(str), do: {:ok, Map.put(acc, out_key, wrap.(obj))}
+    end
+  end
+
+  defp decode_geojson(str) when is_binary(str) do
+    case Jason.decode(str) do
+      {:ok, obj} when is_map(obj) -> {:ok, obj}
+      _ -> {:error, "invalid GeoJSON"}
+    end
+  end
+
+  defp decode_geojson(_), do: {:error, "missing GeoJSON"}
 
   defp status_payload do
     status = Poller.status()
