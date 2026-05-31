@@ -43,6 +43,9 @@ final class StatusModel {
   // AirPods begin in Transparency when a session starts. If that assumption is
   // wrong the state can invert — toggle manually once to resync.
   private var appliedMode: String = "transparency"
+  // Guards against a second AX sequence starting before the first finishes
+  // (back-to-back desired-mode changes), which left the popover open.
+  private var isApplying = false
 
   init() {
     let trusted = AncController.ensureTrusted()
@@ -83,6 +86,14 @@ final class StatusModel {
   /// failed we retry next poll (appliedMode only advances on success).
   private func applyModeIfChanged(_ desired: String) {
     guard desired != appliedMode else { return }
+    guard !isApplying else {
+      Log.line("applyMode skipped (busy) desired=\(desired)")
+      return
+    }
+
+    isApplying = true
+    defer { isApplying = false }
+
     let target: AncController.Mode = (desired == "anc") ? .anc : .transparency
     let ok = AncController.set(target)
     Log.line("applyMode desired=\(desired) applied=\(appliedMode) -> set(\(target.rawValue)) ok=\(ok)")

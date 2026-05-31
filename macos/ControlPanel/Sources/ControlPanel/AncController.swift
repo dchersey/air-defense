@@ -29,12 +29,21 @@ enum AncController {
   /// Set the AirPods listening mode. Returns true if the control was pressed.
   @discardableResult
   static func set(_ mode: Mode) -> Bool {
-    guard let cc = controlCenterApp(), let soundItem = soundMenuBarItem() else { return false }
+    guard let cc = controlCenterApp(), let soundItem = soundMenuBarItem() else {
+      Log.line("set(\(mode.rawValue)) — Control Center / Sound menu item not found")
+      return false
+    }
 
     // Remember who had focus so we can hand it back (and dismiss the popover).
+    // If WE are frontmost (user just clicked our menu-bar item), reactivating
+    // ourselves does NOT make Control Center resign key — so the popover lingers
+    // and focus stays stolen. Detect that and fall back to Finder.
     let previousApp = NSWorkspace.shared.frontmostApplication
+    let prevId = previousApp?.bundleIdentifier
+    let prevIsSelf = prevId == nil || prevId == Bundle.main.bundleIdentifier
+    Log.line("set(\(mode.rawValue)) open: previousApp=\(prevId ?? "nil") isSelf=\(prevIsSelf)")
 
-    _ = press(soundItem)
+    let pressed = press(soundItem)
     Thread.sleep(forTimeInterval: 0.5)
 
     let ok: Bool =
@@ -44,14 +53,15 @@ enum AncController {
       } else {
         false
       }
+    Log.line("set(\(mode.rawValue)) pressedSound=\(pressed) toggled=\(ok)")
 
-    // Reactivate the previously-frontmost app: dismisses the Control Center
-    // popover (it resigns key) and restores the user's keyboard focus.
-    // NOTE: bare `activate()` is deprecated and a no-op on Tahoe — the popover
-    // lingers and focus stays stolen. `.activateIgnoringOtherApps` is what
-    // actually works (verified by ear/eye 2026-05-31).
+    // Activate another app to dismiss the popover (it resigns key) and restore
+    // keyboard focus. NOTE: bare `activate()` is deprecated and a no-op on Tahoe;
+    // `.activateIgnoringOtherApps` is what actually works (verified 2026-05-31).
     Thread.sleep(forTimeInterval: 0.2)
-    previousApp?.activate(options: [.activateIgnoringOtherApps])
+    let dismisser = prevIsSelf ? finderApp() : previousApp
+    dismisser?.activate(options: [.activateIgnoringOtherApps])
+    Log.line("set(\(mode.rawValue)) close: activated=\(dismisser?.bundleIdentifier ?? "nil")")
 
     return ok
   }
@@ -108,6 +118,12 @@ enum AncController {
       .runningApplications(withBundleIdentifier: "com.apple.controlcenter")
       .first
       .map { AXUIElementCreateApplication($0.processIdentifier) }
+  }
+
+  /// Finder — a guaranteed-running app to activate when we can't hand focus back
+  /// to a real previous app (e.g. we were frontmost), forcing the popover closed.
+  private static func finderApp() -> NSRunningApplication? {
+    NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first
   }
 
   /// The pinned Sound menu-bar item (id contains "sound").
