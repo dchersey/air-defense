@@ -51,6 +51,14 @@ defmodule LgaPredictor.Poller do
   @doc "Session status: active?, per-zoneset session state, polls, credits."
   def status, do: GenServer.call(__MODULE__, :status)
 
+  @doc """
+  Report whether the AirPods are the active output. When disconnected, an active
+  session keeps its timer running but PAUSES polling (no FR24 credits) — there's
+  nothing to control — and resumes automatically when they reconnect.
+  """
+  def set_headphones(connected) when is_boolean(connected),
+    do: GenServer.call(__MODULE__, {:set_headphones, connected})
+
   ## Server
 
   @impl true
@@ -78,6 +86,16 @@ defmodule LgaPredictor.Poller do
   def handle_call(:stop_session, _from, state), do: {:reply, :ok, stop_all(state)}
 
   def handle_call(:status, _from, state), do: {:reply, status_of(state), state}
+
+  def handle_call({:set_headphones, connected}, _from, state) do
+    if connected != state.headphones_connected do
+      Logger.info("[poller] headphones #{if connected, do: "connected — resuming", else: "disconnected — pausing"}")
+      # Clear any held mode on disconnect; polling resumes fresh on reconnect.
+      unless connected, do: Actuator.reset()
+    end
+
+    {:reply, :ok, %{state | headphones_connected: connected}}
+  end
 
   @impl true
   def handle_info(:poll, state) do
@@ -139,13 +157,19 @@ defmodule LgaPredictor.Poller do
   ## Polling
 
   defp poll_now(state) do
-    config = state.config_fun.()
-    running = Enum.filter(config.zonesets, &Map.has_key?(state.sessions, &1.id))
+    state =
+      if state.headphones_connected do
+        config = state.config_fun.()
+        running = Enum.filter(config.zonesets, &Map.has_key?(state.sessions, &1.id))
+        state = Enum.reduce(running, state, &poll_zoneset(&1, config, &2))
+        Logger.info("[poller] poll ##{state.polls + 1} done; session ~#{state.credits} cr")
+        %{state | polls: state.polls + 1}
+      else
+        # Paused — session timer keeps running, but no FR24 fetch / credits.
+        Logger.info("[poller] poll skipped — headphones disconnected (monitoring paused)")
+        state
+      end
 
-    state = Enum.reduce(running, state, &poll_zoneset(&1, config, &2))
-
-    Logger.info("[poller] poll ##{state.polls + 1} done; session ~#{state.credits} cr")
-    state = %{state | polls: state.polls + 1}
     %{state | poll_timer: Process.send_after(self(), :poll, state.poll_interval)}
   end
 
@@ -276,6 +300,7 @@ defmodule LgaPredictor.Poller do
       active?: map_size(state.sessions) > 0,
       polls: state.polls,
       approx_credits: state.credits,
+      headphones_connected: state.headphones_connected,
       session_ends_at: if(ends == [], do: nil, else: Enum.max(ends)),
       zonesets: zonesets
     }
@@ -298,6 +323,7 @@ defmodule LgaPredictor.Poller do
       poll_timer: nil,
       polls: 0,
       credits: 0,
+      headphones_connected: true,
       actioned: MapSet.new(),
       fetcher: Keyword.get(opts, :fetcher, &default_fetch(&1, sandbox?)),
       config_fun: Keyword.get(opts, :config_fun, fn -> ConfigStore.get() end),

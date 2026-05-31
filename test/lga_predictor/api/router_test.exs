@@ -123,6 +123,14 @@ defmodule LgaPredictor.API.RouterTest do
     assert call(:delete, "/api/zonesets/nope").status == 404
   end
 
+  test "POST /api/headphones updates the connected state in status" do
+    assert post_json("/api/headphones", %{"connected" => false}).status == 200
+    assert Jason.decode!(call(:get, "/api/status").resp_body)["headphones_connected"] == false
+
+    assert post_json("/api/headphones", %{"connected" => true}).status == 200
+    assert Jason.decode!(call(:get, "/api/status").resp_body)["headphones_connected"] == true
+  end
+
   test "unknown route 404s as JSON" do
     conn = call(:get, "/nope")
     assert conn.status == 404

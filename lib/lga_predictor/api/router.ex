@@ -32,6 +32,11 @@ defmodule LgaPredictor.API.Router do
     send_json(conn, 200, %{ok: result == :ok, result: inspect(result)})
   end
 
+  post "/api/headphones" do
+    Poller.set_headphones(conn.body_params["connected"] == true)
+    send_json(conn, 200, %{ok: true})
+  end
+
   post "/api/session/stop" do
     case conn.body_params do
       %{"zoneset" => id} when is_binary(id) -> Poller.stop_session(id)
@@ -150,6 +155,7 @@ defmodule LgaPredictor.API.Router do
       active: status.active?,
       mode: Actuator.mode(),
       anc_phase: Actuator.phase(),
+      headphones_connected: status.headphones_connected,
       session_ends_at: status.session_ends_at,
       polls: status.polls,
       approx_credits: status.approx_credits,

@@ -221,6 +221,43 @@ defmodule LgaPredictor.PollerTest do
     assert ids == ["z1", "z2"]
   end
 
+  test "a session paused (headphones disconnected) does not poll or spend credits" do
+    test_pid = self()
+    start(fetcher: fn box -> send(test_pid, {:queried, box}); {:ok, [inbound()]} end)
+
+    :ok = Poller.set_headphones(false)
+    :ok = Poller.start_session()
+    Process.sleep(80)
+
+    refute_receive {:queried, _}, 60
+    assert Poller.status().approx_credits == 0
+    assert Actuator.mode() == :transparency
+  end
+
+  test "reconnecting headphones resumes polling" do
+    start([])
+    :ok = Poller.set_headphones(false)
+    :ok = Poller.start_session()
+    Process.sleep(60)
+    assert Actuator.mode() == :transparency
+
+    :ok = Poller.set_headphones(true)
+    Process.sleep(80)
+    assert Actuator.mode() == :anc
+  end
+
+  test "status reports headphones_connected (default true) and stays active when paused" do
+    start([])
+    assert Poller.status().headphones_connected == true
+
+    :ok = Poller.set_headphones(false)
+    :ok = Poller.start_session()
+    status = Poller.status()
+    assert status.headphones_connected == false
+    # session stays active (timer keeps running) even though polling is paused
+    assert status.active?
+  end
+
   test "stopping a session goes idle and returns to transparency" do
     start([])
     :ok = Poller.start_session()
