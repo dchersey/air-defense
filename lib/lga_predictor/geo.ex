@@ -88,6 +88,32 @@ defmodule LgaPredictor.Geo do
     end)
   end
 
+  @doc """
+  Convert a GeoJSON Polygon `coordinates` value into a `{:polygon, [{lat, lon}]}`
+  zone. GeoJSON points are `[lon, lat]` and the first ring is the outer boundary;
+  the closing duplicate vertex (first == last) is dropped.
+  """
+  @spec geojson_polygon([[[number()]]]) :: zone()
+  def geojson_polygon([outer_ring | _holes]) do
+    points = Enum.map(outer_ring, fn [lon, lat] -> {lat, lon} end)
+
+    points =
+      case points do
+        [first | _] -> if List.last(points) == first, do: Enum.drop(points, -1), else: points
+        [] -> []
+      end
+
+    {:polygon, points}
+  end
+
+  @doc "Bounding box `{north, south, west, east}` of a polygon zone."
+  @spec bbox(zone()) :: {number(), number(), number(), number()}
+  def bbox({:polygon, points}) do
+    lats = Enum.map(points, &elem(&1, 0))
+    lons = Enum.map(points, &elem(&1, 1))
+    {Enum.max(lats), Enum.min(lats), Enum.min(lons), Enum.max(lons)}
+  end
+
   defp rotate([head | tail]), do: tail ++ [head]
 
   defp deg_to_rad(deg), do: deg * :math.pi() / 180.0

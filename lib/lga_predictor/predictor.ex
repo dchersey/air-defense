@@ -28,8 +28,44 @@ defmodule LgaPredictor.Predictor do
       0
       |> Stream.iterate(&(&1 + step))
       |> Enum.take_while(&(&1 <= window))
-      |> Enum.filter(&inside_and_low?(aircraft, &1, zone, ceiling, accel))
+      |> Enum.filter(&in_zone_and_low?(aircraft, &1, zone, ceiling, accel))
       |> summarise()
+    end
+  end
+
+  @doc """
+  Two-zone prediction for departures: engage ANC when the projected path first
+  reaches `:noise_on_zone`, release when it first reaches `:noise_off_zone`
+  (a distinct zone further along the arc). Returns `%{engage_in:, release_in:}`
+  seconds-from-now, or `nil` if the path never reaches the on-zone (below the
+  ceiling) within the window. Honors `:accel_kt_s` for accelerating departures.
+  """
+  @spec predict_traversal(map(), keyword()) :: %{engage_in: number(), release_in: number()} | nil
+  def predict_traversal(aircraft, opts) do
+    on_zone = Keyword.fetch!(opts, :noise_on_zone)
+    off_zone = Keyword.fetch!(opts, :noise_off_zone)
+    window = Keyword.get(opts, :window_seconds, 120)
+    ceiling = Keyword.get(opts, :altitude_ceiling_ft, 6000)
+    step = Keyword.get(opts, :step_seconds, 5)
+    accel = Keyword.get(opts, :accel_kt_s, 0.0)
+
+    if missing_kinematics?(aircraft) do
+      nil
+    else
+      times = 0 |> Stream.iterate(&(&1 + step)) |> Enum.take_while(&(&1 <= window))
+      engage = Enum.find(times, &in_zone_and_low?(aircraft, &1, on_zone, ceiling, accel))
+
+      if engage do
+        release =
+          times
+          |> Enum.drop_while(&(&1 < engage))
+          |> Enum.find(&in_zone_and_low?(aircraft, &1, off_zone, ceiling, accel))
+
+        # If the off-zone isn't reached in-window, hold until the window edge.
+        %{engage_in: engage, release_in: release || window}
+      else
+        nil
+      end
     end
   end
 
@@ -46,7 +82,7 @@ defmodule LgaPredictor.Predictor do
     |> Enum.map(fn {ac, result} -> Map.put(result, :aircraft, ac) end)
   end
 
-  defp inside_and_low?(aircraft, t, zone, ceiling, accel) do
+  defp in_zone_and_low?(aircraft, t, zone, ceiling, accel) do
     projected = Geo.project(aircraft, t, accel_kt_s: accel)
     projected.alt_ft < ceiling and Geo.point_in_zone?({projected.lat, projected.lon}, zone)
   end

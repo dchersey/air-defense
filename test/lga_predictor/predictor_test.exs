@@ -55,6 +55,44 @@ defmodule LgaPredictor.PredictorTest do
     end
   end
 
+  describe "predict_traversal/2 (two-zone: separate on/off triggers)" do
+    # On-zone is a band just north of start; off-zone further north. Plane heads
+    # due north at 100 kt from lat 40.700.
+    @on_zone {:polygon, [{40.710, -73.870}, {40.710, -73.858}, {40.716, -73.858}, {40.716, -73.870}]}
+    @off_zone {:polygon, [{40.730, -73.870}, {40.730, -73.858}, {40.736, -73.858}, {40.736, -73.870}]}
+    @topts [
+      noise_on_zone: @on_zone,
+      noise_off_zone: @off_zone,
+      window_seconds: 120,
+      altitude_ceiling_ft: 6000,
+      step_seconds: 1
+    ]
+
+    test "engages when path reaches the on-zone, releases when it reaches the off-zone" do
+      ac = inbound()
+      assert %{engage_in: engage, release_in: release} = Predictor.predict_traversal(ac, @topts)
+      assert engage > 0
+      assert release > engage
+    end
+
+    test "an accelerating departure reaches both triggers sooner" do
+      ac = inbound()
+      %{engage_in: e0} = Predictor.predict_traversal(ac, @topts)
+      %{engage_in: e1} = Predictor.predict_traversal(ac, @topts ++ [accel_kt_s: 8.0])
+      assert e1 < e0
+    end
+
+    test "returns nil when the path never reaches the on-zone" do
+      away = %{inbound() | track_deg: 180.0}
+      assert Predictor.predict_traversal(away, @topts) == nil
+    end
+
+    test "ignores aircraft above the altitude ceiling" do
+      high = %{inbound() | alt_ft: 7000.0}
+      assert Predictor.predict_traversal(high, @topts) == nil
+    end
+  end
+
   describe "overflight_windows/2" do
     test "returns one window per qualifying aircraft, with the aircraft attached" do
       away = %{inbound() | callsign: "AWAY", track_deg: 180.0}
