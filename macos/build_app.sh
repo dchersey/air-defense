@@ -31,6 +31,18 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
+# Code-sign with a stable identity so macOS keeps the Accessibility grant across
+# rebuilds (unsigned/ad-hoc rebuilds silently lose TCC trust — see SIGN_IDENTITY).
+# Override the identity via SIGN_IDENTITY env; empty string skips signing.
+SIGN_IDENTITY="${SIGN_IDENTITY-Apple Development: David Hersey (CUACYBN73G)}"
+if [ -n "$SIGN_IDENTITY" ]; then
+  if codesign --force --deep --sign "$SIGN_IDENTITY" "$app" 2>/dev/null; then
+    echo "Signed with: $SIGN_IDENTITY"
+  else
+    echo "WARN: codesign failed for identity '$SIGN_IDENTITY' — app is unsigned (Accessibility grant won't persist)."
+  fi
+fi
+
 echo "Built $app"
 
 # Install to /Applications unless --here was passed.
