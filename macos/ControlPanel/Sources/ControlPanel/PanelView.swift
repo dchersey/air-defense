@@ -242,16 +242,16 @@ private struct ZoneEditRow: View {
         .buttonStyle(.borderless)
       }
 
-      slotRow("Monitor", copy: zone.monitorGeojson, slot: .monitor)
-      slotRow("ANC", copy: zone.ancGeojson, slot: .anc)
+      slotRow("Monitor", geojson: zone.monitorGeojson, slot: .monitor)
+      slotRow("ANC", geojson: zone.ancGeojson, slot: .anc)
     }
     .padding(.vertical, 2)
   }
 
-  private func slotRow(_ label: String, copy: String, slot: ZoneSlot) -> some View {
+  private func slotRow(_ label: String, geojson: String, slot: ZoneSlot) -> some View {
     HStack(spacing: 6) {
       Text(label).font(.caption2).foregroundStyle(.secondary).frame(width: 56, alignment: .leading)
-      Button("Copy") { model.copyToClipboard(copy) }
+      Button("Open") { model.openInGeojsonIO(geojson) }
       Button("Paste") { Task { await model.pasteZone(zone.id, slot: slot) } }
     }
     .controlSize(.small)

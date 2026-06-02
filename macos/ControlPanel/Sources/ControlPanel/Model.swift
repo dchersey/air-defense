@@ -199,10 +199,46 @@ final class StatusModel {
     }
   }
 
-  func copyToClipboard(_ string: String) {
-    let pb = NSPasteboard.general
-    pb.clearContents()
-    pb.setString(string, forType: .string)
+  /// Open a zone's GeoJSON directly in geojson.io — rendered for viewing/editing
+  /// and zoomed to the zone. (Bring edits back with "Paste".)
+  func openInGeojsonIO(_ geojson: String) {
+    // encodeURIComponent equivalent: only RFC-3986 unreserved chars stay literal.
+    let unreserved = CharacterSet(
+      charactersIn:
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
+    guard let encoded = geojson.addingPercentEncoding(withAllowedCharacters: unreserved) else {
+      return
+    }
+
+    var url = "https://geojson.io/#"
+    if let c = firstCoordinate(geojson) {
+      url += "map=14/\(c.lat)/\(c.lon)&"
+    }
+    url += "data=data:application/json,\(encoded)"
+
+    if let u = URL(string: url) { NSWorkspace.shared.open(u) }
+  }
+
+  /// Best-effort dig for the first [lon, lat] pair so geojson.io can center there.
+  private func firstCoordinate(_ geojson: String) -> (lat: Double, lon: Double)? {
+    guard let data = geojson.data(using: .utf8),
+      let obj = try? JSONSerialization.jsonObject(with: data)
+    else { return nil }
+
+    func search(_ any: Any) -> [Double]? {
+      if let array = any as? [Any] {
+        if array.count >= 2, let x = array[0] as? Double, let y = array[1] as? Double {
+          return [x, y]
+        }
+        for element in array { if let found = search(element) { return found } }
+      } else if let dict = any as? [String: Any] {
+        for value in dict.values { if let found = search(value) { return found } }
+      }
+      return nil
+    }
+
+    guard let coord = search(obj), coord.count >= 2 else { return nil }
+    return (lat: coord[1], lon: coord[0])  // GeoJSON is [lon, lat]
   }
 
   func pasteZone(_ id: String, slot: ZoneSlot) async {
