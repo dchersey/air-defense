@@ -8,7 +8,7 @@ defmodule LgaPredictor.ConfigStore do
   round-trip it); the in-memory form returned by `get/1` adds derived fields the
   engine uses: `Geo` polygons and the monitor-zone bounding box.
 
-  Default path: `~/Library/Application Support/noise-defence/config.json`
+  Default path: `~/Library/Application Support/air-defense/config.json`
   (override with `:path`, and `:name` for isolated instances in tests).
   """
 
@@ -144,7 +144,7 @@ defmodule LgaPredictor.ConfigStore do
   ## Persistence
 
   defp default_path do
-    Path.join([System.user_home!(), "Library", "Application Support", "noise-defence", "config.json"])
+    Path.join([System.user_home!(), "Library", "Application Support", "air-defense", "config.json"])
   end
 
   defp load_or_default(path) do

@@ -75,7 +75,7 @@ struct PanelView: View {
   private var header: some View {
     HStack {
       VStack(alignment: .leading, spacing: 2) {
-        Text("LGA Overflight").font(.headline)
+        Text("Air Defense").font(.headline)
         Text(model.reachable ? statusLine : "service offline")
           .font(.caption)
           .foregroundStyle(.secondary)

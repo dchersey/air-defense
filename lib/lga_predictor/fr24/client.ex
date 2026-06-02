@@ -137,8 +137,8 @@ defmodule LgaPredictor.FR24.Client do
   defp api_key(sandbox?) do
     {service, env} =
       if sandbox?,
-        do: {"noise-defence-fr24-sandbox", "FR24_SANDBOX_KEY"},
-        else: {"noise-defence-fr24", "FR24_API_KEY"}
+        do: {"air-defense-fr24-sandbox", "FR24_SANDBOX_KEY"},
+        else: {"air-defense-fr24", "FR24_API_KEY"}
 
     keychain_key(service) || System.get_env(env) ||
       raise "FR24 key not found (keychain service #{inspect(service)} or env #{env})"

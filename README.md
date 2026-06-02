@@ -1,4 +1,4 @@
-# Noise Defence — LGA overflight ANC predictor
+# Air Defense — LGA overflight ANC predictor
 
 A personal macOS tool that predicts when aircraft departing/arriving at LaGuardia
 will pass over a specific apartment (Rego Park, Queens) and automatically switches
@@ -45,7 +45,7 @@ geofence to **user-configurable zonesets**. `mix test` → 63 tests, 0 failures.
 - Localhost API: `GET /api/status`, `POST /api/session/{start,stop}`,
   `GET/PUT /api/config`.
 - `ConfigStore`: user config (global ceiling, ANC latency, zonesets) as JSON at
-  `~/Library/Application Support/noise-defence/config.json`.
+  `~/Library/Application Support/air-defense/config.json`.
 - A hands-free **arrival** overflight was confirmed end-to-end on a live pass.
 
 **In progress / next:**
@@ -77,7 +77,7 @@ test/                   ExUnit tests (TDD)
 
 ```sh
 # 1. FR24 key into Keychain (one time):
-security add-generic-password -a "$USER" -s "noise-defence-fr24" -A -w
+security add-generic-password -a "$USER" -s "air-defense-fr24" -A -w
 
 # 2. Elixir service (headless; or install the LaunchAgent for autostart):
 mix deps.get

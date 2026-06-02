@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install/reinstall the noise-defence headless service as a per-user LaunchAgent.
+# Install/reinstall the air-defense headless service as a per-user LaunchAgent.
 # Boots idle at login; the menu-bar app drives sessions. FR24 key comes from
 # Keychain, so no secret is written anywhere here.
 #
@@ -7,7 +7,7 @@
 #   ./priv/launchd/install.sh uninstall  # unload + remove
 set -euo pipefail
 
-LABEL="org.hersey.noise-defence"
+LABEL="org.hersey.air-defense"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 REPO="$(cd "$(dirname "$0")/../.." && pwd -P)"
 
@@ -43,4 +43,4 @@ launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
 launchctl enable "gui/$(id -u)/$LABEL"
 
-echo "Loaded $LABEL. Check: curl -s 127.0.0.1:4040/api/status ; log: ~/Library/Logs/noise-defence.log"
+echo "Loaded $LABEL. Check: curl -s 127.0.0.1:4040/api/status ; log: ~/Library/Logs/air-defense.log"

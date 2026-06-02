@@ -4,14 +4,14 @@
   LaunchAgent for the headless LGA overflight predictor service.
   Boots idle at login (no polling, no FR24 credits) and waits for the menu-bar
   app to POST /api/session/start. No secret here — the FR24 key is read from the
-  macOS Keychain (service "noise-defence-fr24") at request time.
+  macOS Keychain (service "air-defense-fr24") at request time.
 
   Placeholders @REPO@, @ELIXIR@, @PATH@, @HOME@ are filled in by install.sh.
 -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>org.hersey.noise-defence</string>
+  <string>org.hersey.air-defense</string>
 
   <key>ProgramArguments</key>
   <array>
@@ -42,8 +42,8 @@
   <true/>
 
   <key>StandardOutPath</key>
-  <string>@HOME@/Library/Logs/noise-defence.log</string>
+  <string>@HOME@/Library/Logs/air-defense.log</string>
   <key>StandardErrorPath</key>
-  <string>@HOME@/Library/Logs/noise-defence.log</string>
+  <string>@HOME@/Library/Logs/air-defense.log</string>
 </dict>
 </plist>

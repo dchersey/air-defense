@@ -24,7 +24,7 @@ lga_predictor-*.tar
 
 # Swift control panel build artifacts
 macos/*/.build/
-macos/LgaPredictor.app/
+macos/AirDefense.app/
 
 # macOS / editor / tooling cruft
 .DS_Store

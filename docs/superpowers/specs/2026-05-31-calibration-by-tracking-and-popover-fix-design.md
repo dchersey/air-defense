@@ -5,7 +5,7 @@ Status: approved (design); not yet implemented
 
 ## Context
 
-`noise-defence` auto-switches AirPods Max between Transparency and ANC when LGA
+`air-defense` auto-switches AirPods Max between Transparency and ANC when LGA
 aircraft will be loud over Rego Park. The full pipeline is proven live: FR24
 detects a flight in a zoneset's **monitor zone** → the `:assume` trigger fires
 ANC → the Elixir service exposes desired mode over a localhost API → a signed
@@ -112,7 +112,7 @@ Debugging task — evidence before structural change:
 1. **Logging first** (`AncController.set` → `Log.line`): log `previousApp` bundle
    id, whether it equals our own bundle, each AX step's result, and a line after
    the reactivate. Confirms root cause from
-   `~/Library/Logs/noise-defence-app.log` on the next live pass.
+   `~/Library/Logs/air-defense-app.log` on the next live pass.
 2. **Guard `previousApp == self / nil`** — prime suspect: when the menu-bar app
    has been clicked, `frontmostApplication` is our LSUIElement agent, so
    reactivating it never makes the popover resign key. Fix: if `previousApp` is

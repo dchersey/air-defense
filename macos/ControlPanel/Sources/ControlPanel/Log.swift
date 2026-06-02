@@ -1,12 +1,12 @@
 import Foundation
 
 /// Minimal file logger so the menu-bar app's behaviour is observable (it has no
-/// console). Appends timestamped lines to ~/Library/Logs/noise-defence-app.log.
+/// console). Appends timestamped lines to ~/Library/Logs/air-defense-app.log.
 enum Log {
   private static let url: URL = {
     let dir = FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent("Library/Logs")
-    return dir.appendingPathComponent("noise-defence-app.log")
+    return dir.appendingPathComponent("air-defense-app.log")
   }()
 
   private static let formatter: DateFormatter = {

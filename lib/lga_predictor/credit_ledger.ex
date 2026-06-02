@@ -20,7 +20,7 @@ defmodule LgaPredictor.CreditLedger do
   alias LgaPredictor.ConfigStore
 
   @default_path Path.join([System.user_home() || ".", "Library", "Application Support",
-                  "noise-defence", "credits.json"])
+                  "air-defense", "credits.json"])
 
   # --- API ---
 
