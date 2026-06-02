@@ -140,16 +140,23 @@ automation targets that layout and may need small tweaks on other versions.
 
 ## Provider notes
 
-**Default (free):** `airplanes.live` / `adsb.lol` are community ADS-B aggregators —
-no API key, no cost. All US commercial jets broadcast ADS-B, and the NYC area has
-dense receiver coverage, so traffic over the approach/departure paths is complete.
-Be a good citizen: the small monitor zones keep request volume low.
+**Default (free):** `airplanes.live` and `adsb.lol` are community ADS-B aggregators
+— no API key, no cost. All US commercial jets broadcast ADS-B, and busy metro areas
+near major airports tend to have dense volunteer-receiver coverage, so traffic over
+the approach/departure paths comes through complete. This is the default and what
+most people should use. Be a good citizen: the small monitor zones keep request
+volume low.
 
-**Optional (FlightRadar24):** if you'd rather use FR24, switch the provider in the
-app and paste an [API key](https://fr24api.flightradar24.com/) (the **Explorer**
-plan suffices). It's stored only in your macOS Keychain (service `air-defense-fr24`,
-`FR24_API_KEY` env fallback) — **never** committed or written to the launchd plist.
-FR24's `light` feed is billed per flight returned, so small zones keep usage low.
+**Fallback (FlightRadar24):** the community feeds depend on nearby hobbyist
+receivers, so coverage varies by location. If `airplanes.live` / `adsb.lol` don't
+reliably see the low-altitude traffic over *your* spot — planes you can clearly hear
+that never show up — switch the **Data source** to **FlightRadar24**, a commercial
+feed with broad, consistent coverage. Sign up at
+**[fr24api.flightradar24.com](https://fr24api.flightradar24.com/)** (the **Explorer**
+plan is enough), then paste the API key into the app — it's stored only in your
+macOS Keychain (service `air-defense-fr24`, `FR24_API_KEY` env fallback), **never**
+committed or written to the launchd plist. FlightRadar24's `light` feed is billed
+per flight returned, so small monitor zones keep usage low.
 
 > The Explorer plan exposes no month-to-date usage or balance endpoint, so the
 > credit bar is a **self-tally**: Air Defense counts every credit it spends and you
