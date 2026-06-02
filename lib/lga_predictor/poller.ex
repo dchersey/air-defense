@@ -26,7 +26,6 @@ defmodule LgaPredictor.Poller do
   require Logger
 
   alias LgaPredictor.{Actuator, ConfigStore, History, KeepAlive, Predictor}
-  alias LgaPredictor.FR24.Client
 
   @credits_per_aircraft 6
 
@@ -413,7 +412,10 @@ defmodule LgaPredictor.Poller do
     }
   end
 
+  # Resolve the provider from config at call time, so switching it in the app
+  # settings takes effect without restarting a session.
   defp default_fetch(box, sandbox?) do
-    Client.positions(box, :light, sandbox?: sandbox?)
+    provider = ConfigStore.get().provider
+    LgaPredictor.Sources.positions(box, provider, sandbox?: sandbox?)
   end
 end

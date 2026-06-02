@@ -28,10 +28,14 @@ defmodule LgaPredictor.ConfigStore do
     # credit ledger rolls over on this day and the pace bar measures the cycle
     # from it. 1 = calendar month (default until the real billing day is known).
     "billing_reset_day" => 1,
+    # Flight-data source for ALL zones: "airplanes_live"/"adsb_lol" (free ADS-B,
+    # no key) or "fr24" (FlightRadar24, needs an API key, costs credits).
+    "provider" => "airplanes_live",
     "version" => 0,
     "zonesets" => []
   }
 
+  @providers ~w(airplanes_live adsb_lol fr24)
   @default_min_gspeed_kt 150
 
   ## API
@@ -207,6 +211,7 @@ defmodule LgaPredictor.ConfigStore do
       "engage_delta_seconds",
       "release_delta_seconds",
       "billing_reset_day",
+      "provider",
       "zonesets"
     ])
   end
@@ -232,6 +237,9 @@ defmodule LgaPredictor.ConfigStore do
 
       not (is_integer(raw["billing_reset_day"]) and raw["billing_reset_day"] in 1..31) ->
         {:error, "billing_reset_day must be an integer 1..31"}
+
+      raw["provider"] not in @providers ->
+        {:error, "provider must be one of #{Enum.join(@providers, ", ")}"}
 
       not is_list(raw["zonesets"]) ->
         {:error, "zonesets must be a list"}
@@ -277,6 +285,7 @@ defmodule LgaPredictor.ConfigStore do
       engage_delta_seconds: raw["engage_delta_seconds"],
       release_delta_seconds: raw["release_delta_seconds"],
       billing_reset_day: raw["billing_reset_day"],
+      provider: provider_atom(raw["provider"]),
       version: raw["version"],
       zonesets: Enum.map(raw["zonesets"], &derive_zoneset/1)
     }
@@ -303,6 +312,13 @@ defmodule LgaPredictor.ConfigStore do
       anc_zones: Enum.map(zs["anc_zones"], &to_polygon/1)
     }
   end
+
+  # Explicit (compile-baked) string→atom map. NOT String.to_existing_atom: under
+  # the dev `mix run` runtime the provider's defining module may not be loaded yet,
+  # so its atom wouldn't exist. These literals live in this (always-loaded) module.
+  defp provider_atom("fr24"), do: :fr24
+  defp provider_atom("adsb_lol"), do: :adsb_lol
+  defp provider_atom(_), do: :airplanes_live
 
   defp reckoning_atom("accelerating"), do: :accelerating
   defp reckoning_atom(_), do: :constant

@@ -21,6 +21,21 @@ defmodule LgaPredictor.ConfigStoreTest do
     assert File.exists?(path)
   end
 
+  test "provider defaults to airplanes_live and round-trips a valid choice", %{name: name} do
+    assert ConfigStore.get(name).provider == :airplanes_live
+
+    assert {:ok, cfg} = ConfigStore.put(name, %{"provider" => "fr24"})
+    assert cfg.provider == :fr24
+
+    assert {:ok, cfg} = ConfigStore.put(name, %{"provider" => "adsb_lol"})
+    assert cfg.provider == :adsb_lol
+  end
+
+  test "provider rejects unknown values", %{name: name} do
+    assert {:error, _} = ConfigStore.put(name, %{"provider" => "skynet"})
+    assert ConfigStore.get(name).provider == :airplanes_live
+  end
+
   test "billing_reset_day defaults to 1 and round-trips a valid day", %{name: name} do
     assert ConfigStore.get(name).billing_reset_day == 1
 

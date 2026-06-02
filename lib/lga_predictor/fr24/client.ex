@@ -144,6 +144,31 @@ defmodule LgaPredictor.FR24.Client do
       raise "FR24 key not found (keychain service #{inspect(service)} or env #{env})"
   end
 
+  @doc "True if an FR24 key is available (Keychain or env) for the production service."
+  @spec key_present?() :: boolean()
+  def key_present? do
+    keychain_key("air-defense-fr24") != nil or System.get_env("FR24_API_KEY") != nil
+  end
+
+  @doc """
+  Store the production FR24 key in the login Keychain (service `air-defense-fr24`),
+  replacing any existing entry. Lets the menu-bar app set the key without the user
+  touching the `security` CLI. Returns `:ok` or `{:error, output}`.
+  """
+  @spec put_key(String.t()) :: :ok | {:error, String.t()}
+  def put_key(key) when is_binary(key) do
+    service = "air-defense-fr24"
+    account = System.get_env("USER") || "air-defense"
+    # Delete first so we never accumulate duplicate items under different accounts.
+    System.cmd("security", ["delete-generic-password", "-s", service], stderr_to_stdout: true)
+
+    case System.cmd("security", ["add-generic-password", "-a", account, "-s", service, "-w", key],
+           stderr_to_stdout: true) do
+      {_, 0} -> :ok
+      {out, _} -> {:error, String.trim(out)}
+    end
+  end
+
   defp keychain_key(service) do
     case System.cmd("security", ["find-generic-password", "-s", service, "-w"],
            stderr_to_stdout: true) do
