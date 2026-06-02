@@ -237,8 +237,9 @@ defmodule LgaPredictor.Poller do
   defp poll_zoneset(state, zoneset, config) do
     case state.fetcher.(zoneset.monitor_box) do
       {:ok, aircraft} ->
-        credits = state.credits + length(aircraft) * @credits_per_aircraft
-        state = %{state | credits: credits}
+        spent = length(aircraft) * @credits_per_aircraft
+        record_monthly_credits(spent)
+        state = %{state | credits: state.credits + spent}
 
         aircraft
         |> Enum.reject(&ramp?/1)
@@ -248,6 +249,15 @@ defmodule LgaPredictor.Poller do
         Logger.warning("[poller] fetch error (#{zoneset.id}): #{inspect(reason)} (skipping)")
         state
     end
+  end
+
+  # Feed each poll's spend into the month-to-date self-tally (skipped in tests,
+  # where the ledger isn't started).
+  defp record_monthly_credits(0), do: :ok
+
+  defp record_monthly_credits(spent) do
+    if Process.whereis(LgaPredictor.CreditLedger), do: LgaPredictor.CreditLedger.add(spent)
+    :ok
   end
 
   # Parked/taxiing aircraft: no position-relevant motion, don't pay attention.

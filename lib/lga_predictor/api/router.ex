@@ -56,6 +56,27 @@ defmodule LgaPredictor.API.Router do
     send_json(conn, 200, %{ok: true})
   end
 
+  # Align the self-tally with the FR24 dashboard. Body: {"remaining": N} (the
+  # balance shown in your FR24 profile) or {"used": N}. Sets the current month's
+  # consumed total; live polling accumulates on top thereafter.
+  post "/api/credits/seed" do
+    budget = Application.get_env(:lga_predictor, :monthly_credit_budget, 60_000)
+
+    used =
+      case conn.body_params do
+        %{"used" => u} when is_number(u) -> round(u)
+        %{"remaining" => r} when is_number(r) -> max(budget - round(r), 0)
+        _ -> nil
+      end
+
+    if used do
+      LgaPredictor.CreditLedger.seed(used)
+      send_json(conn, 200, %{ok: true, credits_used_month: used, credits_budget_month: budget})
+    else
+      send_json(conn, 422, %{error: "expected numeric 'remaining' or 'used'"})
+    end
+  end
+
   get "/api/config" do
     send_json(conn, 200, config_payload())
   end
@@ -174,9 +195,11 @@ defmodule LgaPredictor.API.Router do
     }
   end
 
-  # Month-to-date credits consumed (nil if the cache isn't running, e.g. tests).
+  # Month-to-date credits consumed (nil if the ledger isn't running, e.g. tests).
   defp credits_used do
-    if Process.whereis(LgaPredictor.CreditUsage), do: LgaPredictor.CreditUsage.used(), else: nil
+    if Process.whereis(LgaPredictor.CreditLedger),
+      do: LgaPredictor.CreditLedger.month_to_date().used,
+      else: nil
   end
 
   # Echo the persisted config back as plain JSON (the raw form, so the UI
