@@ -30,6 +30,8 @@ defmodule LgaPredictor.PollerTest do
       global_ceiling_ft: Keyword.get(opts, :ceiling, 6000),
       anc_latency_seconds: Keyword.get(opts, :latency, 0.0),
       max_dwell_seconds: Keyword.get(opts, :max_dwell, 30),
+      engage_delta_seconds: Keyword.get(opts, :engage_delta, 0),
+      release_delta_seconds: Keyword.get(opts, :release_delta, 0),
       zonesets: [
         %{
           id: "z1",
@@ -295,6 +297,19 @@ defmodule LgaPredictor.PollerTest do
     assert Poller.status().active?
     assert :ok = Poller.stop_session("z1")
     refute Poller.status().active?
+  end
+
+  test "engage_delta_seconds shifts the engage time (manual offset)" do
+    # inbound is inside the ANC zone -> enters_in 0 -> would engage immediately;
+    # a +10s engage delta pushes it out, so it's still transparency shortly after.
+    start(
+      config_fun: fn -> config(trigger: :assume, engage_delta: 10) end,
+      fetcher: fn _ -> {:ok, [inbound()]} end
+    )
+
+    :ok = Poller.start_session()
+    Process.sleep(80)
+    assert Actuator.mode() == :transparency
   end
 
   test "after a detection the zoneset stops polling until the plane clears (lock-on)" do

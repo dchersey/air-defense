@@ -153,12 +153,15 @@ defmodule LgaPredictor.API.Router do
 
   defp status_payload do
     status = Poller.status()
+    config = ConfigStore.get()
 
     %{
       active: status.active?,
       mode: Actuator.mode(),
       anc_phase: Actuator.phase(),
       headphones_connected: status.headphones_connected,
+      engage_delta_seconds: config.engage_delta_seconds,
+      release_delta_seconds: config.release_delta_seconds,
       session_ends_at: status.session_ends_at,
       polls: status.polls,
       approx_credits: status.approx_credits,

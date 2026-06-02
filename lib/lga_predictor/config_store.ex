@@ -20,6 +20,10 @@ defmodule LgaPredictor.ConfigStore do
     "global_ceiling_ft" => 6000,
     "anc_latency_seconds" => 2.0,
     "max_dwell_seconds" => 30,
+    # Manual offsets (seconds) added to the computed engage/release times — a
+    # control-panel tuning knob. 0 = use the service's estimate as-is.
+    "engage_delta_seconds" => 0,
+    "release_delta_seconds" => 0,
     "version" => 0,
     "zonesets" => []
   }
@@ -192,7 +196,14 @@ defmodule LgaPredictor.ConfigStore do
 
   # Accept only the keys we manage; ignore unknown top-level keys.
   defp normalize_keys(incoming) do
-    Map.take(incoming, ["global_ceiling_ft", "anc_latency_seconds", "max_dwell_seconds", "zonesets"])
+    Map.take(incoming, [
+      "global_ceiling_ft",
+      "anc_latency_seconds",
+      "max_dwell_seconds",
+      "engage_delta_seconds",
+      "release_delta_seconds",
+      "zonesets"
+    ])
   end
 
   ## Validation
@@ -207,6 +218,12 @@ defmodule LgaPredictor.ConfigStore do
 
       not is_number(raw["max_dwell_seconds"]) ->
         {:error, "max_dwell_seconds must be a number"}
+
+      not is_number(raw["engage_delta_seconds"]) ->
+        {:error, "engage_delta_seconds must be a number"}
+
+      not is_number(raw["release_delta_seconds"]) ->
+        {:error, "release_delta_seconds must be a number"}
 
       not is_list(raw["zonesets"]) ->
         {:error, "zonesets must be a list"}
@@ -249,6 +266,8 @@ defmodule LgaPredictor.ConfigStore do
       global_ceiling_ft: raw["global_ceiling_ft"],
       anc_latency_seconds: raw["anc_latency_seconds"],
       max_dwell_seconds: raw["max_dwell_seconds"],
+      engage_delta_seconds: raw["engage_delta_seconds"],
+      release_delta_seconds: raw["release_delta_seconds"],
       version: raw["version"],
       zonesets: Enum.map(raw["zonesets"], &derive_zoneset/1)
     }

@@ -58,6 +58,20 @@ defmodule LgaPredictor.API.RouterTest do
     assert is_list(body["recent"])
     assert is_list(body["history"])
     assert is_list(body["zonesets"])
+    assert body["engage_delta_seconds"] == 0
+    assert body["release_delta_seconds"] == 0
+  end
+
+  test "PUT /api/config can set engage/release deltas (partial merge keeps zonesets)" do
+    box = Jason.encode!(geojson_box())
+    post_json("/api/zonesets", %{"name" => "Z", "monitor_geojson" => box, "anc_geojson" => box})
+
+    assert put_json("/api/config", %{"engage_delta_seconds" => 8, "release_delta_seconds" => -3}).status == 200
+    status = Jason.decode!(call(:get, "/api/status").resp_body)
+    assert status["engage_delta_seconds"] == 8
+    assert status["release_delta_seconds"] == -3
+    # zoneset survived the partial config PUT
+    assert length(Jason.decode!(call(:get, "/api/zonesets").resp_body)["zonesets"]) == 1
   end
 
   test "POST /api/session/start with a zoneset id then /stop toggles active" do

@@ -277,12 +277,12 @@ defmodule LgaPredictor.Poller do
           Predictor.predict_eta(ac, zoneset.anc_zones, max_dwell_seconds: config.max_dwell_seconds) ||
             assume_window(zoneset)
 
-        dispatch(window, ac, key, config.anc_latency_seconds, zoneset.id, state)
+        dispatch(window, ac, key, config, zoneset.id, state)
 
       true ->
         case first_window(ac, zoneset, ceiling, state.window) do
           nil -> state
-          window -> dispatch(window, ac, key, config.anc_latency_seconds, zoneset.id, state)
+          window -> dispatch(window, ac, key, config, zoneset.id, state)
         end
     end
   end
@@ -311,10 +311,12 @@ defmodule LgaPredictor.Poller do
     |> Enum.min_by(& &1.enters_in, fn -> nil end)
   end
 
-  defp dispatch(window, ac, key, latency, zoneset_id, state) do
-    # Predictions assume zero latency; fire `latency` seconds early.
-    on_ms = max(round((window.enters_in - latency) * 1000), 0)
-    off_ms = max(round((window.exits_in - latency) * 1000), 0)
+  defp dispatch(window, ac, key, config, zoneset_id, state) do
+    # Predictions assume zero latency; fire `latency` seconds early. The
+    # engage/release deltas are the manual control-panel tuning offsets (±s).
+    latency = config.anc_latency_seconds
+    on_ms = max(round((window.enters_in - latency + config.engage_delta_seconds) * 1000), 0)
+    off_ms = max(round((window.exits_in - latency + config.release_delta_seconds) * 1000), 0)
 
     dist_km = Float.round(window.enters_in * (ac.gspeed_kt || 0) * 1.852 / 3600, 2)
 
