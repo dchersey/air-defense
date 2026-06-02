@@ -221,11 +221,13 @@ private struct ZoneEditRow: View {
   let zone: EditableZone
   let model: StatusModel
   @State private var name: String
+  @State private var pollSeconds: String
 
   init(zone: EditableZone, model: StatusModel) {
     self.zone = zone
     self.model = model
     _name = State(initialValue: zone.name)
+    _pollSeconds = State(initialValue: zone.pollIntervalMs.map { String($0 / 1000) } ?? "")
   }
 
   var body: some View {
@@ -244,6 +246,18 @@ private struct ZoneEditRow: View {
 
       slotRow("Monitor", geojson: zone.monitorGeojson, slot: .monitor)
       slotRow("ANC", geojson: zone.ancGeojson, slot: .anc)
+
+      HStack(spacing: 6) {
+        Text("Poll every").font(.caption2).foregroundStyle(.secondary)
+        TextField("default", text: $pollSeconds)
+          .frame(width: 44)
+          .onSubmit {
+            let seconds = Int(pollSeconds.trimmingCharacters(in: .whitespaces))
+            Task { await model.setPollInterval(zone.id, seconds: seconds) }
+          }
+        Text("s (blank = global)").font(.caption2).foregroundStyle(.secondary)
+      }
+      .controlSize(.small)
     }
     .padding(.vertical, 2)
   }

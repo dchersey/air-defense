@@ -24,6 +24,7 @@ struct ZonesetStatus: Codable, Identifiable {
 struct EditableZone: Identifiable, Codable {
   let id: String
   var name: String
+  var pollIntervalMs: Int?
   var monitorGeojson: String
   var ancGeojson: String
 }
@@ -256,6 +257,12 @@ final class StatusModel {
     await mutate("PATCH", "/api/zonesets/\(id)", ["name": name])
   }
 
+  /// Set this zone's poll cadence in whole seconds; nil clears it to the global default.
+  func setPollInterval(_ id: String, seconds: Int?) async {
+    let value: Any = seconds.map { $0 * 1000 } ?? NSNull()
+    await mutate("PATCH", "/api/zonesets/\(id)", ["poll_interval_ms": value])
+  }
+
   func deleteZone(_ id: String) async {
     await mutate("DELETE", "/api/zonesets/\(id)", nil)
   }
@@ -270,7 +277,7 @@ final class StatusModel {
   /// Fire a write request; on success clear the error and reload the list, else
   /// surface the backend's validation message. Returns whether it succeeded.
   @discardableResult
-  private func mutate(_ method: String, _ path: String, _ body: [String: String]?) async -> Bool {
+  private func mutate(_ method: String, _ path: String, _ body: [String: Any]?) async -> Bool {
     guard let url = URL(string: base + path) else { return false }
     var request = URLRequest(url: url)
     request.httpMethod = method
