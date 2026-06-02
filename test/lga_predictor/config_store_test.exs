@@ -85,6 +85,33 @@ defmodule LgaPredictor.ConfigStoreTest do
     assert zs.accel_kt_s == 5.0
   end
 
+  test "zoneset poll_interval_ms is optional (nil when absent) and round-trips", %{name: name} do
+    base = %{
+      "id" => "z1",
+      "name" => "T",
+      "monitor_zone" => geojson_box(),
+      "anc_zones" => [geojson_box()]
+    }
+
+    {:ok, cfg} = ConfigStore.put(name, %{"zonesets" => [base]})
+    assert [%{poll_interval_ms: nil}] = cfg.zonesets
+
+    {:ok, cfg} = ConfigStore.put(name, %{"zonesets" => [Map.put(base, "poll_interval_ms", 5000)]})
+    assert [%{poll_interval_ms: 5000}] = cfg.zonesets
+  end
+
+  test "rejects a non-number poll_interval_ms", %{name: name} do
+    bad = %{
+      "id" => "z1",
+      "name" => "T",
+      "monitor_zone" => geojson_box(),
+      "anc_zones" => [geojson_box()],
+      "poll_interval_ms" => "fast"
+    }
+
+    assert {:error, _} = ConfigStore.put(name, %{"zonesets" => [bad]})
+  end
+
   test "add_zoneset assigns an id, defaults trigger, persists, bumps version", %{name: name} do
     v0 = ConfigStore.get(name).version
 

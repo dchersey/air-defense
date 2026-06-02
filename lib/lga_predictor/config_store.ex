@@ -231,6 +231,7 @@ defmodule LgaPredictor.ConfigStore do
       (zs["reckoning"] || "constant") not in ["constant", "accelerating"] -> {:error, "zoneset #{zs["id"]}: bad reckoning"}
       (zs["trigger"] || "predict") not in ["predict", "assume"] -> {:error, "zoneset #{zs["id"]}: bad trigger"}
       not is_nil(zs["min_gspeed_kt"]) and not is_number(zs["min_gspeed_kt"]) -> {:error, "zoneset #{zs["id"]}: min_gspeed_kt must be a number"}
+      not is_nil(zs["poll_interval_ms"]) and not is_number(zs["poll_interval_ms"]) -> {:error, "zoneset #{zs["id"]}: poll_interval_ms must be a number"}
       true -> :ok
     end
   end
@@ -264,6 +265,7 @@ defmodule LgaPredictor.ConfigStore do
       accel_kt_s: zs["accel_kt_s"] || 0.0,
       trigger: trigger_atom(zs["trigger"]),
       min_gspeed_kt: zs["min_gspeed_kt"] || @default_min_gspeed_kt,
+      poll_interval_ms: zs["poll_interval_ms"],
       assume_delay_seconds: zs["assume_delay_seconds"] || 0.0,
       assume_duration_seconds: zs["assume_duration_seconds"] || 30.0,
       altitude_ceiling_ft: zs["altitude_ceiling_ft"],
