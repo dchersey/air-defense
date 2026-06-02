@@ -49,6 +49,8 @@ struct StatusResponse: Codable {
   let ancPhase: String
   let engageDeltaSeconds: Double
   let releaseDeltaSeconds: Double
+  let creditsUsedMonth: Int?
+  let creditsBudgetMonth: Int
   let polls: Int
   let approxCredits: Int
   let zonesets: [ZonesetStatus]
@@ -76,6 +78,10 @@ final class StatusModel {
   // Manual ANC timing offsets (seconds), from the service config.
   var engageDelta: Double = 0
   var releaseDelta: Double = 0
+
+  // FR24 month-to-date credit usage (nil until first fetched) + plan allotment.
+  var creditsUsedMonth: Int?
+  var creditsBudgetMonth = 60_000
 
   // AirPods presence (the active output), checked locally via CoreAudio.
   var headphonesConnected = true
@@ -132,6 +138,8 @@ final class StatusModel {
       ancPhase = status.ancPhase
       engageDelta = status.engageDeltaSeconds
       releaseDelta = status.releaseDeltaSeconds
+      creditsUsedMonth = status.creditsUsedMonth
+      creditsBudgetMonth = status.creditsBudgetMonth
       sessionEndsAt = status.sessionEndsAt
       polls = status.polls
       approxCredits = status.approxCredits

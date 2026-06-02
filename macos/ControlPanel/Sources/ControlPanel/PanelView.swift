@@ -24,6 +24,8 @@ struct PanelView: View {
       Divider()
       flights
       Divider()
+      CreditBar(used: model.creditsUsedMonth, budget: model.creditsBudgetMonth)
+      Divider()
       TimingOffsets(model: model)
       Divider()
       zoneEditor
@@ -215,6 +217,55 @@ struct PanelView: View {
         .buttonStyle(.bordered)
         .controlSize(.small)
     }
+  }
+}
+
+/// Monthly FR24 credit usage as a pace bar: remaining fills from the right, a
+/// hashmark marks how far through the month we are. If the filled (remaining)
+/// region reaches past the hashmark — i.e. used less than time elapsed — usage is
+/// on/under pace (green); otherwise it's running ahead (orange).
+private struct CreditBar: View {
+  let used: Int?
+  let budget: Int
+
+  var body: some View {
+    let usedFrac = min(1, max(0, Double(used ?? 0) / Double(max(budget, 1))))
+    let remainFrac = 1 - usedFrac
+    let elapsed = monthElapsed()
+    let onPace = usedFrac <= elapsed
+
+    VStack(alignment: .leading, spacing: 3) {
+      HStack {
+        Text("Credits this month").font(.caption2).foregroundStyle(.secondary)
+        Spacer()
+        Text(used == nil ? "—" : "\(used!.formatted()) / \(budget.formatted())")
+          .font(.caption2.monospaced()).foregroundStyle(.secondary)
+      }
+
+      GeometryReader { geo in
+        let w = geo.size.width
+        ZStack(alignment: .leading) {
+          Capsule().fill(Color.secondary.opacity(0.18))
+          Capsule().fill(onPace ? Color.green : Color.orange)
+            .frame(width: w * remainFrac)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+          Rectangle().fill(Color.primary.opacity(0.75))
+            .frame(width: 1.5)
+            .offset(x: w * elapsed)
+        }
+      }
+      .frame(height: 8)
+    }
+  }
+
+  // Fraction of the current month elapsed (day-of-month, with intra-day smoothing).
+  private func monthElapsed() -> Double {
+    let cal = Calendar.current
+    let now = Date()
+    let day = cal.component(.day, from: now)
+    let hour = cal.component(.hour, from: now)
+    let days = cal.range(of: .day, in: .month, for: now)?.count ?? 30
+    return min(1, max(0, (Double(day - 1) + Double(hour) / 24) / Double(days)))
   }
 }
 
