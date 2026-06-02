@@ -113,6 +113,19 @@ defmodule LgaPredictor.API.RouterTest do
     assert Jason.decode!(call(:get, "/api/zonesets").resp_body)["zonesets"] == []
   end
 
+  test "PATCH sets poll_interval_ms and GET reflects it (incl. clearing to null)" do
+    box = Jason.encode!(geojson_box())
+    id = Jason.decode!(post_json("/api/zonesets", %{"name" => "Z", "monitor_geojson" => box, "anc_geojson" => box}).resp_body)["id"]
+
+    assert patch_json("/api/zonesets/#{id}", %{"poll_interval_ms" => 5000}).status == 200
+    [z] = Jason.decode!(call(:get, "/api/zonesets").resp_body)["zonesets"]
+    assert z["poll_interval_ms"] == 5000
+
+    assert patch_json("/api/zonesets/#{id}", %{"poll_interval_ms" => nil}).status == 200
+    [z] = Jason.decode!(call(:get, "/api/zonesets").resp_body)["zonesets"]
+    assert z["poll_interval_ms"] == nil
+  end
+
   test "zoneset writes validate: bad JSON / bad GeoJSON -> 422, unknown id -> 404" do
     box = Jason.encode!(geojson_box())
 
