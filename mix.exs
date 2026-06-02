@@ -7,7 +7,20 @@ defmodule LgaPredictor.MixProject do
       version: "0.1.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      releases: releases()
+    ]
+  end
+
+  # Self-contained release for end users: `MIX_ENV=prod mix release` bundles the
+  # Erlang runtime, so the install script's tarball needs no Elixir/Erlang on the
+  # target. Named `air_defense` → bin/air_defense (what the launchd agent runs).
+  defp releases do
+    [
+      air_defense: [
+        include_executables_for: [:unix],
+        applications: [lga_predictor: :permanent]
+      ]
     ]
   end
 

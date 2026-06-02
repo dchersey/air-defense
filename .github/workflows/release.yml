@@ -1,0 +1,76 @@
+name: Release
+
+# Cut a release by pushing a tag, e.g.:  git tag v1.0.0 && git push origin v1.0.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      # --- Backend: self-contained Elixir release (bundles ERTS) ---
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "29"
+          elixir-version: "1.19"
+      - name: Build backend release
+        run: |
+          mix deps.get
+          MIX_ENV=prod mix release --overwrite
+          tar -czf air-defense-backend-macos-arm64.tar.gz -C _build/prod/rel/air_defense .
+
+      # --- App: build, Developer ID sign, notarize ---
+      - name: Import Developer ID certificate
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          echo "$MACOS_CERT_P12" | base64 --decode > /tmp/cert.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -l build.keychain
+          security import /tmp/cert.p12 -k build.keychain -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm /tmp/cert.p12
+
+      - name: Build app bundle (unsigned)
+        run: SIGN_IDENTITY="" ./macos/build_app.sh --here
+
+      - name: Code-sign (Developer ID, hardened runtime)
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" macos/AirDefense.app
+          codesign --verify --strict --verbose=2 macos/AirDefense.app
+
+      - name: Notarize & staple
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          ditto -c -k --keepParent macos/AirDefense.app AirDefense.zip
+          xcrun notarytool submit AirDefense.zip \
+            --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple macos/AirDefense.app
+
+      - name: Package stapled app
+        run: ditto -c -k --keepParent macos/AirDefense.app AirDefense.zip
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            AirDefense.zip air-defense-backend-macos-arm64.tar.gz \
+            --title "$TAG" --generate-notes
