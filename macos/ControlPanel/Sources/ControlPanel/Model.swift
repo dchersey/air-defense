@@ -52,6 +52,8 @@ struct StatusResponse: Codable {
   let creditsUsedMonth: Int?
   let creditsBudgetMonth: Int
   let billingResetDay: Int
+  let provider: String
+  let fr24KeyPresent: Bool
   let polls: Int
   let approxCredits: Int
   let zonesets: [ZonesetStatus]
@@ -85,6 +87,9 @@ final class StatusModel {
   var creditsBudgetMonth = 60_000
   // Day-of-month the FR24 allotment resets (billing anniversary; 1 = calendar month).
   var billingResetDay = 1
+  // Flight-data source for all zones, + whether an FR24 key is stored.
+  var provider = "airplanes_live"
+  var fr24KeyPresent = false
 
   // AirPods presence (the active output), checked locally via CoreAudio.
   var headphonesConnected = true
@@ -144,6 +149,8 @@ final class StatusModel {
       creditsUsedMonth = status.creditsUsedMonth
       creditsBudgetMonth = status.creditsBudgetMonth
       billingResetDay = status.billingResetDay
+      provider = status.provider
+      fr24KeyPresent = status.fr24KeyPresent
       sessionEndsAt = status.sessionEndsAt
       polls = status.polls
       approxCredits = status.approxCredits
@@ -249,6 +256,27 @@ final class StatusModel {
       _ = try? await URLSession.shared.data(for: request)
       await refresh()
     }
+  }
+
+  /// Switch the flight-data provider for all zones (airplanes_live | adsb_lol | fr24).
+  func setProvider(_ id: String) {
+    provider = id  // optimistic; refresh() reconciles
+    guard let url = URL(string: "\(base)/api/config") else { return }
+    var request = URLRequest(url: url)
+    request.httpMethod = "PUT"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = try? JSONSerialization.data(withJSONObject: ["provider": id])
+    Task { _ = try? await URLSession.shared.data(for: request); await refresh() }
+  }
+
+  /// Store the FlightRadar24 API key (backend writes it to the Keychain).
+  func setFR24Key(_ key: String) {
+    guard let url = URL(string: "\(base)/api/fr24_key") else { return }
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = try? JSONSerialization.data(withJSONObject: ["key": key])
+    Task { _ = try? await URLSession.shared.data(for: request); await refresh() }
   }
 
   // MARK: - Zoneset editor

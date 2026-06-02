@@ -34,22 +34,10 @@ rm -rf "$BACKEND"/*            # clean any prior release (config.json lives one 
 tar -xzf "$tmp/backend.tgz" -C "$BACKEND"
 [ -x "$BACKEND/bin/air_defense" ] || die "Release looks wrong — bin/air_defense missing."
 
-# 2. FlightRadar24 key (Keychain) -------------------------------------------
-if security find-generic-password -s air-defense-fr24 -w >/dev/null 2>&1; then
-  say "FlightRadar24 key already in your Keychain — keeping it."
-else
-  echo
-  echo "Air Defense needs a FlightRadar24 API key (the Explorer plan is enough)."
-  echo "Get one at https://fr24api.flightradar24.com/ — it's stored only in your Keychain."
-  printf "Paste your FR24 API key (leave blank to skip for now): "
-  read -r FR24_KEY </dev/tty || FR24_KEY=""
-  if [ -n "$FR24_KEY" ]; then
-    security add-generic-password -a "$USER" -s air-defense-fr24 -U -w "$FR24_KEY"
-    say "Stored in Keychain (service: air-defense-fr24)."
-  else
-    say "Skipped — add it later: security add-generic-password -a \"\$USER\" -s air-defense-fr24 -U -w '<key>'"
-  fi
-fi
+# 2. (No key needed) ---------------------------------------------------------
+# Out of the box Air Defense uses a free ADS-B feed (airplanes.live) — no API key,
+# no credits. You only need a FlightRadar24 key if you switch the provider to FR24
+# in the app's settings, and you enter it there. Nothing to do here.
 
 # 3. LaunchAgent -------------------------------------------------------------
 say "Installing the LaunchAgent…"

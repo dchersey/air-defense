@@ -28,18 +28,20 @@ time, every time.
 
 ## What it does
 
-- **Tracks live traffic** via the FlightRadar24 API and predicts, per flight,
-  *when* it will be overhead — distance to the noisy zone ÷ ground speed.
+- **Tracks live traffic** via a **free ADS-B feed** (airplanes.live / adsb.lol) —
+  no API key, no cost — and predicts, per flight, *when* it will be overhead:
+  distance to the noisy zone ÷ ground speed. (FlightRadar24 is an optional
+  alternative provider if you prefer it.)
 - **Engages ANC just before** the plane arrives and **releases it** once the plane
   clears — so you're only cancelling when it actually matters.
 - **Only watches small boxes.** You draw a tiny **monitor zone** upstream; that's
-  the only thing polled (FR24 bills per flight returned), so it stays cheap.
+  the only thing polled — cheap on the free feed, and credit-frugal on FR24.
 - **Locks on.** Once it's caught an inbound it stops polling that zone until the
-  plane clears — no wasted credits re-detecting the same jet.
+  plane clears.
 - **Pauses when you take the AirPods off** (or switch output away) and resumes when
   they're back, so it never toggles a device that isn't listening.
-- **Tracks your FR24 credits** against your monthly allotment with a pace bar, so
-  you can see at a glance whether you're burning them faster than the month.
+- **Tracks FR24 credits** (when you use FR24) against your monthly allotment with a
+  pace bar, so you can see whether you're burning them faster than the month.
 - **Stays out of the way.** No Dock icon — a menu-bar icon that's amber when a plane
   is inbound, red while ANC is engaged, and quiet otherwise.
 
@@ -68,16 +70,18 @@ Sessions are manual: hit **Start** on a zone when the planes start, and it runs 
 
 ## Install
 
-**Apple Silicon, macOS 15+.** One command sets up the backend, stores your FR24
-key, and installs the menu-bar app:
+**Apple Silicon, macOS 15+.** One command sets up the backend and installs the
+menu-bar app:
 
 ```sh
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/dchersey/air-defense/main/install.sh)"
 ```
 
 It downloads a **self-contained** backend release (no Elixir/Erlang/Xcode needed),
-installs it as a per-user LaunchAgent, prompts for your FlightRadar24 API key
-(stored only in your Keychain), and installs the notarized app to `/Applications`.
+installs it as a per-user LaunchAgent, and installs the notarized app to
+`/Applications`. **No API key needed** — it defaults to the free ADS-B feed. (If
+you later switch the provider to FlightRadar24 in the app's settings, you paste
+the key there.)
 
 Two one-time steps macOS requires and the script can't do for you:
 
@@ -123,22 +127,29 @@ automation targets that layout and may need small tweaks on other versions.
 
 ## Using it
 
+- **Data source** picker: `airplanes.live` / `adsb.lol` (free, default) or
+  `FlightRadar24`. Pick FR24 and a field appears to paste your API key (stored in
+  the Keychain by the backend). Applies to all zones.
 - **Start / Stop** per zone from the menu — each zone runs its own session.
 - **Edit zones** inline: paste GeoJSON, or "Open in geojson.io" to draw a box over
   the map and bring it back. Set a per-zone poll interval.
 - **ANC timing offset** sliders nudge the computed engage/release moments ±15 s.
-- The **credit bar** shows what's left against your monthly FR24 allotment, with a
-  hashmark at the day-of-cycle so you can tell if you're ahead of pace. Hit **Sync**
-  to enter the *remaining* balance from your FR24 dashboard and the **reset day** of
-  your billing cycle.
+- When the provider is **FR24**, a **credit bar** shows what's left against your
+  monthly allotment, with a hashmark at the day-of-cycle. Hit **Sync** to enter the
+  *remaining* balance from your FR24 dashboard and your billing **reset day**.
 
-## Getting an FR24 key
+## Provider notes
 
-You need a [FlightRadar24 API](https://fr24api.flightradar24.com/) key — the
-**Explorer** plan is enough. Air Defense polls `light` flight positions (billed per
-flight returned), so keeping monitor zones small keeps usage low. The key is stored
-only in your macOS Keychain (service `air-defense-fr24`), with an `FR24_API_KEY`
-env-var fallback — **never** committed, never written to the launchd plist.
+**Default (free):** `airplanes.live` / `adsb.lol` are community ADS-B aggregators —
+no API key, no cost. All US commercial jets broadcast ADS-B, and the NYC area has
+dense receiver coverage, so traffic over the approach/departure paths is complete.
+Be a good citizen: the small monitor zones keep request volume low.
+
+**Optional (FlightRadar24):** if you'd rather use FR24, switch the provider in the
+app and paste an [API key](https://fr24api.flightradar24.com/) (the **Explorer**
+plan suffices). It's stored only in your macOS Keychain (service `air-defense-fr24`,
+`FR24_API_KEY` env fallback) — **never** committed or written to the launchd plist.
+FR24's `light` feed is billed per flight returned, so small zones keep usage low.
 
 > The Explorer plan exposes no month-to-date usage or balance endpoint, so the
 > credit bar is a **self-tally**: Air Defense counts every credit it spends and you

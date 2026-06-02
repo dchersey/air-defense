@@ -24,7 +24,10 @@ struct PanelView: View {
       Divider()
       flights
       Divider()
-      CreditBar(used: model.creditsUsedMonth, budget: model.creditsBudgetMonth, model: model)
+      DataSource(model: model)
+      if model.provider == "fr24" {
+        CreditBar(used: model.creditsUsedMonth, budget: model.creditsBudgetMonth, model: model)
+      }
       Divider()
       TimingOffsets(model: model)
       Divider()
@@ -224,6 +227,49 @@ struct PanelView: View {
 /// hashmark marks how far through the month we are. If the filled (remaining)
 /// region reaches past the hashmark — i.e. used less than time elapsed — usage is
 /// on/under pace (green); otherwise it's running ahead (orange).
+/// Choose the flight-data provider for all zones. The free ADS-B feeds need no
+/// key; FlightRadar24 needs an API key (entered here → stored in the Keychain).
+private struct DataSource: View {
+  let model: StatusModel
+  @State private var keyText = ""
+
+  private let providers = [
+    ("airplanes_live", "airplanes.live (free)"),
+    ("adsb_lol", "adsb.lol (free)"),
+    ("fr24", "FlightRadar24 (API key)"),
+  ]
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack {
+        Text("Data source").font(.caption).foregroundStyle(.secondary)
+        Spacer()
+        Picker("", selection: Binding(get: { model.provider }, set: { model.setProvider($0) })) {
+          ForEach(providers, id: \.0) { Text($0.1).tag($0.0) }
+        }
+        .labelsHidden().pickerStyle(.menu).fixedSize()
+      }
+
+      if model.provider == "fr24" {
+        HStack(spacing: 6) {
+          Image(systemName: model.fr24KeyPresent ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+            .font(.caption2).foregroundStyle(model.fr24KeyPresent ? .green : .orange)
+          SecureField(model.fr24KeyPresent ? "Replace API key…" : "Paste FR24 API key", text: $keyText)
+            .textFieldStyle(.roundedBorder).font(.caption2)
+          Button("Save") {
+            let k = keyText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !k.isEmpty { model.setFR24Key(k); keyText = "" }
+          }
+          .font(.caption2).disabled(keyText.isEmpty)
+        }
+        Text("Billed per flight; keep monitor zones small.").font(.caption2).foregroundStyle(.secondary)
+      } else {
+        Text("Free ADS-B — no API key, no credits used.").font(.caption2).foregroundStyle(.secondary)
+      }
+    }
+  }
+}
+
 private struct CreditBar: View {
   let used: Int?
   let budget: Int
