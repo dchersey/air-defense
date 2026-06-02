@@ -31,3 +31,4 @@ macos/LgaPredictor.app/
 .elixir_ls/
 .playwright-mcp/
 
+/.claude/scheduled_tasks.lock
