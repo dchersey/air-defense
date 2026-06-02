@@ -63,6 +63,46 @@ defmodule LgaPredictor.FR24.Client do
     end
   end
 
+  @doc """
+  Total API credits consumed, summed across endpoints, from `GET /api/usage`.
+  Metadata (not flight data) — but still counts against the request rate limit.
+  Returns `{:ok, credits}` or `{:error, _}`.
+  """
+  @spec usage(keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def usage(opts \\ []) do
+    sandbox? = Keyword.get(opts, :sandbox?, sandbox_default())
+
+    req =
+      Req.new(
+        base_url: @host,
+        url: "/api/usage",
+        params: Keyword.get(opts, :params, %{}),
+        headers: [
+          {"Accept", "application/json"},
+          {"Accept-Version", @accept_version},
+          {"Authorization", "Bearer " <> api_key(sandbox?)}
+        ]
+      )
+
+    case Req.get(Req.merge(req, Keyword.get(opts, :req, []))) do
+      {:ok, %{status: 200, body: body}} -> {:ok, parse_usage_total(body)}
+      {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
+      {:error, exception} -> {:error, exception}
+    end
+  end
+
+  @doc "Sum the `credits` across a `/api/usage` response body (credits are strings)."
+  @spec parse_usage_total(map()) :: non_neg_integer()
+  def parse_usage_total(%{"data" => rows}) when is_list(rows) do
+    rows |> Enum.map(&usage_credits/1) |> Enum.sum()
+  end
+
+  def parse_usage_total(_), do: 0
+
+  defp usage_credits(%{"credits" => c}) when is_binary(c), do: String.to_integer(c)
+  defp usage_credits(%{"credits" => c}) when is_integer(c), do: c
+  defp usage_credits(_), do: 0
+
   defp get(kind, detail, bounds, opts) do
     sandbox? = Keyword.get(opts, :sandbox?, sandbox_default())
 

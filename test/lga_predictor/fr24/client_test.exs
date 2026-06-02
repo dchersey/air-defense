@@ -16,4 +16,16 @@ defmodule LgaPredictor.FR24.ClientTest do
       assert Client.path(:historic, :light) == "/api/historic/flight-positions/light"
     end
   end
+
+  describe "parse_usage_total/1" do
+    test "sums the (string) credits across endpoints" do
+      body = %{"data" => [%{"credits" => "1674"}, %{"credits" => "6"}, %{"credits" => 8}]}
+      assert Client.parse_usage_total(body) == 1688
+    end
+
+    test "is zero for an empty/odd body" do
+      assert Client.parse_usage_total(%{"data" => []}) == 0
+      assert Client.parse_usage_total(%{}) == 0
+    end
+  end
 end

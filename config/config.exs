@@ -37,7 +37,9 @@ config :lga_predictor,
   api_port: 4040,
   # Standalone "Keep Sound Alive" control endpoint — pinged on session start/stop
   # so AirPods don't idle-disconnect mid-session. Best-effort (optional app).
-  keep_alive_url: "http://127.0.0.1:4500"
+  keep_alive_url: "http://127.0.0.1:4500",
+  # FR24 plan's monthly credit allotment — sizes the panel's usage pace bar.
+  monthly_credit_budget: 60_000
 
 if config_env() == :test do
   import_config "test.exs"

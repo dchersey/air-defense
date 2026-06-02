@@ -162,6 +162,8 @@ defmodule LgaPredictor.API.Router do
       headphones_connected: status.headphones_connected,
       engage_delta_seconds: config.engage_delta_seconds,
       release_delta_seconds: config.release_delta_seconds,
+      credits_used_month: credits_used(),
+      credits_budget_month: Application.get_env(:lga_predictor, :monthly_credit_budget, 60_000),
       session_ends_at: status.session_ends_at,
       polls: status.polls,
       approx_credits: status.approx_credits,
@@ -170,6 +172,11 @@ defmodule LgaPredictor.API.Router do
       # 12 buckets x 5 min = last hour of trigger counts, oldest -> newest
       history: History.counts_per_bucket(300, buckets: 12)
     }
+  end
+
+  # Month-to-date credits consumed (nil if the cache isn't running, e.g. tests).
+  defp credits_used do
+    if Process.whereis(LgaPredictor.CreditUsage), do: LgaPredictor.CreditUsage.used(), else: nil
   end
 
   # Echo the persisted config back as plain JSON (the raw form, so the UI
