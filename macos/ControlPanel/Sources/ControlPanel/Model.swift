@@ -47,6 +47,8 @@ struct StatusResponse: Codable {
   let mode: String
   let sessionEndsAt: Int?
   let ancPhase: String
+  let engageDeltaSeconds: Double
+  let releaseDeltaSeconds: Double
   let polls: Int
   let approxCredits: Int
   let zonesets: [ZonesetStatus]
@@ -70,6 +72,10 @@ final class StatusModel {
   var recent: [Flight] = []
   var history: [Int] = []
   var reachable = false
+
+  // Manual ANC timing offsets (seconds), from the service config.
+  var engageDelta: Double = 0
+  var releaseDelta: Double = 0
 
   // AirPods presence (the active output), checked locally via CoreAudio.
   var headphonesConnected = true
@@ -124,6 +130,8 @@ final class StatusModel {
       active = status.active
       mode = status.mode
       ancPhase = status.ancPhase
+      engageDelta = status.engageDeltaSeconds
+      releaseDelta = status.releaseDeltaSeconds
       sessionEndsAt = status.sessionEndsAt
       polls = status.polls
       approxCredits = status.approxCredits
@@ -184,6 +192,23 @@ final class StatusModel {
 
   func start(_ zoneset: String) { post("/api/session/start", body: ["zoneset": zoneset]) }
   func stop(_ zoneset: String) { post("/api/session/stop", body: ["zoneset": zoneset]) }
+
+  /// Set the global ANC engage/release offsets (seconds). Partial PUT — the
+  /// service merges these and keeps the zonesets.
+  func setAncOffsets(engage: Double, release: Double) {
+    guard let url = URL(string: "\(base)/api/config") else { return }
+    var request = URLRequest(url: url)
+    request.httpMethod = "PUT"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = try? JSONSerialization.data(withJSONObject: [
+      "engage_delta_seconds": Int(engage),
+      "release_delta_seconds": Int(release),
+    ])
+    Task {
+      _ = try? await URLSession.shared.data(for: request)
+      await refresh()
+    }
+  }
 
   // MARK: - Zoneset editor
 

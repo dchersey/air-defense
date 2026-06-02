@@ -24,6 +24,8 @@ struct PanelView: View {
       Divider()
       flights
       Divider()
+      TimingOffsets(model: model)
+      Divider()
       zoneEditor
       Divider()
       footer
@@ -213,6 +215,44 @@ struct PanelView: View {
         .buttonStyle(.bordered)
         .controlSize(.small)
     }
+  }
+}
+
+/// Two sliders that nudge the computed ANC engage/release times (±15s). The
+/// service's ETA estimate is unchanged; these are added on top. Persists on
+/// slider release.
+private struct TimingOffsets: View {
+  let model: StatusModel
+  @State private var engage: Double
+  @State private var release: Double
+
+  init(model: StatusModel) {
+    self.model = model
+    _engage = State(initialValue: model.engageDelta)
+    _release = State(initialValue: model.releaseDelta)
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text("ANC timing offset").font(.caption).foregroundStyle(.secondary)
+      offsetRow("On", value: $engage)
+      offsetRow("Off", value: $release)
+    }
+  }
+
+  private func offsetRow(_ label: String, value: Binding<Double>) -> some View {
+    HStack(spacing: 6) {
+      Text(label).font(.caption2).foregroundStyle(.secondary).frame(width: 26, alignment: .leading)
+      Slider(value: value, in: -15...15, step: 1) { editing in
+        if !editing { model.setAncOffsets(engage: engage, release: release) }
+      }
+      Text(format(value.wrappedValue)).font(.caption2.monospaced()).frame(width: 36, alignment: .trailing)
+    }
+  }
+
+  private func format(_ v: Double) -> String {
+    let n = Int(v)
+    return n > 0 ? "+\(n)s" : "\(n)s"
   }
 }
 
