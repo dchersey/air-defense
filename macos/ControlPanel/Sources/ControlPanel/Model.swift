@@ -210,11 +210,13 @@ final class StatusModel {
       return
     }
 
-    var url = "https://geojson.io/#"
+    // The (rewritten) geojson.io reads the view from the QUERY (?map=zoom/lat/lon)
+    // and loads data from the hash (#data=data:application/json,<encoded>).
+    var url = "https://geojson.io/"
     if let c = firstCoordinate(geojson) {
-      url += "map=14/\(c.lat)/\(c.lon)&"
+      url += "?map=14/\(c.lat)/\(c.lon)"
     }
-    url += "data=data:application/json,\(encoded)"
+    url += "#data=data:application/json,\(encoded)"
 
     if let u = URL(string: url) { NSWorkspace.shared.open(u) }
   }
