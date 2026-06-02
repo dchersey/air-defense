@@ -21,6 +21,21 @@ defmodule LgaPredictor.ConfigStoreTest do
     assert File.exists?(path)
   end
 
+  test "billing_reset_day defaults to 1 and round-trips a valid day", %{name: name} do
+    assert ConfigStore.get(name).billing_reset_day == 1
+
+    assert {:ok, cfg} = ConfigStore.put(name, %{"billing_reset_day" => 15})
+    assert cfg.billing_reset_day == 15
+  end
+
+  test "billing_reset_day rejects out-of-range / non-integer values", %{name: name} do
+    assert {:error, _} = ConfigStore.put(name, %{"billing_reset_day" => 0})
+    assert {:error, _} = ConfigStore.put(name, %{"billing_reset_day" => 32})
+    assert {:error, _} = ConfigStore.put(name, %{"billing_reset_day" => 1.5})
+    # unchanged after rejected writes
+    assert ConfigStore.get(name).billing_reset_day == 1
+  end
+
   test "zoneset min_gspeed_kt defaults to 150 and round-trips a custom value", %{name: name} do
     base = %{
       "id" => "z1",

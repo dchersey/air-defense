@@ -24,6 +24,10 @@ defmodule LgaPredictor.ConfigStore do
     # control-panel tuning knob. 0 = use the service's estimate as-is.
     "engage_delta_seconds" => 0,
     "release_delta_seconds" => 0,
+    # Day of month the FR24 credit allotment resets (billing anniversary). The
+    # credit ledger rolls over on this day and the pace bar measures the cycle
+    # from it. 1 = calendar month (default until the real billing day is known).
+    "billing_reset_day" => 1,
     "version" => 0,
     "zonesets" => []
   }
@@ -202,6 +206,7 @@ defmodule LgaPredictor.ConfigStore do
       "max_dwell_seconds",
       "engage_delta_seconds",
       "release_delta_seconds",
+      "billing_reset_day",
       "zonesets"
     ])
   end
@@ -224,6 +229,9 @@ defmodule LgaPredictor.ConfigStore do
 
       not is_number(raw["release_delta_seconds"]) ->
         {:error, "release_delta_seconds must be a number"}
+
+      not (is_integer(raw["billing_reset_day"]) and raw["billing_reset_day"] in 1..31) ->
+        {:error, "billing_reset_day must be an integer 1..31"}
 
       not is_list(raw["zonesets"]) ->
         {:error, "zonesets must be a list"}
@@ -268,6 +276,7 @@ defmodule LgaPredictor.ConfigStore do
       max_dwell_seconds: raw["max_dwell_seconds"],
       engage_delta_seconds: raw["engage_delta_seconds"],
       release_delta_seconds: raw["release_delta_seconds"],
+      billing_reset_day: raw["billing_reset_day"],
       version: raw["version"],
       zonesets: Enum.map(raw["zonesets"], &derive_zoneset/1)
     }
