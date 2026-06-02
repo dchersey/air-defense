@@ -24,7 +24,7 @@ struct PanelView: View {
       Divider()
       flights
       Divider()
-      CreditBar(used: model.creditsUsedMonth, budget: model.creditsBudgetMonth)
+      CreditBar(used: model.creditsUsedMonth, budget: model.creditsBudgetMonth, model: model)
       Divider()
       TimingOffsets(model: model)
       Divider()
@@ -227,6 +227,10 @@ struct PanelView: View {
 private struct CreditBar: View {
   let used: Int?
   let budget: Int
+  let model: StatusModel
+
+  @State private var syncing = false
+  @State private var remainingText = ""
 
   var body: some View {
     let usedFrac = min(1, max(0, Double(used ?? 0) / Double(max(budget, 1))))
@@ -238,8 +242,11 @@ private struct CreditBar: View {
       HStack {
         Text("Credits this month").font(.caption2).foregroundStyle(.secondary)
         Spacer()
+        if let used { Text("\(remaining(used).formatted()) left").font(.caption2.monospaced()) }
         Text(used == nil ? "—" : "\(used!.formatted()) / \(budget.formatted())")
           .font(.caption2.monospaced()).foregroundStyle(.secondary)
+        Button(syncing ? "Cancel" : "Sync") { syncing.toggle() }
+          .buttonStyle(.plain).font(.caption2).foregroundStyle(.tint)
       }
 
       GeometryReader { geo in
@@ -255,8 +262,26 @@ private struct CreditBar: View {
         }
       }
       .frame(height: 8)
+
+      if syncing {
+        HStack(spacing: 6) {
+          Text("FR24 remaining:").font(.caption2).foregroundStyle(.secondary)
+          TextField("e.g. 54239", text: $remainingText)
+            .textFieldStyle(.roundedBorder).font(.caption2.monospaced()).frame(width: 80)
+          Button("Set") {
+            if let n = Int(remainingText.filter(\.isNumber)) {
+              model.seedCredits(remaining: n)
+              syncing = false
+              remainingText = ""
+            }
+          }
+          .font(.caption2)
+        }
+      }
     }
   }
+
+  private func remaining(_ used: Int) -> Int { max(budget - used, 0) }
 
   // Fraction of the current month elapsed (day-of-month, with intra-day smoothing).
   private func monthElapsed() -> Double {

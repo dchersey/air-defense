@@ -218,6 +218,21 @@ final class StatusModel {
     }
   }
 
+  /// Align the month-to-date self-tally with the FR24 dashboard: pass the
+  /// *remaining* balance shown in your FR24 profile. The service converts it to
+  /// `budget - remaining` and tracks live from there.
+  func seedCredits(remaining: Int) {
+    guard let url = URL(string: "\(base)/api/credits/seed") else { return }
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = try? JSONSerialization.data(withJSONObject: ["remaining": remaining])
+    Task {
+      _ = try? await URLSession.shared.data(for: request)
+      await refresh()
+    }
+  }
+
   // MARK: - Zoneset editor
 
   func loadZones() async {
