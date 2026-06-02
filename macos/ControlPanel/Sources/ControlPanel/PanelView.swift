@@ -231,16 +231,17 @@ private struct CreditBar: View {
 
   @State private var syncing = false
   @State private var remainingText = ""
+  @State private var resetDayText = ""
 
   var body: some View {
     let usedFrac = min(1, max(0, Double(used ?? 0) / Double(max(budget, 1))))
     let remainFrac = 1 - usedFrac
-    let elapsed = monthElapsed()
+    let elapsed = cycleElapsed(resetDay: model.billingResetDay)
     let onPace = usedFrac <= elapsed
 
     VStack(alignment: .leading, spacing: 3) {
       HStack {
-        Text("Credits this month").font(.caption2).foregroundStyle(.secondary)
+        Text(cycleLabel(resetDay: model.billingResetDay)).font(.caption2).foregroundStyle(.secondary)
         Spacer()
         if let used { Text("\(remaining(used).formatted()) left").font(.caption2.monospaced()) }
         Text(used == nil ? "—" : "\(used!.formatted()) / \(budget.formatted())")
@@ -263,34 +264,76 @@ private struct CreditBar: View {
       }
       .frame(height: 8)
 
-      if syncing {
-        HStack(spacing: 6) {
-          Text("FR24 remaining:").font(.caption2).foregroundStyle(.secondary)
-          TextField("e.g. 54239", text: $remainingText)
-            .textFieldStyle(.roundedBorder).font(.caption2.monospaced()).frame(width: 80)
-          Button("Set") {
-            if let n = Int(remainingText.filter(\.isNumber)) {
-              model.seedCredits(remaining: n)
-              syncing = false
-              remainingText = ""
-            }
-          }
-          .font(.caption2)
-        }
+      if syncing { syncForm }
+    }
+  }
+
+  // Enter the FR24 dashboard's remaining balance + the billing-cycle reset day
+  // (a "remaining" snapshot is only meaningful against a known cycle).
+  private var syncForm: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(spacing: 6) {
+        Text("Resets on day").font(.caption2).foregroundStyle(.secondary)
+        TextField("1–31", text: $resetDayText)
+          .textFieldStyle(.roundedBorder).font(.caption2.monospaced()).frame(width: 44)
+          .onSubmit(applyResetDay)
+        Text("of each month").font(.caption2).foregroundStyle(.secondary)
       }
+      HStack(spacing: 6) {
+        Text("FR24 remaining:").font(.caption2).foregroundStyle(.secondary)
+        TextField("e.g. 54239", text: $remainingText)
+          .textFieldStyle(.roundedBorder).font(.caption2.monospaced()).frame(width: 80)
+        Button("Set") {
+          applyResetDay()
+          if let n = Int(remainingText.filter(\.isNumber)) {
+            model.seedCredits(remaining: n)
+          }
+          syncing = false
+          remainingText = ""
+        }
+        .font(.caption2)
+      }
+    }
+    .onAppear { resetDayText = String(model.billingResetDay) }
+  }
+
+  private func applyResetDay() {
+    if let d = Int(resetDayText.filter(\.isNumber)), (1...31).contains(d), d != model.billingResetDay {
+      model.setBillingResetDay(d)
     }
   }
 
   private func remaining(_ used: Int) -> Int { max(budget - used, 0) }
 
-  // Fraction of the current month elapsed (day-of-month, with intra-day smoothing).
-  private func monthElapsed() -> Double {
+  private func cycleLabel(resetDay: Int) -> String {
+    resetDay == 1 ? "Credits this month" : "Credits this cycle"
+  }
+
+  // Fraction of the current billing cycle elapsed. The cycle is a monthly window
+  // anchored on `resetDay`; mirrors CreditLedger.cycle_start on the service.
+  private func cycleElapsed(resetDay: Int) -> Double {
     let cal = Calendar.current
     let now = Date()
-    let day = cal.component(.day, from: now)
-    let hour = cal.component(.hour, from: now)
-    let days = cal.range(of: .day, in: .month, for: now)?.count ?? 30
-    return min(1, max(0, (Double(day - 1) + Double(hour) / 24) / Double(days)))
+    let start = cycleStart(now, resetDay: resetDay, cal: cal)
+    guard let end = cal.date(byAdding: .month, value: 1, to: start) else { return 0 }
+    let span = end.timeIntervalSince(start)
+    guard span > 0 else { return 0 }
+    return min(1, max(0, now.timeIntervalSince(start) / span))
+  }
+
+  // Start of the billing cycle containing `date`, clamping resetDay to month length.
+  private func cycleStart(_ date: Date, resetDay: Int, cal: Calendar) -> Date {
+    let day = cal.component(.day, from: date)
+    let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: date)) ?? date
+    let daysInMonth = cal.range(of: .day, in: .month, for: date)?.count ?? 30
+    let anchor = min(resetDay, daysInMonth)
+    if day >= anchor {
+      return cal.date(byAdding: .day, value: anchor - 1, to: monthStart) ?? monthStart
+    } else {
+      let prevMonth = cal.date(byAdding: .month, value: -1, to: monthStart) ?? monthStart
+      let prevDays = cal.range(of: .day, in: .month, for: prevMonth)?.count ?? 30
+      return cal.date(byAdding: .day, value: min(resetDay, prevDays) - 1, to: prevMonth) ?? prevMonth
+    }
   }
 }
 

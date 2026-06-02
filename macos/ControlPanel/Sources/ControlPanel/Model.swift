@@ -51,6 +51,7 @@ struct StatusResponse: Codable {
   let releaseDeltaSeconds: Double
   let creditsUsedMonth: Int?
   let creditsBudgetMonth: Int
+  let billingResetDay: Int
   let polls: Int
   let approxCredits: Int
   let zonesets: [ZonesetStatus]
@@ -82,6 +83,8 @@ final class StatusModel {
   // FR24 month-to-date credit usage (nil until first fetched) + plan allotment.
   var creditsUsedMonth: Int?
   var creditsBudgetMonth = 60_000
+  // Day-of-month the FR24 allotment resets (billing anniversary; 1 = calendar month).
+  var billingResetDay = 1
 
   // AirPods presence (the active output), checked locally via CoreAudio.
   var headphonesConnected = true
@@ -140,6 +143,7 @@ final class StatusModel {
       releaseDelta = status.releaseDeltaSeconds
       creditsUsedMonth = status.creditsUsedMonth
       creditsBudgetMonth = status.creditsBudgetMonth
+      billingResetDay = status.billingResetDay
       sessionEndsAt = status.sessionEndsAt
       polls = status.polls
       approxCredits = status.approxCredits
@@ -227,6 +231,20 @@ final class StatusModel {
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.httpBody = try? JSONSerialization.data(withJSONObject: ["remaining": remaining])
+    Task {
+      _ = try? await URLSession.shared.data(for: request)
+      await refresh()
+    }
+  }
+
+  /// Set the FR24 billing-anniversary day (1–31). Partial PUT — the service
+  /// merges it and the credit ledger re-keys its cycle to this day.
+  func setBillingResetDay(_ day: Int) {
+    guard let url = URL(string: "\(base)/api/config") else { return }
+    var request = URLRequest(url: url)
+    request.httpMethod = "PUT"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = try? JSONSerialization.data(withJSONObject: ["billing_reset_day": day])
     Task {
       _ = try? await URLSession.shared.data(for: request)
       await refresh()
