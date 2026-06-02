@@ -222,6 +222,9 @@ private struct ZoneEditRow: View {
   let model: StatusModel
   @State private var name: String
   @State private var pollSeconds: String
+  @FocusState private var focus: Field?
+
+  private enum Field { case name, poll }
 
   init(zone: EditableZone, model: StatusModel) {
     self.zone = zone
@@ -235,7 +238,8 @@ private struct ZoneEditRow: View {
       HStack {
         TextField("name", text: $name)
           .textFieldStyle(.roundedBorder)
-          .onSubmit { Task { await model.renameZone(zone.id, to: name) } }
+          .focused($focus, equals: .name)
+          .onSubmit { commitName() }
         Button(role: .destructive) {
           Task { await model.deleteZone(zone.id) }
         } label: {
@@ -251,15 +255,30 @@ private struct ZoneEditRow: View {
         Text("Poll every").font(.caption2).foregroundStyle(.secondary)
         TextField("default", text: $pollSeconds)
           .frame(width: 44)
-          .onSubmit {
-            let seconds = Int(pollSeconds.trimmingCharacters(in: .whitespaces))
-            Task { await model.setPollInterval(zone.id, seconds: seconds) }
-          }
+          .focused($focus, equals: .poll)
+          .onSubmit { commitPoll() }
         Text("s (blank = global)").font(.caption2).foregroundStyle(.secondary)
       }
       .controlSize(.small)
     }
     .padding(.vertical, 2)
+    // Save when a field loses focus (or on Return) so edits aren't lost.
+    .onChange(of: focus) { old, _ in
+      if old == .name { commitName() }
+      if old == .poll { commitPoll() }
+    }
+  }
+
+  private func commitName() {
+    let trimmed = name.trimmingCharacters(in: .whitespaces)
+    guard !trimmed.isEmpty, trimmed != zone.name else { return }
+    Task { await model.renameZone(zone.id, to: trimmed) }
+  }
+
+  private func commitPoll() {
+    let seconds = Int(pollSeconds.trimmingCharacters(in: .whitespaces))
+    guard seconds.map({ $0 * 1000 }) != zone.pollIntervalMs else { return }
+    Task { await model.setPollInterval(zone.id, seconds: seconds) }
   }
 
   private func slotRow(_ label: String, geojson: String, slot: ZoneSlot) -> some View {
