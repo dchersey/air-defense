@@ -40,6 +40,7 @@ defmodule LgaPredictor.PollerTest do
           trigger: Keyword.get(opts, :trigger, :predict),
           # Default 0 so existing fixtures (inbound is 100 kt) still trigger.
           min_gspeed_kt: Keyword.get(opts, :min_gspeed, 0),
+          poll_interval_ms: Keyword.get(opts, :zone_interval, nil),
           assume_delay_seconds: Keyword.get(opts, :assume_delay, 0.0),
           assume_duration_seconds: Keyword.get(opts, :assume_duration, 30.0),
           altitude_ceiling_ft: nil,
@@ -294,6 +295,53 @@ defmodule LgaPredictor.PollerTest do
     assert Poller.status().active?
     assert :ok = Poller.stop_session("z1")
     refute Poller.status().active?
+  end
+
+  test "after a detection the zoneset stops polling until the plane clears (lock-on)" do
+    test_pid = self()
+
+    start(
+      config_fun: fn -> config(trigger: :assume) end,
+      fetcher: fn box -> send(test_pid, {:queried, box}); {:ok, [inbound()]} end,
+      poll_interval_ms: 30
+    )
+
+    :ok = Poller.start_session()
+    # First poll detects the (inside-the-ANC-zone) plane and engages.
+    assert_receive {:queried, @monitor_box}, 200
+    # Locked on: with a 30ms interval we'd normally re-poll ~6x in 200ms, but the
+    # zoneset is suppressed until the plane's predicted exit (seconds away).
+    refute_receive {:queried, @monitor_box}, 200
+    assert Actuator.mode() == :anc
+  end
+
+  test "a zoneset honors its own poll_interval_ms (faster than the global)" do
+    test_pid = self()
+
+    cfg = fn ->
+      base = config2()
+      [z1, z2] = base.zonesets
+      %{base | zonesets: [Map.put(z1, :poll_interval_ms, 25), z2]}
+    end
+
+    # Empty fetches -> no detection/suppression, so polling continues at cadence.
+    start(config_fun: cfg, fetcher: fn box -> send(test_pid, {:q, box}); {:ok, []} end, poll_interval_ms: 250)
+    :ok = Poller.start_session("z1")
+    :ok = Poller.start_session("z2")
+    Process.sleep(300)
+
+    counts = drain_q(%{})
+    # z1 at 25ms should poll many times; z2 at the 250ms global only ~once or twice.
+    assert Map.get(counts, @monitor_box, 0) >= 5
+    assert Map.get(counts, @monitor_box, 0) > Map.get(counts, @z2_box, 0)
+  end
+
+  defp drain_q(acc) do
+    receive do
+      {:q, box} -> drain_q(Map.update(acc, box, 1, &(&1 + 1)))
+    after
+      0 -> acc
+    end
   end
 
   test "stopping a session goes idle and returns to transparency" do

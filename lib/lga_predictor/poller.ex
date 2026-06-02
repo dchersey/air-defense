@@ -1,25 +1,25 @@
 defmodule LgaPredictor.Poller do
   @moduledoc """
-  The session loop. Each **zoneset** can have its own independent monitoring
-  session (started/stopped by id from the control panel); both arrival and
-  departure zonesets can run at once. While any session is active the poller
-  polls FR24 once per `poll_interval_ms` for each **running** zoneset's monitor
+  The session loop. Each **zoneset** has its own independent monitoring session
+  (started/stopped by id from the control panel); both arrival and departure
+  zonesets can run at once. Each running zoneset polls FR24 on **its own timer**
+  at its `poll_interval_ms` (falling back to the global default) for its monitor
   zone (the only thing that costs credits), predicts whether each detected flight
-  will pass through that zoneset's ANC zones, and schedules ANC engage/release
-  with the `Actuator`. Each session runs for `session_duration_ms` (4 h) or until
-  stopped.
+  will pass through its ANC zones, and schedules ANC engage/release with the
+  `Actuator`. Each session runs for `session_duration_ms` (4 h) or until stopped.
+
+  **Lock-on:** once a zoneset detects a qualifying flight it stops polling until
+  that flight is predicted to clear the ANC zone (`exits_in`), then resumes — so a
+  narrow, frequently-polled zone tracks one plane at a time without re-spending
+  credits during the pass.
 
   Idle by default — nothing is polled (and no credits spent) until a session is
-  started. Stats (`polls`, `credits`, the actioned-dedupe set) reset when starting
-  from fully idle and accumulate across concurrently-running sessions.
+  started. Stats reset when starting from fully idle and accumulate across
+  concurrently-running sessions.
 
-  Config (zonesets, global ceiling, ANC latency) comes from `ConfigStore` via an
-  injectable `:config_fun`. FR24 fetching is injectable via `:fetcher` (a
-  `box -> {:ok, [aircraft]} | {:error, _}` function) so the loop is testable offline.
-
-  ANC timing: predictions assume zero actuator latency; each engage/release command
-  is issued `anc_latency_seconds` EARLY so the mode is actually changed by the
-  predicted moment. A flight is actioned at most once per session (de-duped by hex).
+  Config comes from `ConfigStore` via an injectable `:config_fun`. FR24 fetching is
+  injectable via `:fetcher` so the loop is testable offline. ANC timing fires
+  `anc_latency_seconds` early; a flight is actioned at most once per session.
   """
 
   use GenServer
@@ -52,9 +52,9 @@ defmodule LgaPredictor.Poller do
   def status, do: GenServer.call(__MODULE__, :status)
 
   @doc """
-  Report whether the AirPods are the active output. When disconnected, an active
-  session keeps its timer running but PAUSES polling (no FR24 credits) — there's
-  nothing to control — and resumes automatically when they reconnect.
+  Report whether the AirPods are the active output. When disconnected, active
+  sessions keep their timers running but PAUSE polling (no FR24 credits) and
+  resume automatically when they reconnect.
   """
   def set_headphones(connected) when is_boolean(connected),
     do: GenServer.call(__MODULE__, {:set_headphones, connected})
@@ -90,7 +90,6 @@ defmodule LgaPredictor.Poller do
   def handle_call({:set_headphones, connected}, _from, state) do
     if connected != state.headphones_connected do
       Logger.info("[poller] headphones #{if connected, do: "connected — resuming", else: "disconnected — pausing"}")
-      # Clear any held mode on disconnect; polling resumes fresh on reconnect.
       unless connected, do: Actuator.reset()
     end
 
@@ -98,8 +97,9 @@ defmodule LgaPredictor.Poller do
   end
 
   @impl true
-  def handle_info(:poll, state) do
-    if map_size(state.sessions) == 0, do: {:noreply, state}, else: {:noreply, poll_now(state)}
+  def handle_info({:poll, id}, state) do
+    # Ignore stale timers for a zoneset whose session has ended.
+    if Map.has_key?(state.sessions, id), do: {:noreply, poll_tick(state, id)}, else: {:noreply, state}
   end
 
   def handle_info({:end_session, id}, state) do
@@ -110,8 +110,8 @@ defmodule LgaPredictor.Poller do
   ## Session lifecycle
 
   defp start_one(state, id) do
-    # Reset stats only when starting from fully idle; otherwise accumulate. The
-    # first session also asks keep-alive to hold the audio route.
+    # Reset stats only when starting from fully idle; the first session also asks
+    # keep-alive to hold the audio route.
     state =
       if map_size(state.sessions) == 0 do
         notify_keep_alive(state, :on)
@@ -126,7 +126,8 @@ defmodule LgaPredictor.Poller do
     Logger.info("[poller] session START #{id} — #{div(state.session_duration, 60_000)} min")
 
     state = %{state | sessions: Map.put(state.sessions, id, %{ends_at: ends_at, timer: timer})}
-    ensure_polling(state)
+    # Poll this zoneset right away, then on its own per-zoneset cadence.
+    poll_tick(state, id)
   end
 
   defp stop_one(state, id) do
@@ -136,8 +137,16 @@ defmodule LgaPredictor.Poller do
 
       {%{timer: timer}, sessions} ->
         Process.cancel_timer(timer)
+        cancel_poll(state, id)
         Logger.info("[poller] session END #{id}")
-        state = %{state | sessions: sessions}
+
+        state = %{
+          state
+          | sessions: sessions,
+            poll_timers: Map.delete(state.poll_timers, id),
+            suppress_until: Map.delete(state.suppress_until, id)
+        }
+
         if map_size(sessions) == 0, do: go_idle(state), else: state
     end
   end
@@ -148,11 +157,11 @@ defmodule LgaPredictor.Poller do
   end
 
   defp go_idle(state) do
-    if state.poll_timer, do: Process.cancel_timer(state.poll_timer)
+    Enum.each(state.poll_timers, fn {_id, ref} -> Process.cancel_timer(ref) end)
     Actuator.reset()
     notify_keep_alive(state, :off)
     Logger.info("[poller] all sessions ended — #{state.polls} polls, ~#{state.credits} credits")
-    %{state | poll_timer: nil}
+    %{state | poll_timers: %{}, suppress_until: %{}}
   end
 
   # Best-effort — must never crash the session loop if keep-alive is down.
@@ -171,30 +180,61 @@ defmodule LgaPredictor.Poller do
     end
   end
 
-  # Start the shared poll loop if it isn't already running.
-  defp ensure_polling(%{poll_timer: nil} = state), do: poll_now(state)
-  defp ensure_polling(state), do: state
+  ## Polling (one timer per zoneset)
 
-  ## Polling
+  defp poll_tick(state, id) do
+    config = state.config_fun.()
+    zoneset = Enum.find(config.zonesets, &(&1.id == id))
 
-  defp poll_now(state) do
-    state =
-      if state.headphones_connected do
-        config = state.config_fun.()
-        running = Enum.filter(config.zonesets, &Map.has_key?(state.sessions, &1.id))
-        state = Enum.reduce(running, state, &poll_zoneset(&1, config, &2))
-        Logger.info("[poller] poll ##{state.polls + 1} done; session ~#{state.credits} cr")
-        %{state | polls: state.polls + 1}
-      else
-        # Paused — session timer keeps running, but no FR24 fetch / credits.
-        Logger.info("[poller] poll skipped — headphones disconnected (monitoring paused)")
-        state
-      end
+    cond do
+      is_nil(zoneset) ->
+        # Zoneset removed from config — drop its timer.
+        cancel_poll(state, id)
+        %{state | poll_timers: Map.delete(state.poll_timers, id)}
 
-    %{state | poll_timer: Process.send_after(self(), :poll, state.poll_interval)}
+      not state.headphones_connected ->
+        # Paused: session timer keeps running, no FR24 fetch / credits. Keep
+        # ticking so we resume promptly on reconnect.
+        Logger.info("[poller] #{id}: poll skipped — headphones disconnected (paused)")
+        reschedule_poll(state, id, interval_ms(state, zoneset))
+
+      suppressed?(state, id) ->
+        # Locked onto a plane — resume when it's predicted to clear the ANC zone.
+        reschedule_poll(state, id, suppress_delay_ms(state, id))
+
+      true ->
+        state = state |> poll_zoneset(zoneset, config) |> bump_polls(id)
+        delay = if suppressed?(state, id), do: suppress_delay_ms(state, id), else: interval_ms(state, zoneset)
+        reschedule_poll(state, id, delay)
+    end
   end
 
-  defp poll_zoneset(zoneset, config, state) do
+  defp bump_polls(state, id) do
+    state = %{state | polls: state.polls + 1}
+    Logger.info("[poller] poll #{id} ##{state.polls}; session ~#{state.credits} cr")
+    state
+  end
+
+  defp reschedule_poll(state, id, delay_ms) do
+    cancel_poll(state, id)
+    ref = Process.send_after(self(), {:poll, id}, max(round(delay_ms), 0))
+    %{state | poll_timers: Map.put(state.poll_timers, id, ref)}
+  end
+
+  defp cancel_poll(state, id) do
+    if ref = state.poll_timers[id], do: Process.cancel_timer(ref)
+    :ok
+  end
+
+  defp interval_ms(state, zoneset), do: zoneset.poll_interval_ms || state.poll_interval
+
+  defp suppressed?(state, id), do: Map.get(state.suppress_until, id, 0) > System.os_time(:second)
+
+  defp suppress_delay_ms(state, id) do
+    max(Map.get(state.suppress_until, id, 0) - System.os_time(:second), 0) * 1000
+  end
+
+  defp poll_zoneset(state, zoneset, config) do
     case state.fetcher.(zoneset.monitor_box) do
       {:ok, aircraft} ->
         credits = state.credits + length(aircraft) * @credits_per_aircraft
@@ -231,25 +271,23 @@ defmodule LgaPredictor.Poller do
 
       zoneset.trigger == :assume ->
         # Per-flight ETA from distance ÷ groundspeed (heading-independent), with
-        # dwell capped (max_dwell_seconds). Falls back to the fixed assume window
-        # only if ETA can't be computed (no groundspeed / no ANC zones).
+        # dwell capped. Falls back to the fixed assume window only if ETA can't be
+        # computed (no groundspeed / no ANC zones).
         window =
           Predictor.predict_eta(ac, zoneset.anc_zones, max_dwell_seconds: config.max_dwell_seconds) ||
             assume_window(zoneset)
 
-        dispatch(window, ac, key, config.anc_latency_seconds, state)
+        dispatch(window, ac, key, config.anc_latency_seconds, zoneset.id, state)
 
       true ->
         case first_window(ac, zoneset, ceiling, state.window) do
           nil -> state
-          window -> dispatch(window, ac, key, config.anc_latency_seconds, state)
+          window -> dispatch(window, ac, key, config.anc_latency_seconds, zoneset.id, state)
         end
     end
   end
 
-  # :assume — detection in the monitor zone IS the trigger (for banking
-  # departures where projecting a path into the ANC zone is unreliable). Engage
-  # after a calibrated delay, hold for a calibrated duration.
+  # :assume fallback when ETA can't be computed: fixed delay + duration.
   defp assume_window(zoneset) do
     enters = zoneset.assume_delay_seconds
     exits = enters + zoneset.assume_duration_seconds
@@ -273,13 +311,11 @@ defmodule LgaPredictor.Poller do
     |> Enum.min_by(& &1.enters_in, fn -> nil end)
   end
 
-  defp dispatch(window, ac, key, latency, state) do
+  defp dispatch(window, ac, key, latency, zoneset_id, state) do
     # Predictions assume zero latency; fire `latency` seconds early.
     on_ms = max(round((window.enters_in - latency) * 1000), 0)
     off_ms = max(round((window.exits_in - latency) * 1000), 0)
 
-    # Distance to entry along ground (enters_in × groundspeed) — logged so ETA
-    # accuracy can be judged by eye against the FR24 map on a live pass.
     dist_km = Float.round(window.enters_in * (ac.gspeed_kt || 0) * 1.852 / 3600, 2)
 
     Logger.info(
@@ -296,7 +332,16 @@ defmodule LgaPredictor.Poller do
     })
 
     Actuator.cover(on_ms, off_ms, key)
-    %{state | actioned: MapSet.put(state.actioned, key)}
+
+    # Lock-on: stop polling this zoneset until the plane is predicted to clear the
+    # ANC zone (the latest exit if several planes were caught in one poll).
+    exits_at = System.os_time(:second) + round(window.exits_in)
+
+    %{
+      state
+      | actioned: MapSet.put(state.actioned, key),
+        suppress_until: Map.update(state.suppress_until, zoneset_id, exits_at, &max(&1, exits_at))
+    }
   end
 
   # History is optional (tests may run Poller without it supervised).
@@ -341,7 +386,8 @@ defmodule LgaPredictor.Poller do
 
     %{
       sessions: %{},
-      poll_timer: nil,
+      poll_timers: %{},
+      suppress_until: %{},
       polls: 0,
       credits: 0,
       headphones_connected: true,
