@@ -78,10 +78,13 @@ menu-bar app:
 ```
 
 It downloads a **self-contained** backend release (no Elixir/Erlang/Xcode needed),
-installs it as a per-user LaunchAgent, and installs the notarized app to
-`/Applications`. **No API key needed** — it defaults to the free ADS-B feed. (If
-you later switch the provider to FlightRadar24 in the app's settings, you paste
-the key there.)
+installs it as a per-user LaunchAgent, and installs the app to `/Applications`.
+**No API key needed** — it defaults to the free ADS-B feed. (If you later switch
+the provider to FlightRadar24 in the app's settings, you paste the key there.)
+
+The downloadable binaries are **code-signed with my Apple Developer ID and notarized
+by Apple** (and stapled), so Gatekeeper opens them without the "unidentified
+developer" warning — every release is built, signed, and notarized in CI.
 
 Two one-time steps macOS requires and the script can't do for you:
 
