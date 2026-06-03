@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 import Observation
 
@@ -107,6 +108,14 @@ final class StatusModel {
   // updated whenever AirPods are the active output (e.g. switch Pro → Max).
   var headphonesArePro = false
 
+  // Quiet-period alert: when a session has run 10 min with no detections, play a
+  // message through the AirPods (so a busy user knows LGA may have shifted patterns
+  // and they can take the headphones off). Re-alerts every 10 min while still quiet.
+  @ObservationIgnored private var activeSince: Date?
+  @ObservationIgnored private var lastQuietAlertAt: Date?
+  @ObservationIgnored private var alertPlayer: AVAudioPlayer?
+  private let quietGap: TimeInterval = 600
+
   // Soft pulse (0.5...1.0) for the menu-bar glyph while monitoring. Driven by a
   // timer rather than a SwiftUI animation — MenuBarExtra(.window) tears if a
   // repeatForever animation runs in the scene, so we animate by swapping the
@@ -187,9 +196,57 @@ final class StatusModel {
       updateHeadphones()
       applyModeIfChanged(status.mode)
       updateMenuPulse()
+      evaluateQuietAlert()
     } catch {
       reachable = false
       updateMenuPulse()
+    }
+  }
+
+  // Whether the quiet-period alert is enabled (Settings toggle; default on).
+  private var quietAlertEnabled: Bool {
+    UserDefaults.standard.object(forKey: "quietAlertEnabled") as? Bool ?? true
+  }
+
+  // Fire (and periodically re-fire) the alert after `quietGap` seconds of silence —
+  // but ONLY following actual activity this session (a flight, then nothing). A
+  // session that's quiet from the start never alerts.
+  private func evaluateQuietAlert() {
+    guard active else {
+      activeSince = nil
+      lastQuietAlertAt = nil
+      return
+    }
+    if activeSince == nil { activeSince = Date() }
+    guard let start = activeSince, headphonesConnected, quietAlertEnabled else { return }
+
+    // Require a detection that occurred during this session.
+    guard let lastFlight = recent.first.map({ Date(timeIntervalSince1970: TimeInterval($0.at)) }),
+      lastFlight >= start
+    else { return }
+
+    let reference = max(lastFlight, lastQuietAlertAt ?? .distantPast)
+    if Date().timeIntervalSince(reference) >= quietGap {
+      playQuietAlert()
+      lastQuietAlertAt = Date()
+    }
+  }
+
+  // Play the bundled "all-clear" message at a modest volume through the active output.
+  private func playQuietAlert() {
+    guard let url = Bundle.main.url(forResource: "all-clear", withExtension: "mp3") else {
+      Log.line("quiet alert: all-clear.mp3 not found in bundle")
+      return
+    }
+    do {
+      let player = try AVAudioPlayer(contentsOf: url)
+      player.volume = 0.45  // modest
+      player.prepareToPlay()
+      player.play()
+      alertPlayer = player  // retain until playback finishes
+      Log.line("quiet-period alert played (\(Int(quietGap / 60)) min no flights)")
+    } catch {
+      Log.line("quiet alert play failed: \(error)")
     }
   }
 

@@ -585,6 +585,7 @@ private struct SettingsScreen: View {
 
   @State private var launchAtLogin = LoginItem.isEnabled
   @AppStorage("autoPauseWithoutAirPods") private var autoPause = true
+  @AppStorage("quietAlertEnabled") private var quietAlert = true
 
   init(model: StatusModel, onEditZones: @escaping () -> Void, _ onBack: @escaping () -> Void) {
     self.model = model
@@ -603,6 +604,9 @@ private struct SettingsScreen: View {
       toggleRow(
         "Auto-pause without AirPods", subtitle: "Hold monitoring when no buds are connected",
         isOn: $autoPause)
+      toggleRow(
+        "Quiet-period alert", subtitle: "Play a message after 10 min with no flights",
+        isOn: $quietAlert)
       toggleRow(
         "Launch at Login", subtitle: "Start Air Defense when you sign in", isOn: $launchAtLogin
       )

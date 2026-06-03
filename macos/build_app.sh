@@ -14,6 +14,7 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp ".build/release/ControlPanel" "$app/Contents/MacOS/AirDefense"
 cp "$here/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
+cp "$here/all-clear.mp3" "$app/Contents/Resources/all-clear.mp3"  # quiet-period alert
 
 cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
