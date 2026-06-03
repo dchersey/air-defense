@@ -513,6 +513,7 @@ private struct ActivityStrip: View {
           }
           Spacer(minLength: 8)
           Text(ancTime(flight)).font(.adMono).monospacedDigit().foregroundStyle(Palette.accent)
+            .frame(width: 92, alignment: .trailing)
         }
       }
     }
@@ -612,6 +613,9 @@ private struct SettingsScreen: View {
       if model.provider == "fr24" {
         CreditBar(used: model.creditsUsedMonth, budget: model.creditsBudgetMonth, model: model)
       }
+
+      Divider().overlay(Palette.hairline)
+      RouteSource(model: model)
 
       Divider().overlay(Palette.hairline)
       HStack(spacing: 4) {
@@ -727,6 +731,49 @@ private struct DataSource: View {
       } else {
         Text("Free ADS-B — no API key, no credits used.").font(.adMono).foregroundStyle(Palette.ink2)
       }
+    }
+  }
+}
+
+// MARK: - Flight-route source
+
+/// FlightAware AeroAPI key for real-time airport routes in the recent-flights list
+/// (stored in the Keychain by the backend). Independent of the position provider.
+/// Without a key — or once the monthly query cap is hit — the list shows the raw
+/// callsign instead of "ORIG → DEST".
+private struct RouteSource: View {
+  let model: StatusModel
+  @State private var keyText = ""
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      sectionLabel("Flight routes")
+      HStack(spacing: 6) {
+        Image(
+          systemName: model.aeroapiKeyPresent
+            ? "checkmark.seal.fill" : "exclamationmark.triangle.fill"
+        )
+        .font(.adMono).foregroundStyle(model.aeroapiKeyPresent ? Palette.go : Palette.inbound)
+        SecureField(
+          model.aeroapiKeyPresent ? "Replace AeroAPI key…" : "Paste FlightAware AeroAPI key",
+          text: $keyText
+        )
+        .textFieldStyle(.roundedBorder).font(.adMono)
+        Button("Save") {
+          let k = keyText.trimmingCharacters(in: .whitespacesAndNewlines)
+          if !k.isEmpty {
+            model.setAeroapiKey(k)
+            keyText = ""
+          }
+        }
+        .font(.adMono).disabled(keyText.isEmpty)
+      }
+      Text(
+        model.aeroapiKeyPresent
+          ? "Real-time routes via FlightAware (cached; ~1,200 lookups/mo)."
+          : "Add a key for ORIG → DEST routes; otherwise the list shows the callsign."
+      )
+      .font(.adMono).foregroundStyle(Palette.ink2)
     }
   }
 }

@@ -59,6 +59,7 @@ struct StatusResponse: Codable {
   let billingResetDay: Int
   let provider: String
   let fr24KeyPresent: Bool
+  let aeroapiKeyPresent: Bool?
   let polls: Int
   let approxCredits: Int
   let zonesets: [ZonesetStatus]
@@ -95,6 +96,8 @@ final class StatusModel {
   // Flight-data source for all zones, + whether an FR24 key is stored.
   var provider = "airplanes_live"
   var fr24KeyPresent = false
+  // AeroAPI key (real-time flight routes for the recent-flights list).
+  var aeroapiKeyPresent = false
 
   // AirPods presence (the active output), checked locally via CoreAudio.
   var headphonesConnected = true
@@ -172,6 +175,7 @@ final class StatusModel {
       billingResetDay = status.billingResetDay
       provider = status.provider
       fr24KeyPresent = status.fr24KeyPresent
+      aeroapiKeyPresent = status.aeroapiKeyPresent ?? false
       sessionEndsAt = status.sessionEndsAt
       polls = status.polls
       approxCredits = status.approxCredits
@@ -326,6 +330,17 @@ final class StatusModel {
   /// Store the FlightRadar24 API key (backend writes it to the Keychain).
   func setFR24Key(_ key: String) {
     guard let url = URL(string: "\(base)/api/fr24_key") else { return }
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = try? JSONSerialization.data(withJSONObject: ["key": key])
+    Task { _ = try? await URLSession.shared.data(for: request); await refresh() }
+  }
+
+  /// Store the FlightAware AeroAPI key (backend writes it to the Keychain) — used to
+  /// resolve real-time airport routes for the recent-flights list.
+  func setAeroapiKey(_ key: String) {
+    guard let url = URL(string: "\(base)/api/aeroapi_key") else { return }
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")

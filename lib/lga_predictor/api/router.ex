@@ -92,6 +92,21 @@ defmodule LgaPredictor.API.Router do
     end
   end
 
+  # Store the FlightAware AeroAPI key in the Keychain (real-time flight routes).
+  # Body: {"key": "..."}.
+  post "/api/aeroapi_key" do
+    case conn.body_params do
+      %{"key" => key} when is_binary(key) and key != "" ->
+        case LgaPredictor.Routes.put_key(key) do
+          :ok -> send_json(conn, 200, %{ok: true, aeroapi_key_present: true})
+          {:error, reason} -> send_json(conn, 500, %{error: reason})
+        end
+
+      _ ->
+        send_json(conn, 422, %{error: "expected a non-empty 'key'"})
+    end
+  end
+
   get "/api/config" do
     send_json(conn, 200, config_payload())
   end
@@ -203,6 +218,7 @@ defmodule LgaPredictor.API.Router do
       billing_reset_day: config.billing_reset_day,
       provider: to_string(config.provider),
       fr24_key_present: LgaPredictor.FR24.Client.key_present?(),
+      aeroapi_key_present: LgaPredictor.Routes.key_present?(),
       session_ends_at: status.session_ends_at,
       polls: status.polls,
       approx_credits: status.approx_credits,
