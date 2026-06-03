@@ -336,7 +336,9 @@ defmodule LgaPredictor.Poller do
 
     record_history(%{
       at: System.os_time(:second),
-      callsign: key,
+      # Record the real broadcast callsign (for route lookup); keep the hex too.
+      callsign: ac.callsign,
+      hex: ac.hex,
       alt_ft: ac.alt_ft,
       enters_in: round(window.enters_in),
       dwell: round(window.dwell_seconds)

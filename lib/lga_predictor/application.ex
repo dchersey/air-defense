@@ -18,6 +18,7 @@ defmodule LgaPredictor.Application do
           {LgaPredictor.AircraftRegistry, name: LgaPredictor.AircraftRegistry},
           LgaPredictor.Actuator,
           LgaPredictor.History,
+          LgaPredictor.Routes,
           LgaPredictor.CreditLedger,
           LgaPredictor.Poller,
           {Bandit, plug: LgaPredictor.API.Router, scheme: :http, ip: {127, 0, 0, 1}, port: port}

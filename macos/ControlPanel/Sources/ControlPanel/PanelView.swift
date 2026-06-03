@@ -432,7 +432,7 @@ private struct ActivityStrip: View {
           sectionLabel("Overflights")
           Spacer()
           (Text("\(model.history.reduce(0, +))").foregroundStyle(Palette.ink)
-            + Text(" · last hr").foregroundStyle(Palette.ink3))
+            + Text(" · last hr · 5-min").foregroundStyle(Palette.ink3))
             .font(.adMono).monospacedDigit()
         }
 
@@ -458,41 +458,57 @@ private struct ActivityStrip: View {
   private var bars: some View {
     let maxV = max(model.history.max() ?? 1, 1)
     return HStack(alignment: .bottom, spacing: 4) {
-      ForEach(Array(model.history.enumerated()), id: \.offset) { index, value in
-        let hot = index == model.history.count - 1 && model.phase == .pending
+      ForEach(Array(model.history.enumerated()), id: \.offset) { _, value in
         RoundedRectangle(cornerRadius: 2, style: .continuous)
-          .fill(barFill(value: value, hot: hot))
+          .fill(barFill(value: value))
           .frame(height: value == 0 ? 6 : max(10, 56 * Double(value) / Double(maxV)))
       }
     }
     .frame(height: 56, alignment: .bottom)
   }
 
-  // Idle = faint flat stub; active = top-lit gradient fading to 45% at the base;
-  // the current bucket turns amber ("hot") while a plane is inbound.
-  private func barFill(value: Int, hot: Bool) -> LinearGradient {
+  // Idle = faint flat stub; active = top-lit gradient fading to 45% at the base.
+  private func barFill(value: Int) -> LinearGradient {
     if value == 0 {
       return LinearGradient(colors: [Palette.fill, Palette.fill], startPoint: .top, endPoint: .bottom)
     }
-    let c = hot ? Palette.inbound : Palette.accent
-    return LinearGradient(colors: [c, c.opacity(0.45)], startPoint: .top, endPoint: .bottom)
+    return LinearGradient(
+      colors: [Palette.accent, Palette.accent.opacity(0.45)], startPoint: .top, endPoint: .bottom)
   }
 
+  // Plain VStack (no ScrollView — a greedy ScrollView collapses to ~0 height in the
+  // content-sized MenuBarExtra window). Each row: flight id + the time ANC engaged
+  // (≈ detection time + lead-to-zone-entry). The release is a fixed dwell, so it's
+  // omitted.
   private var flightList: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 5) {
-        ForEach(model.recent.prefix(12)) { flight in
-          HStack {
-            Text(flight.callsign ?? "?").font(.adMono).foregroundStyle(Palette.ink)
-            Spacer()
-            if let alt = flight.altFt {
-              Text("\(Int(alt)) ft").font(.adMono).foregroundStyle(Palette.ink2)
-            }
+    VStack(alignment: .leading, spacing: 5) {
+      ForEach(model.recent.prefix(10)) { flight in
+        HStack(spacing: 8) {
+          Text(routeLabel(flight)).font(.adMono).foregroundStyle(Palette.ink)
+          if let alt = flight.altFt {
+            Text("· \(Int(alt)) ft").font(.adMono).foregroundStyle(Palette.ink3)
           }
+          Spacer(minLength: 8)
+          Text(ancTime(flight)).font(.adMono).monospacedDigit().foregroundStyle(Palette.accent)
         }
       }
     }
-    .frame(maxHeight: 150)
+    .padding(.top, 2)
+  }
+
+  // Clock time ANC engaged for this flight: detection time + predicted lead to the
+  // ANC zone (the engage offset/latency shift it by a second or two).
+  private func ancTime(_ flight: Flight) -> String {
+    Date(timeIntervalSince1970: TimeInterval(flight.at + flight.entersIn))
+      .formatted(date: .omitted, time: .standard)
+  }
+
+  // Airport route when known (e.g. "YYZ → LGA"); "private" for GA/no-route flights;
+  // the raw callsign while the lookup is still pending.
+  private func routeLabel(_ flight: Flight) -> String {
+    if let o = flight.origin, let d = flight.destination { return "\(o) → \(d)" }
+    if flight.isPrivate == true { return "private" }
+    return flight.callsign ?? "—"
   }
 }
 

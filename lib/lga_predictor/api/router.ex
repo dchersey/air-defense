@@ -207,7 +207,7 @@ defmodule LgaPredictor.API.Router do
       polls: status.polls,
       approx_credits: status.approx_credits,
       zonesets: status.zonesets,
-      recent: History.recent(50),
+      recent: History.recent(50) |> Enum.map(&with_route/1),
       # 12 buckets x 5 min = last hour of trigger counts, oldest -> newest
       history: History.counts_per_bucket(300, buckets: 12)
     }
@@ -218,6 +218,31 @@ defmodule LgaPredictor.API.Router do
     if Process.whereis(LgaPredictor.CreditLedger),
       do: LgaPredictor.CreditLedger.month_to_date().used,
       else: nil
+  end
+
+  # Enrich a recent-flight event with its airport route (origin/dest IATA) from the
+  # Routes cache. No callsign or a fetched-but-unknown one → is_private (the UI shows
+  # "private"); a not-yet-fetched callsign leaves the route nil (the UI shows the
+  # callsign until the async lookup resolves on a later poll).
+  defp with_route(event) do
+    cs = event[:callsign]
+
+    {origin, destination, private} =
+      cond do
+        not (is_binary(cs) and cs != "") -> {nil, nil, true}
+        Process.whereis(LgaPredictor.Routes) == nil -> {nil, nil, false}
+        true ->
+          case LgaPredictor.Routes.get(cs) do
+            {:ok, o, d} -> {o, d, false}
+            :none -> {nil, nil, true}
+            :pending -> {nil, nil, false}
+          end
+      end
+
+    event
+    |> Map.put(:origin, origin)
+    |> Map.put(:destination, destination)
+    |> Map.put(:is_private, private)
   end
 
   # Echo the persisted config back as plain JSON (the raw form, so the UI
