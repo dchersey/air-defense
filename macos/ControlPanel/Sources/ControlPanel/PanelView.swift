@@ -182,6 +182,20 @@ struct PanelView: View {
       .frame(width: 340)
       .background(Palette.gradient)
       .tint(Palette.accent)
+      .overlay(alignment: .bottom) {
+        if let toast = model.toast {
+          Text(toast)
+            .font(.adMono)
+            .foregroundStyle(Palette.ink)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Capsule().fill(Palette.panelBottom.opacity(0.96)))
+            .overlay(Capsule().stroke(Palette.line, lineWidth: 1))
+            .padding(.bottom, 14)
+            .transition(.opacity)
+        }
+      }
+      .animation(.easeInOut(duration: 0.2), value: model.toast)
   }
 
   @ViewBuilder private var content: some View {
@@ -246,16 +260,25 @@ private struct Header: View {
 
   var body: some View {
     HStack(alignment: .top, spacing: 11) {
-      RoundedRectangle(cornerRadius: 7, style: .continuous)
-        .fill(Palette.accentSoft)
-        .overlay(
-          RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .stroke(Palette.accent.opacity(0.42), lineWidth: 0.5))
-        .frame(width: 30, height: 30)
-        .overlay(
-          Image(systemName: "dot.radiowaves.up.forward")
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(Palette.accent))
+      // Clickable: opens FlightRadar24 over the ANC zone (default browser). The
+      // thicker ring is the affordance.
+      Button { model.openFlightRadar() } label: {
+        RoundedRectangle(cornerRadius: 7, style: .continuous)
+          .fill(Palette.accentSoft)
+          .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+              .stroke(Palette.accent.opacity(0.7), lineWidth: 1.5))
+          .frame(width: 30, height: 30)
+          .overlay(
+            Image(systemName: "dot.radiowaves.up.forward")
+              .font(.system(size: 14, weight: .semibold))
+              .foregroundStyle(Palette.accent))
+      }
+      .buttonStyle(.plain)
+      .help("Open FlightRadar24 over your ANC zone")
+      .onHover { inside in
+        if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+      }
 
       VStack(alignment: .leading, spacing: 4) {
         HStack(alignment: .firstTextBaseline, spacing: 8) {

@@ -116,6 +116,10 @@ final class StatusModel {
   var editZones: [EditableZone] = []
   var editError: String?
 
+  // Transient toast message shown over the panel (auto-clears after a moment).
+  var toast: String?
+  @ObservationIgnored private var toastTask: Task<Void, Never>?
+
   private let base = "http://127.0.0.1:4040"
   private var timer: Timer?
   // Seeded to the assumed starting mode. The actuator is a BLIND toggle
@@ -342,6 +346,69 @@ final class StatusModel {
     } catch {
       editError = "Couldn't load zones (service offline?)"
     }
+  }
+
+  /// Show a transient message over the panel for a couple of seconds.
+  func flashToast(_ message: String) {
+    toast = message
+    toastTask?.cancel()
+    toastTask = Task { [weak self] in
+      try? await Task.sleep(for: .seconds(2.5))
+      if !Task.isCancelled { self?.toast = nil }
+    }
+  }
+
+  /// Open FlightRadar24 (in the system default browser) centered on the ANC zone at
+  /// a useful zoom. Lazily loads the zones (geometry isn't in /api/status). If no
+  /// ANC zone is defined, shows a toast instead.
+  func openFlightRadar() {
+    Task {
+      if editZones.isEmpty { await loadZones() }
+      guard let c = ancCenter() else {
+        flashToast("No noise zones defined")
+        return
+      }
+      let path = String(format: "%.4f,%.4f/15", c.lat, c.lon)
+      if let u = URL(string: "https://www.flightradar24.com/\(path)") {
+        NSWorkspace.shared.open(u)  // system default browser
+      }
+    }
+  }
+
+  /// Centroid of the ANC polygon for the active zoneset (or the first), as (lat, lon).
+  private func ancCenter() -> (lat: Double, lon: Double)? {
+    let activeID = zonesets.first(where: \.active)?.id
+    let zone = editZones.first { $0.id == activeID } ?? editZones.first
+    guard let geo = zone?.ancGeojson, !geo.isEmpty else { return nil }
+    return centroid(geo)
+  }
+
+  /// Average of every [lon, lat] position in a GeoJSON object → (lat, lon).
+  private func centroid(_ geojson: String) -> (lat: Double, lon: Double)? {
+    guard let data = geojson.data(using: .utf8),
+      let obj = try? JSONSerialization.jsonObject(with: data)
+    else { return nil }
+
+    var lats: [Double] = []
+    var lons: [Double] = []
+    func walk(_ any: Any) {
+      if let array = any as? [Any] {
+        if array.count >= 2, let x = array[0] as? Double, let y = array[1] as? Double,
+          abs(x) <= 180, abs(y) <= 90
+        {
+          lons.append(x)
+          lats.append(y)
+        } else {
+          array.forEach(walk)
+        }
+      } else if let dict = any as? [String: Any] {
+        dict.values.forEach(walk)
+      }
+    }
+    walk(obj)
+
+    guard !lats.isEmpty else { return nil }
+    return (lats.reduce(0, +) / Double(lats.count), lons.reduce(0, +) / Double(lons.count))
   }
 
   /// Open a zone's GeoJSON directly in geojson.io — rendered for viewing/editing
