@@ -94,6 +94,18 @@ final class StatusModel {
   // AirPods presence (the active output), checked locally via CoreAudio.
   var headphonesConnected = true
   private var lastSentHeadphones: Bool?
+  // Last-known AirPods kind: true = Pro, false = Max/other. Sticky across a
+  // disconnect so the disconnected/engaged glyph matches what was just in use;
+  // updated whenever AirPods are the active output (e.g. switch Pro → Max).
+  var headphonesArePro = false
+
+  // Soft pulse (0.5...1.0) for the menu-bar glyph while monitoring. Driven by a
+  // timer rather than a SwiftUI animation — MenuBarExtra(.window) tears if a
+  // repeatForever animation runs in the scene, so we animate by swapping the
+  // tinted NSImage's alpha each tick.
+  var menuPulse: Double = 1.0
+  @ObservationIgnored private var pulseTimer: Timer?
+  @ObservationIgnored private var pulseTick = 0
 
   // Zoneset editor state.
   var editZones: [EditableZone] = []
@@ -161,9 +173,40 @@ final class StatusModel {
 
       updateHeadphones()
       applyModeIfChanged(status.mode)
+      updateMenuPulse()
     } catch {
       reachable = false
+      updateMenuPulse()
     }
+  }
+
+  // Run the menu-bar pulse only while actively monitoring (session up, nothing
+  // inbound/engaged, headphones present — i.e. phase == .idle && active).
+  private func updateMenuPulse() {
+    if active && phase == .idle { startPulse() } else { stopPulse() }
+  }
+
+  private func startPulse() {
+    guard pulseTimer == nil else { return }
+    pulseTick = 0
+    let timer = Timer(timeInterval: 0.06, repeats: true) { [weak self] _ in
+      MainActor.assumeIsolated { self?.tickPulse() }
+    }
+    RunLoop.main.add(timer, forMode: .common)  // keep pulsing during menu tracking
+    pulseTimer = timer
+  }
+
+  private func tickPulse() {
+    pulseTick += 1
+    let t = Double(pulseTick) * 0.06
+    let s = (sin(t * 2 * .pi / 1.5) + 1) / 2  // 1.5s period, 0...1
+    menuPulse = 0.65 + 0.35 * s  // 0.65...1.0 — soft pulse that stays legible
+  }
+
+  private func stopPulse() {
+    pulseTimer?.invalidate()
+    pulseTimer = nil
+    menuPulse = 1.0
   }
 
   /// Detect whether AirPods are the active output; push the state to the service
@@ -171,6 +214,8 @@ final class StatusModel {
   private func updateHeadphones() {
     let connected = AncController.airPodsAreOutput()
     headphonesConnected = connected
+    // Remember the kind while connected (sticky across the next disconnect).
+    if let pro = AncController.airPodsOutputIsPro() { headphonesArePro = pro }
 
     guard connected != lastSentHeadphones else { return }
     lastSentHeadphones = connected

@@ -1,232 +1,654 @@
 import AppKit
-import Charts
 import SwiftUI
 
-struct PanelView: View {
-  let model: StatusModel
-  @State private var launchAtLogin = LoginItem.isEnabled
-  @State private var showEditor = false
+// MARK: - Design tokens (dark "Radar Console" + light "Live Map")
+
+extension NSColor {
+  /// 0xRRGGBB literal + optional alpha.
+  convenience init(hex: UInt, alpha: CGFloat = 1) {
+    self.init(
+      srgbRed: CGFloat((hex >> 16) & 0xff) / 255,
+      green: CGFloat((hex >> 8) & 0xff) / 255,
+      blue: CGFloat(hex & 0xff) / 255,
+      alpha: alpha)
+  }
+}
+
+extension Color {
+  /// 0xRRGGBB literal + optional alpha.
+  init(hex: UInt, alpha: Double = 1) {
+    self.init(
+      .sRGB,
+      red: Double((hex >> 16) & 0xff) / 255,
+      green: Double((hex >> 8) & 0xff) / 255,
+      blue: Double(hex & 0xff) / 255,
+      opacity: alpha)
+  }
+
+  /// A color that resolves to `light` or `dark` per the current appearance — the
+  /// asset-catalog-free equivalent of a Color Set (this app has no .xcassets, and
+  /// `swift build` doesn't compile one).
+  static func dynamic(light: NSColor, dark: NSColor) -> Color {
+    Color(
+      nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+      })
+  }
+
+  /// Same, taking hex literals: `.theme(light: 0x.., dark: 0x..)`.
+  static func theme(light: UInt, dark: UInt, lightAlpha: CGFloat = 1, darkAlpha: CGFloat = 1)
+    -> Color
+  {
+    dynamic(light: NSColor(hex: light, alpha: lightAlpha), dark: NSColor(hex: dark, alpha: darkAlpha))
+  }
+
+  /// Lift brightness (HSB) — for the top-lit gradient on "on" surfaces. Resolves in
+  /// the current appearance, so it tracks light/dark.
+  func lighten(_ amount: Double) -> Color {
+    let ns = (NSColor(self).usingColorSpace(.sRGB)) ?? .gray
+    var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+    ns.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+    return Color(hue: h, saturation: s, brightness: min(b + amount, 1), opacity: a)
+  }
+}
+
+enum Palette {
+  // Light = "Live Map" (warm sage ground, highway blue / park green / amber).
+  // Dark  = "Radar Console" (navy ground, cyan / green / amber).
+  static let panelTop = Color.theme(light: 0xEAEADF, dark: 0x173351)
+  static let panelBottom = Color.theme(light: 0xDCE0D1, dark: 0x0C1B2A)
+  static let ink = Color.theme(light: 0x2E312B, dark: 0xEAF2F8)
+  static let ink2 = Color.theme(light: 0x2E312B, dark: 0xEAF2F8, lightAlpha: 0.62, darkAlpha: 0.60)
+  static let ink3 = Color.theme(light: 0x2E312B, dark: 0xEAF2F8, lightAlpha: 0.42, darkAlpha: 0.38)
+  static let hairline = Color.theme(light: 0x2E312B, dark: 0xFFFFFF, lightAlpha: 0.08, darkAlpha: 0.09)
+  static let line = Color.theme(light: 0x2E312B, dark: 0xFFFFFF, lightAlpha: 0.14, darkAlpha: 0.055)
+  static let fill = Color.theme(light: 0x2E312B, dark: 0xFFFFFF, lightAlpha: 0.075, darkAlpha: 0.08)
+  static let accent = Color.theme(light: 0x3F7CC4, dark: 0x3AD6C8)
+  static let accentSoft = Color.theme(light: 0x3F7CC4, dark: 0x3AD6C8, lightAlpha: 0.14, darkAlpha: 0.16)
+  static let inbound = Color.theme(light: 0xE0961A, dark: 0xFFB648)
+  static let inboundSoft = Color.theme(light: 0xE0961A, dark: 0xFFB648, lightAlpha: 0.16, darkAlpha: 0.16)
+  static let go = Color.theme(light: 0x5D9150, dark: 0x5BE37A)
+  static let goSoft = Color.theme(light: 0x5D9150, dark: 0x5BE37A, lightAlpha: 0.16, darkAlpha: 0.16)
+  static let stop = Color.theme(light: 0xD05641, dark: 0xFF6F6B)
+  // Text on an accent fill: white on the light blue Start button, dark on cyan.
+  static let onAccent = Color.theme(light: 0xFFFFFF, dark: 0x04221E)
+
+  // Subtle ~168° diagonal so the whole surface reads less flat.
+  static let gradient = LinearGradient(
+    colors: [panelTop, panelBottom], startPoint: .topLeading, endPoint: .bottomTrailing)
+}
+
+extension Font {
+  static let adTitle = Font.system(.subheadline, design: .monospaced).weight(.semibold)
+  static let adScreen = Font.system(.callout, design: .monospaced).weight(.semibold)
+  static let adZone = Font.system(.callout, design: .monospaced)
+  static let adMono = Font.system(.caption2, design: .monospaced)
+}
+
+/// A small status indicator. `glow` makes it a "live" dot: core + soft outer glow +
+/// a translucent ring. Kept fully static — `MenuBarExtra(.window)` tears when a
+/// `repeatForever` animation runs inside it, so no ping/blink. `pulse` is retained
+/// for call-site compatibility but no longer animates.
+private struct StatusDot: View {
+  var color: Color
+  var glow = false
+  var pulse = false
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      header
-      Divider()
-      controls
-      if model.active && !model.headphonesConnected {
-        Label("AirPods not connected — monitoring paused (timer still running)", systemImage: "headphones")
-          .font(.caption2)
-          .foregroundStyle(.orange)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-      if model.history.contains(where: { $0 > 0 }) {
-        chart
-      }
-      Divider()
-      flights
-      Divider()
-      DataSource(model: model)
-      if model.provider == "fr24" {
-        CreditBar(used: model.creditsUsedMonth, budget: model.creditsBudgetMonth, model: model)
-      }
-      Divider()
-      TimingOffsets(model: model)
-      Divider()
-      zoneEditor
-      Divider()
-      footer
-    }
-    .padding(14)
-    .frame(width: 320)
-  }
-
-  // MARK: - Zone editor
-
-  private var zoneEditor: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Button {
-        showEditor.toggle()
-        if showEditor { Task { await model.loadZones() } }
-      } label: {
-        Label(showEditor ? "Done editing zones" : "Edit zones", systemImage: "slider.horizontal.3")
-          .font(.caption)
-      }
-      .buttonStyle(.borderless)
-
-      if showEditor {
-        if let err = model.editError {
-          Text(err)
-            .font(.caption2).foregroundStyle(.red)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-
-        ForEach(model.editZones) { zone in
-          ZoneEditRow(zone: zone, model: model)
-        }
-
-        Divider()
-        AddZoneForm(model: model)
-
-        Text("Draw one polygon in geojson.io, Copy it, then Paste into Monitor or ANC.")
-          .font(.caption2).foregroundStyle(.tertiary)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-    }
-  }
-
-  // MARK: - Header
-
-  private var header: some View {
-    HStack {
-      VStack(alignment: .leading, spacing: 2) {
-        Text("Air Defense").font(.headline)
-        Text(model.reachable ? statusLine : "service offline")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      }
-      Spacer()
-      modeBadge
-    }
-  }
-
-  private var statusLine: String {
-    model.active ? "monitoring · \(countdown) left · ~\(model.approxCredits) cr" : "idle"
-  }
-
-  private var modeBadge: some View {
-    let anc = model.mode == "anc"
-    return Text(anc ? "ANC" : "Transparency")
-      .font(.caption.bold())
-      .padding(.horizontal, 8)
-      .padding(.vertical, 4)
-      .background(anc ? Color.blue.opacity(0.2) : Color.green.opacity(0.2))
-      .foregroundStyle(anc ? .blue : .green)
-      .clipShape(Capsule())
-  }
-
-  private var countdown: String {
-    guard let ends = model.sessionEndsAt else { return "—" }
-    let remaining = max(0, ends - Int(Date().timeIntervalSince1970))
-    return "\(remaining / 3600)h \((remaining % 3600) / 60)m"
-  }
-
-  // MARK: - Controls
-
-  private var controls: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      if !model.reachable {
-        Text("service offline").font(.caption).foregroundStyle(.tertiary)
-      } else if model.zonesets.isEmpty {
-        Text("no zones configured").font(.caption).foregroundStyle(.tertiary)
-      } else {
-        ForEach(model.zonesets) { zone in
-          zoneRow(zone)
+    Circle()
+      .fill(color)
+      .frame(width: 9, height: 9)
+      .shadow(color: glow ? color.opacity(0.9) : .clear, radius: glow ? 5 : 0)
+      .overlay {
+        if glow {
+          Circle().stroke(color.opacity(0.35), lineWidth: 3).frame(width: 9, height: 9)
         }
       }
-    }
+  }
+}
+
+/// Pill buttons. `lit` = primary action (Start/Create): a top-lit gradient + 1px
+/// white top highlight + soft drop shadow. Flat (default) = secondary action
+/// (Stop): a `fill` surface with a hairline `line` ring.
+private struct PillButton: ButtonStyle {
+  let bg: Color
+  let fg: Color
+  var lit = false
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .font(.caption.weight(.semibold))
+      .lineLimit(1)
+      .fixedSize()
+      .foregroundStyle(fg)
+      .padding(.horizontal, 13)
+      .frame(height: 28)
+      .background(background)
+      .opacity(configuration.isPressed ? 0.85 : 1)
   }
 
-  // One Start 4h / Stop control per zoneset, with a live/idle indicator. Each
-  // zone runs an independent session (start the one matching the active runway).
-  private func zoneRow(_ zone: ZonesetStatus) -> some View {
-    HStack(spacing: 8) {
-      Circle()
-        .fill(zone.active ? Color.green : Color.secondary.opacity(0.4))
-        .frame(width: 8, height: 8)
-
-      VStack(alignment: .leading, spacing: 1) {
-        Text(zone.name).font(.subheadline)
-        Text(zone.active ? "monitoring · \(zoneCountdown(zone)) left" : "idle")
-          .font(.caption2)
-          .foregroundStyle(.secondary)
-      }
-
-      Spacer()
-
-      if zone.active {
-        Button { model.stop(zone.id) } label: {
-          Label("Stop", systemImage: "stop.fill")
-        }
-      } else {
-        Button { model.start(zone.id) } label: {
-          Label("Start 4h", systemImage: "play.fill")
-        }
-      }
-    }
-    .buttonStyle(.bordered)
-    .controlSize(.small)
-  }
-
-  private func zoneCountdown(_ zone: ZonesetStatus) -> String {
-    guard let ends = zone.endsAt else { return "—" }
-    let remaining = max(0, ends - Int(Date().timeIntervalSince1970))
-    return "\(remaining / 3600)h \((remaining % 3600) / 60)m"
-  }
-
-  // MARK: - Chart
-
-  private var chart: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text("Overflights (last hour, 5-min)").font(.caption).foregroundStyle(.secondary)
-      Chart(Array(model.history.enumerated()), id: \.offset) { index, count in
-        BarMark(x: .value("Bucket", index), y: .value("Flights", count))
-          .foregroundStyle(.blue)
-      }
-      .chartYAxis { AxisMarks(position: .leading) }
-      .chartXAxis(.hidden)
-      .frame(height: 70)
-    }
-  }
-
-  // MARK: - Flights
-
-  private var flights: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Text("Recent flights").font(.caption).foregroundStyle(.secondary)
-
-      if model.recent.isEmpty {
-        Text(model.active ? "none yet" : "start a session to monitor")
-          .font(.caption).foregroundStyle(.tertiary)
-      } else {
-        ScrollView {
-          VStack(alignment: .leading, spacing: 4) {
-            ForEach(model.recent.prefix(12)) { flight in
-              HStack {
-                Text(flight.callsign ?? "?").font(.caption.monospaced())
-                Spacer()
-                if let alt = flight.altFt {
-                  Text("\(Int(alt)) ft").font(.caption).foregroundStyle(.secondary)
-                }
-              }
-            }
-          }
-        }
-        .frame(maxHeight: 160)
-      }
-    }
-  }
-
-  // MARK: - Footer
-
-  private var footer: some View {
-    HStack {
-      Toggle("Launch at Login", isOn: $launchAtLogin)
-        .toggleStyle(.checkbox)
-        .font(.caption)
-        .onChange(of: launchAtLogin) { _, newValue in
-          launchAtLogin = LoginItem.setEnabled(newValue)
-        }
-      Spacer()
-      Button("Quit") { NSApplication.shared.terminate(nil) }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
+  @ViewBuilder private var background: some View {
+    let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+    if lit {
+      shape
+        .fill(LinearGradient(colors: [bg.lighten(0.10), bg], startPoint: .top, endPoint: .bottom))
+        .overlay(
+          shape
+            .stroke(.white.opacity(0.28), lineWidth: 1)
+            .blendMode(.plusLighter)
+            .mask(LinearGradient(colors: [.white, .clear], startPoint: .top, endPoint: .center)))
+        .shadow(color: .black.opacity(0.18), radius: 1.5, y: 1)
+    } else {
+      shape.fill(bg).overlay(shape.stroke(Palette.line, lineWidth: 1))
     }
   }
 }
 
-/// Monthly FR24 credit usage as a pace bar: remaining fills from the right, a
-/// hashmark marks how far through the month we are. If the filled (remaining)
-/// region reaches past the hashmark — i.e. used less than time elapsed — usage is
-/// on/under pace (green); otherwise it's running ahead (orange).
+/// Small chip buttons in the zone editor.
+private struct ChipButton: ButtonStyle {
+  var filled = false
+  var disabled = false
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .font(.adMono)
+      .foregroundStyle(disabled ? Palette.ink3 : (filled ? Palette.accent : Palette.ink2))
+      .padding(.horizontal, 10)
+      .frame(height: 26)
+      .background(
+        RoundedRectangle(cornerRadius: 7)
+          .fill(filled ? Palette.accentSoft : Palette.fill)
+          .overlay(RoundedRectangle(cornerRadius: 7).stroke(Palette.line, lineWidth: 1)))
+      .opacity(configuration.isPressed ? 0.8 : 1)
+  }
+}
+
+private func sectionLabel(_ text: String) -> some View {
+  Text(text.uppercased())
+    .font(.adMono)
+    .tracking(0.9)
+    .foregroundStyle(Palette.ink3)
+}
+
+// MARK: - Root
+
+struct PanelView: View {
+  let model: StatusModel
+  @State private var showSettings = false
+  @State private var showEditor = false
+
+  var body: some View {
+    content
+      .padding(15)
+      .frame(width: 340)
+      .background(Palette.gradient)
+      .tint(Palette.accent)
+  }
+
+  @ViewBuilder private var content: some View {
+    if showEditor {
+      ZoneEditorScreen(model: model, onSettings: { showEditor = false; showSettings = true })
+        { showEditor = false }
+    } else if showSettings {
+      SettingsScreen(model: model, onEditZones: { showSettings = false; showEditor = true })
+        { showSettings = false }
+    } else {
+      mainScreen
+    }
+  }
+
+  // MARK: Main
+
+  private var mainScreen: some View {
+    VStack(alignment: .leading, spacing: 13) {
+      Header(model: model)
+      StatusBanner(model: model)
+      watchZones
+      ActivityStrip(model: model)
+      Divider().overlay(Palette.hairline)
+      footer
+    }
+  }
+
+  private var watchZones: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      sectionLabel("Watch zones · LGA")
+        .padding(.bottom, 4)
+
+      if !model.reachable {
+        Text("service offline").font(.adMono).foregroundStyle(Palette.ink3).padding(.vertical, 8)
+      } else if model.zonesets.isEmpty {
+        Text("no zones configured").font(.adMono).foregroundStyle(Palette.ink3).padding(.vertical, 8)
+      } else {
+        ForEach(Array(model.zonesets.enumerated()), id: \.element.id) { index, zone in
+          if index > 0 { Rectangle().fill(Palette.hairline).frame(height: 1) }
+          ZoneRow(model: model, zone: zone)
+        }
+      }
+    }
+  }
+
+  private var footer: some View {
+    HStack(spacing: 4) {
+      FooterButton(title: "Settings", icon: "gearshape") { showSettings = true }
+      FooterButton(title: "Edit zones", icon: "map") { showEditor = true }
+      Spacer()
+      FooterButton(title: "Quit", icon: "power", hoverTint: Palette.stop) {
+        NSApplication.shared.terminate(nil)
+      }
+    }
+  }
+}
+
+// MARK: - Header
+
+private struct Header: View {
+  let model: StatusModel
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 11) {
+      RoundedRectangle(cornerRadius: 7, style: .continuous)
+        .fill(Palette.accentSoft)
+        .overlay(
+          RoundedRectangle(cornerRadius: 7, style: .continuous)
+            .stroke(Palette.accent.opacity(0.42), lineWidth: 0.5))
+        .frame(width: 30, height: 30)
+        .overlay(
+          Image(systemName: "dot.radiowaves.up.forward")
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(Palette.accent))
+
+      VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          Text("AIR DEFENSE")
+            .font(.adTitle).tracking(0.4)
+            .foregroundStyle(Palette.ink)
+          Spacer(minLength: 8)
+          ModeBadge(model: model)
+        }
+        statusLine.lineLimit(1)
+      }
+    }
+  }
+
+  private var statusLine: some View {
+    let credits = " · ~\(model.approxCredits) cr"
+    let line: Text
+    if !model.reachable {
+      line = Text("service offline").foregroundStyle(Palette.ink2)
+    } else if model.active && !model.headphonesConnected {
+      line = Text("paused · ").foregroundStyle(Palette.ink2)
+        + Text("\(countdown(model.sessionEndsAt)) left").foregroundStyle(Palette.inbound)
+        + Text(credits).foregroundStyle(Palette.ink2)
+    } else if model.active {
+      line = Text("monitoring · ").foregroundStyle(Palette.ink2)
+        + Text("\(countdown(model.sessionEndsAt)) left").foregroundStyle(Palette.ink)
+        + Text(credits).foregroundStyle(Palette.ink2)
+    } else {
+      line = Text("standby · ready").foregroundStyle(Palette.ink2)
+        + Text(credits).foregroundStyle(Palette.ink2)
+    }
+    return line.font(.adMono).monospacedDigit()
+  }
+}
+
+private struct ModeBadge: View {
+  let model: StatusModel
+
+  var body: some View {
+    let paused = model.active && !model.headphonesConnected
+    let (text, color, soft, pulse): (String, Color, Color, Bool) =
+      paused
+      ? ("ANC Off", Palette.ink3, Palette.line, false)
+      : model.mode == "anc"
+        ? ("Noise Cancellation", Palette.accent, Palette.accentSoft, true)
+        : ("Transparency", Palette.go, Palette.goSoft, false)
+
+    return HStack(spacing: 6) {
+      StatusDot(color: color, pulse: pulse)
+        .frame(width: 6, height: 6)
+      Text(text.uppercased())
+        .font(.system(.caption2, design: .monospaced).weight(.semibold))
+        .tracking(0.5)
+        .foregroundStyle(color)
+        .lineLimit(1)
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 6)
+    .background(Capsule().fill(soft))
+    .overlay(Capsule().stroke(color.opacity(0.42), lineWidth: 0.5))
+    .fixedSize()
+  }
+}
+
+// MARK: - Status banner
+
+private struct StatusBanner: View {
+  let model: StatusModel
+
+  var body: some View {
+    switch model.phase {
+    case .disconnected:
+      banner(
+        icon: "headphones", tint: Palette.inbound, bg: Palette.inboundSoft,
+        strong: "AirPods not connected", rest: " — monitoring paused. Timer still running.")
+    case .pending:
+      banner(
+        icon: "bolt.fill", tint: Palette.accent, bg: Palette.accentSoft,
+        strong: "Inbound", rest: " — LGA arrival on vector. Cancellation arming.")
+    default:
+      EmptyView()
+    }
+  }
+
+  private func banner(icon: String, tint: Color, bg: Color, strong: String, rest: String)
+    -> some View
+  {
+    HStack(alignment: .top, spacing: 8) {
+      Image(systemName: icon).font(.caption).foregroundStyle(tint)
+      (Text(strong).font(.caption.weight(.semibold)) + Text(rest).font(.caption))
+        .foregroundStyle(tint)
+        .fixedSize(horizontal: false, vertical: true)
+      Spacer(minLength: 0)
+    }
+    .padding(.horizontal, 11)
+    .padding(.vertical, 9)
+    .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(bg))
+    .overlay(
+      RoundedRectangle(cornerRadius: 9, style: .continuous)
+        .stroke(tint.opacity(0.30), lineWidth: 0.5))
+  }
+}
+
+// MARK: - Watch-zone row
+
+private struct ZoneRow: View {
+  let model: StatusModel
+  let zone: ZonesetStatus
+
+  var body: some View {
+    let armed = zone.active && model.phase == .pending
+    let paused = zone.active && model.phase == .disconnected
+    let dotColor = !zone.active ? Palette.ink3 : (armed || paused ? Palette.inbound : Palette.accent)
+    let (name, qualifier) = splitName(zone.name)
+
+    HStack(spacing: 11) {
+      // Monitoring and armed both get the live glow+ping (armed in amber); paused
+      // and idle stay flat.
+      StatusDot(color: dotColor, glow: zone.active && !paused)
+
+      VStack(alignment: .leading, spacing: 2) {
+        (Text(name).foregroundStyle(Palette.ink)
+          + Text(qualifier.map { " \($0)" } ?? "").foregroundStyle(Palette.ink2))
+          .font(.adZone)
+        stateLine(armed: armed, paused: paused)
+      }
+
+      Spacer(minLength: 6)
+
+      if zone.active {
+        Button { model.stop(zone.id) } label: { Label("Stop", systemImage: "stop.fill") }
+          .buttonStyle(PillButton(bg: Palette.fill, fg: Palette.ink))
+      } else {
+        Button { model.start(zone.id) } label: { Label("Start 4h", systemImage: "play.fill") }
+          .buttonStyle(PillButton(bg: Palette.accent, fg: Palette.onAccent, lit: true))
+      }
+    }
+    .padding(.vertical, 11)
+  }
+
+  private func stateLine(armed: Bool, paused: Bool) -> some View {
+    let text: Text
+    if !zone.active {
+      text = Text("idle").foregroundStyle(Palette.ink3)
+    } else if armed {
+      text = Text("armed").foregroundStyle(Palette.inbound)
+    } else if paused {
+      text = Text("paused · ").foregroundStyle(Palette.ink2)
+        + Text("\(countdown(zone.endsAt)) left").foregroundStyle(Palette.inbound)
+    } else {
+      text = Text("monitoring · ").foregroundStyle(Palette.ink2)
+        + Text("\(countdown(zone.endsAt)) left").foregroundStyle(Palette.accent)
+    }
+    return text.font(.adMono).monospacedDigit()
+  }
+
+  /// "Departures (banking)" -> ("Departures", "(banking)").
+  private func splitName(_ name: String) -> (String, String?) {
+    guard name.hasSuffix(")"), let open = name.range(of: " (") else { return (name, nil) }
+    return (String(name[..<open.lowerBound]), String(name[open.lowerBound...]).trimmingCharacters(in: .whitespaces))
+  }
+}
+
+// MARK: - Activity strip + recent flights
+
+private struct ActivityStrip: View {
+  let model: StatusModel
+  @State private var showFlights = false
+
+  var body: some View {
+    if model.reachable {
+      VStack(alignment: .leading, spacing: 9) {
+        HStack {
+          sectionLabel("Overflights")
+          Spacer()
+          (Text("\(model.history.reduce(0, +))").foregroundStyle(Palette.ink)
+            + Text(" · last hr").foregroundStyle(Palette.ink3))
+            .font(.adMono).monospacedDigit()
+        }
+
+        bars
+
+        if !model.recent.isEmpty {
+          Button { withAnimation(.easeInOut(duration: 0.18)) { showFlights.toggle() } } label: {
+            HStack(spacing: 4) {
+              Image(systemName: showFlights ? "chevron.down" : "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+              Text("Recent flights").font(.adMono)
+            }
+            .foregroundStyle(Palette.ink3)
+          }
+          .buttonStyle(.plain)
+
+          if showFlights { flightList }
+        }
+      }
+    }
+  }
+
+  private var bars: some View {
+    let maxV = max(model.history.max() ?? 1, 1)
+    return HStack(alignment: .bottom, spacing: 4) {
+      ForEach(Array(model.history.enumerated()), id: \.offset) { index, value in
+        let hot = index == model.history.count - 1 && model.phase == .pending
+        RoundedRectangle(cornerRadius: 2, style: .continuous)
+          .fill(barFill(value: value, hot: hot))
+          .frame(height: value == 0 ? 6 : max(10, 56 * Double(value) / Double(maxV)))
+      }
+    }
+    .frame(height: 56, alignment: .bottom)
+  }
+
+  // Idle = faint flat stub; active = top-lit gradient fading to 45% at the base;
+  // the current bucket turns amber ("hot") while a plane is inbound.
+  private func barFill(value: Int, hot: Bool) -> LinearGradient {
+    if value == 0 {
+      return LinearGradient(colors: [Palette.fill, Palette.fill], startPoint: .top, endPoint: .bottom)
+    }
+    let c = hot ? Palette.inbound : Palette.accent
+    return LinearGradient(colors: [c, c.opacity(0.45)], startPoint: .top, endPoint: .bottom)
+  }
+
+  private var flightList: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 5) {
+        ForEach(model.recent.prefix(12)) { flight in
+          HStack {
+            Text(flight.callsign ?? "?").font(.adMono).foregroundStyle(Palette.ink)
+            Spacer()
+            if let alt = flight.altFt {
+              Text("\(Int(alt)) ft").font(.adMono).foregroundStyle(Palette.ink2)
+            }
+          }
+        }
+      }
+    }
+    .frame(maxHeight: 150)
+  }
+}
+
+// MARK: - Footer button
+
+private struct FooterButton: View {
+  let title: String
+  let icon: String
+  var hoverTint: Color = Palette.ink
+  let action: () -> Void
+  @State private var hover = false
+
+  var body: some View {
+    Button(action: action) {
+      Label(title, systemImage: icon)
+        .font(.caption)
+        .foregroundStyle(hover ? hoverTint : Palette.ink2)
+    }
+    .buttonStyle(.plain)
+    .padding(.horizontal, 9)
+    .padding(.vertical, 6)
+    .background(RoundedRectangle(cornerRadius: 6).fill(hover ? Color.white.opacity(0.04) : .clear))
+    .onHover { hover = $0 }
+  }
+}
+
+/// Back-chevron screen header used by Settings and the zone editor.
+private struct ScreenHeader: View {
+  let title: String
+  let onBack: () -> Void
+
+  var body: some View {
+    Button(action: onBack) {
+      HStack(spacing: 7) {
+        Image(systemName: "chevron.left").font(.system(size: 13, weight: .semibold))
+        Text(title).font(.adScreen)
+      }
+      .foregroundStyle(Palette.ink)
+    }
+    .buttonStyle(.plain)
+  }
+}
+
+// MARK: - Settings
+
+private struct SettingsScreen: View {
+  let model: StatusModel
+  let onEditZones: () -> Void
+  let onBack: () -> Void
+
+  @State private var launchAtLogin = LoginItem.isEnabled
+  @AppStorage("autoPauseWithoutAirPods") private var autoPause = true
+
+  init(model: StatusModel, onEditZones: @escaping () -> Void, _ onBack: @escaping () -> Void) {
+    self.model = model
+    self.onEditZones = onEditZones
+    self.onBack = onBack
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      ScreenHeader(title: "Settings", onBack: onBack)
+      Divider().overlay(Palette.hairline)
+
+      TimingOffsets(model: model)
+      Divider().overlay(Palette.hairline)
+
+      toggleRow(
+        "Auto-pause without AirPods", subtitle: "Hold monitoring when no buds are connected",
+        isOn: $autoPause)
+      toggleRow(
+        "Launch at Login", subtitle: "Start Air Defense when you sign in", isOn: $launchAtLogin
+      )
+      .onChange(of: launchAtLogin) { _, newValue in launchAtLogin = LoginItem.setEnabled(newValue) }
+
+      Divider().overlay(Palette.hairline)
+      DataSource(model: model)
+      if model.provider == "fr24" {
+        CreditBar(used: model.creditsUsedMonth, budget: model.creditsBudgetMonth, model: model)
+      }
+
+      Divider().overlay(Palette.hairline)
+      HStack(spacing: 4) {
+        FooterButton(title: "Edit zones", icon: "map", action: onEditZones)
+        Spacer()
+        FooterButton(title: "Quit", icon: "power", hoverTint: Palette.stop) {
+          NSApplication.shared.terminate(nil)
+        }
+      }
+    }
+  }
+
+  private func toggleRow(_ title: String, subtitle: String, isOn: Binding<Bool>) -> some View {
+    HStack(alignment: .top) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title).font(.callout.weight(.medium)).foregroundStyle(Palette.ink)
+        Text(subtitle).font(.adMono).foregroundStyle(Palette.ink2)
+      }
+      Spacer()
+      Toggle("", isOn: isOn).labelsHidden().toggleStyle(.switch).tint(Palette.go)
+    }
+  }
+}
+
+// MARK: - ANC timing offsets
+
+/// Two sliders that nudge the computed ANC engage/release times (±15s). The
+/// service's ETA estimate is unchanged; these are added on top. Persists on
+/// slider release.
+private struct TimingOffsets: View {
+  let model: StatusModel
+  @State private var engage: Double
+  @State private var release: Double
+
+  init(model: StatusModel) {
+    self.model = model
+    _engage = State(initialValue: model.engageDelta)
+    _release = State(initialValue: model.releaseDelta)
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Label("ANC timing offset", systemImage: "bolt.fill")
+        .font(.callout.weight(.semibold)).foregroundStyle(Palette.ink)
+      Text(
+        "Lead the engage so cancellation is already on as the jet crosses your zone; lag the release so you don't surface into the tail of the roar."
+      )
+      .font(.adMono).foregroundStyle(Palette.ink2)
+      .fixedSize(horizontal: false, vertical: true)
+
+      offsetRow("Engage", value: $engage, tint: Palette.accent)
+      offsetRow("Release", value: $release, tint: Palette.inbound)
+    }
+  }
+
+  private func offsetRow(_ label: String, value: Binding<Double>, tint: Color) -> some View {
+    HStack(spacing: 8) {
+      Text(label).font(.adMono).foregroundStyle(Palette.ink2)
+        .frame(width: 52, alignment: .leading)
+      Slider(value: value, in: -15...15, step: 1) { editing in
+        if !editing { model.setAncOffsets(engage: engage, release: release) }
+      }
+      .tint(tint)
+      Text(format(value.wrappedValue)).font(.adMono).monospacedDigit().foregroundStyle(tint)
+        .frame(width: 38, alignment: .trailing)
+    }
+  }
+
+  private func format(_ v: Double) -> String {
+    let n = Int(v)
+    return n > 0 ? "+\(n)s" : "\(n)s"
+  }
+}
+
+// MARK: - Data source
+
 /// Choose the flight-data provider for all zones. The free ADS-B feeds need no
 /// key; FlightRadar24 needs an API key (entered here → stored in the Keychain).
 private struct DataSource: View {
@@ -240,9 +662,9 @@ private struct DataSource: View {
   ]
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
+    VStack(alignment: .leading, spacing: 6) {
       HStack {
-        Text("Data source").font(.caption).foregroundStyle(.secondary)
+        sectionLabel("Data source")
         Spacer()
         Picker("", selection: Binding(get: { model.provider }, set: { model.setProvider($0) })) {
           ForEach(providers, id: \.0) { Text($0.1).tag($0.0) }
@@ -253,23 +675,28 @@ private struct DataSource: View {
       if model.provider == "fr24" {
         HStack(spacing: 6) {
           Image(systemName: model.fr24KeyPresent ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-            .font(.caption2).foregroundStyle(model.fr24KeyPresent ? .green : .orange)
+            .font(.adMono).foregroundStyle(model.fr24KeyPresent ? Palette.go : Palette.inbound)
           SecureField(model.fr24KeyPresent ? "Replace API key…" : "Paste FR24 API key", text: $keyText)
-            .textFieldStyle(.roundedBorder).font(.caption2)
+            .textFieldStyle(.roundedBorder).font(.adMono)
           Button("Save") {
             let k = keyText.trimmingCharacters(in: .whitespacesAndNewlines)
             if !k.isEmpty { model.setFR24Key(k); keyText = "" }
           }
-          .font(.caption2).disabled(keyText.isEmpty)
+          .font(.adMono).disabled(keyText.isEmpty)
         }
-        Text("Billed per flight; keep monitor zones small.").font(.caption2).foregroundStyle(.secondary)
+        Text("Billed per flight; keep monitor zones small.").font(.adMono).foregroundStyle(Palette.ink2)
       } else {
-        Text("Free ADS-B — no API key, no credits used.").font(.caption2).foregroundStyle(.secondary)
+        Text("Free ADS-B — no API key, no credits used.").font(.adMono).foregroundStyle(Palette.ink2)
       }
     }
   }
 }
 
+// MARK: - FR24 credit pace bar
+
+/// Monthly FR24 credit usage as a pace bar: remaining fills from the right, a
+/// hashmark marks how far through the cycle we are. On/under pace = green,
+/// running ahead = amber.
 private struct CreditBar: View {
   let used: Int?
   let budget: Int
@@ -285,25 +712,28 @@ private struct CreditBar: View {
     let elapsed = cycleElapsed(resetDay: model.billingResetDay)
     let onPace = usedFrac <= elapsed
 
-    VStack(alignment: .leading, spacing: 3) {
+    VStack(alignment: .leading, spacing: 4) {
       HStack {
-        Text(cycleLabel(resetDay: model.billingResetDay)).font(.caption2).foregroundStyle(.secondary)
+        Text(cycleLabel(resetDay: model.billingResetDay)).font(.adMono).foregroundStyle(Palette.ink2)
         Spacer()
-        if let used { Text("\(remaining(used).formatted()) left").font(.caption2.monospaced()) }
+        if let used {
+          Text("\(remaining(used).formatted()) left").font(.adMono).monospacedDigit()
+            .foregroundStyle(Palette.ink)
+        }
         Text(used == nil ? "—" : "\(used!.formatted()) / \(budget.formatted())")
-          .font(.caption2.monospaced()).foregroundStyle(.secondary)
+          .font(.adMono).monospacedDigit().foregroundStyle(Palette.ink2)
         Button(syncing ? "Cancel" : "Sync") { syncing.toggle() }
-          .buttonStyle(.plain).font(.caption2).foregroundStyle(.tint)
+          .buttonStyle(.plain).font(.adMono).foregroundStyle(Palette.accent)
       }
 
       GeometryReader { geo in
         let w = geo.size.width
         ZStack(alignment: .leading) {
-          Capsule().fill(Color.secondary.opacity(0.18))
-          Capsule().fill(onPace ? Color.green : Color.orange)
+          Capsule().fill(Palette.fill)
+          Capsule().fill(onPace ? Palette.go : Palette.inbound)
             .frame(width: w * remainFrac)
             .frame(maxWidth: .infinity, alignment: .trailing)
-          Rectangle().fill(Color.primary.opacity(0.75))
+          Rectangle().fill(Palette.ink.opacity(0.75))
             .frame(width: 1.5)
             .offset(x: w * elapsed)
         }
@@ -314,30 +744,26 @@ private struct CreditBar: View {
     }
   }
 
-  // Enter the FR24 dashboard's remaining balance + the billing-cycle reset day
-  // (a "remaining" snapshot is only meaningful against a known cycle).
   private var syncForm: some View {
     VStack(alignment: .leading, spacing: 4) {
       HStack(spacing: 6) {
-        Text("Resets on day").font(.caption2).foregroundStyle(.secondary)
+        Text("Resets on day").font(.adMono).foregroundStyle(Palette.ink2)
         TextField("1–31", text: $resetDayText)
-          .textFieldStyle(.roundedBorder).font(.caption2.monospaced()).frame(width: 44)
+          .textFieldStyle(.roundedBorder).font(.adMono).monospacedDigit().frame(width: 44)
           .onSubmit(applyResetDay)
-        Text("of each month").font(.caption2).foregroundStyle(.secondary)
+        Text("of each month").font(.adMono).foregroundStyle(Palette.ink2)
       }
       HStack(spacing: 6) {
-        Text("FR24 remaining:").font(.caption2).foregroundStyle(.secondary)
+        Text("FR24 remaining:").font(.adMono).foregroundStyle(Palette.ink2)
         TextField("e.g. 54239", text: $remainingText)
-          .textFieldStyle(.roundedBorder).font(.caption2.monospaced()).frame(width: 80)
+          .textFieldStyle(.roundedBorder).font(.adMono).monospacedDigit().frame(width: 80)
         Button("Set") {
           applyResetDay()
-          if let n = Int(remainingText.filter(\.isNumber)) {
-            model.seedCredits(remaining: n)
-          }
+          if let n = Int(remainingText.filter(\.isNumber)) { model.seedCredits(remaining: n) }
           syncing = false
           remainingText = ""
         }
-        .font(.caption2)
+        .font(.adMono)
       }
     }
     .onAppear { resetDayText = String(model.billingResetDay) }
@@ -355,8 +781,7 @@ private struct CreditBar: View {
     resetDay == 1 ? "Credits this month" : "Credits this cycle"
   }
 
-  // Fraction of the current billing cycle elapsed. The cycle is a monthly window
-  // anchored on `resetDay`; mirrors CreditLedger.cycle_start on the service.
+  /// Fraction of the current billing cycle elapsed (mirrors CreditLedger.cycle_start).
   private func cycleElapsed(resetDay: Int) -> Double {
     let cal = Calendar.current
     let now = Date()
@@ -367,7 +792,6 @@ private struct CreditBar: View {
     return min(1, max(0, now.timeIntervalSince(start) / span))
   }
 
-  // Start of the billing cycle containing `date`, clamping resetDay to month length.
   private func cycleStart(_ date: Date, resetDay: Int, cal: Calendar) -> Date {
     let day = cal.component(.day, from: date)
     let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: date)) ?? date
@@ -383,45 +807,54 @@ private struct CreditBar: View {
   }
 }
 
-/// Two sliders that nudge the computed ANC engage/release times (±15s). The
-/// service's ETA estimate is unchanged; these are added on top. Persists on
-/// slider release.
-private struct TimingOffsets: View {
-  let model: StatusModel
-  @State private var engage: Double
-  @State private var release: Double
+// MARK: - Zone editor
 
-  init(model: StatusModel) {
+private struct ZoneEditorScreen: View {
+  let model: StatusModel
+  let onSettings: () -> Void
+  let onBack: () -> Void
+
+  init(model: StatusModel, onSettings: @escaping () -> Void, _ onBack: @escaping () -> Void) {
     self.model = model
-    _engage = State(initialValue: model.engageDelta)
-    _release = State(initialValue: model.releaseDelta)
+    self.onSettings = onSettings
+    self.onBack = onBack
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text("ANC timing offset").font(.caption).foregroundStyle(.secondary)
-      offsetRow("On", value: $engage)
-      offsetRow("Off", value: $release)
-    }
-  }
+    VStack(alignment: .leading, spacing: 12) {
+      ScreenHeader(title: "Done · Watch zones", onBack: onBack)
+      Divider().overlay(Palette.hairline)
 
-  private func offsetRow(_ label: String, value: Binding<Double>) -> some View {
-    HStack(spacing: 6) {
-      Text(label).font(.caption2).foregroundStyle(.secondary).frame(width: 26, alignment: .leading)
-      Slider(value: value, in: -15...15, step: 1) { editing in
-        if !editing { model.setAncOffsets(engage: engage, release: release) }
+      if let err = model.editError {
+        Text(err).font(.adMono).foregroundStyle(Palette.stop)
+          .fixedSize(horizontal: false, vertical: true)
       }
-      Text(format(value.wrappedValue)).font(.caption2.monospaced()).frame(width: 36, alignment: .trailing)
-    }
-  }
 
-  private func format(_ v: Double) -> String {
-    let n = Int(v)
-    return n > 0 ? "+\(n)s" : "\(n)s"
+      ForEach(Array(model.editZones.enumerated()), id: \.element.id) { index, zone in
+        if index > 0 { Rectangle().fill(Palette.hairline).frame(height: 1) }
+        ZoneEditRow(zone: zone, model: model)
+      }
+
+      Divider().overlay(Palette.hairline)
+      AddZoneForm(model: model)
+
+      Divider().overlay(Palette.hairline)
+      HStack(spacing: 4) {
+        FooterButton(title: "Settings", icon: "gearshape", action: onSettings)
+        Spacer()
+        FooterButton(title: "Quit", icon: "power", hoverTint: Palette.stop) {
+          NSApplication.shared.terminate(nil)
+        }
+      }
+    }
+    // Load on appear so the list is fresh regardless of how we got here
+    // (main dashboard or Settings → Edit zones).
+    .task { await model.loadZones() }
   }
 }
 
-/// One editable zoneset: rename (on submit), copy/paste each zone's GeoJSON, delete.
+/// One editable zoneset: rename (on submit), set/open each zone's GeoJSON, poll
+/// cadence, delete.
 private struct ZoneEditRow: View {
   let zone: EditableZone
   let model: StatusModel
@@ -439,35 +872,39 @@ private struct ZoneEditRow: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      HStack {
+    VStack(alignment: .leading, spacing: 7) {
+      HStack(spacing: 9) {
+        StatusDot(
+          color: model.zonesets.first { $0.id == zone.id }?.active == true
+            ? Palette.accent : Palette.ink3,
+          glow: model.zonesets.first { $0.id == zone.id }?.active == true)
         TextField("name", text: $name)
-          .textFieldStyle(.roundedBorder)
+          .textFieldStyle(.roundedBorder).font(.adZone)
           .focused($focus, equals: .name)
           .onSubmit { commitName() }
         Button(role: .destructive) {
           Task { await model.deleteZone(zone.id) }
         } label: {
-          Image(systemName: "trash")
+          Image(systemName: "trash").foregroundStyle(Palette.ink2)
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
       }
 
       slotRow("Monitor", geojson: zone.monitorGeojson, slot: .monitor)
       slotRow("ANC", geojson: zone.ancGeojson, slot: .anc)
 
       HStack(spacing: 6) {
-        Text("Poll every").font(.caption2).foregroundStyle(.secondary)
+        sectionLabel("Poll")
+        Text("every").font(.adMono).foregroundStyle(Palette.ink2)
         TextField("default", text: $pollSeconds)
-          .frame(width: 44)
+          .textFieldStyle(.roundedBorder).font(.adMono).monospacedDigit().frame(width: 50)
           .focused($focus, equals: .poll)
           .onSubmit { commitPoll() }
-        Text("s (blank = global)").font(.caption2).foregroundStyle(.secondary)
+        Text("s").font(.adMono).foregroundStyle(Palette.ink2)
+        Text("blank = global").font(.adMono).foregroundStyle(Palette.ink3)
       }
-      .controlSize(.small)
     }
-    .padding(.vertical, 2)
-    // Save when a field loses focus (or on Return) so edits aren't lost.
+    .padding(.vertical, 4)
     .onChange(of: focus) { old, _ in
       if old == .name { commitName() }
       if old == .poll { commitPoll() }
@@ -488,12 +925,22 @@ private struct ZoneEditRow: View {
 
   private func slotRow(_ label: String, geojson: String, slot: ZoneSlot) -> some View {
     HStack(spacing: 6) {
-      Text(label).font(.caption2).foregroundStyle(.secondary).frame(width: 56, alignment: .leading)
-      Button("Open") { model.openInGeojsonIO(geojson) }
+      sectionLabel(label).frame(width: 56, alignment: .leading)
+      if geojson.isEmpty {
+        Button("Open") { model.openInGeojsonIO(geojson) }.buttonStyle(ChipButton())
+      } else {
+        Button { model.openInGeojsonIO(geojson) } label: {
+          HStack(spacing: 5) {
+            Circle().fill(Palette.accent).frame(width: 6, height: 6)
+            Text("Polygon set")
+          }
+        }
+        .buttonStyle(ChipButton(filled: true))
+      }
       Button("Paste") { Task { await model.pasteZone(zone.id, slot: slot) } }
+        .buttonStyle(ChipButton())
+      Spacer(minLength: 0)
     }
-    .controlSize(.small)
-    .buttonStyle(.bordered)
   }
 }
 
@@ -505,17 +952,20 @@ private struct AddZoneForm: View {
   @State private var anc: String?
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text("Add a zone").font(.caption).foregroundStyle(.secondary)
-      TextField("name", text: $name).textFieldStyle(.roundedBorder)
+    VStack(alignment: .leading, spacing: 8) {
+      sectionLabel("Add a zone")
+      TextField("name — e.g. Final approach", text: $name)
+        .textFieldStyle(.roundedBorder).font(.adZone)
 
       HStack(spacing: 6) {
         Button(monitor == nil ? "Paste Monitor" : "Monitor ✓") {
           monitor = NSPasteboard.general.string(forType: .string)
         }
+        .buttonStyle(ChipButton(filled: monitor != nil))
         Button(anc == nil ? "Paste ANC" : "ANC ✓") {
           anc = NSPasteboard.general.string(forType: .string)
         }
+        .buttonStyle(ChipButton(filled: anc != nil))
         Spacer()
         Button("Create") {
           Task {
@@ -526,10 +976,26 @@ private struct AddZoneForm: View {
             }
           }
         }
-        .disabled(name.isEmpty || monitor == nil || anc == nil)
+        .buttonStyle(PillButton(bg: canCreate ? Palette.accent : Palette.fill, fg: canCreate ? Palette.onAccent : Palette.ink3, lit: canCreate))
+        .disabled(!canCreate)
       }
-      .controlSize(.small)
-      .buttonStyle(.bordered)
+
+      (Text("Draw one polygon on ").foregroundStyle(Palette.ink3)
+        + Text("geojson.io").foregroundStyle(Palette.accent)
+        + Text(", copy it, then paste into Monitor or ANC.").foregroundStyle(Palette.ink3))
+        .font(.adMono)
+        .fixedSize(horizontal: false, vertical: true)
     }
   }
+
+  private var canCreate: Bool { !name.isEmpty && monitor != nil && anc != nil }
+}
+
+// MARK: - Shared helpers
+
+/// "3h 37m" remaining until a unix-seconds deadline.
+func countdown(_ endsAt: Int?) -> String {
+  guard let ends = endsAt else { return "—" }
+  let remaining = max(0, ends - Int(Date().timeIntervalSince1970))
+  return "\(remaining / 3600)h \((remaining % 3600) / 60)m"
 }

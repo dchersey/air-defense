@@ -30,6 +30,16 @@ enum AncController {
     return name.range(of: "airpods", options: .caseInsensitive) != nil
   }
 
+  /// Whether the active AirPods output is a Pro model (vs Max/other), so the UI can
+  /// pick the matching glyph. `nil` when AirPods aren't the current output (caller
+  /// should keep the last-known kind).
+  static func airPodsOutputIsPro() -> Bool? {
+    guard let name = defaultOutputDeviceName(),
+      name.range(of: "airpods", options: .caseInsensitive) != nil
+    else { return nil }
+    return name.range(of: "pro", options: .caseInsensitive) != nil
+  }
+
   private static func defaultOutputDeviceName() -> String? {
     var deviceID = AudioDeviceID(0)
     var size = UInt32(MemoryLayout<AudioDeviceID>.size)
