@@ -23,6 +23,11 @@ struct ZonesetStatus: Codable, Identifiable {
   let name: String
   let active: Bool
   let endsAt: Int?
+  // Per-zone live state for the UI: phase ("monitoring"/"armed"/"engaged"/"idle"),
+  // the soonest ANC-engage time, and the count of active intercepts.
+  let phase: String?
+  let interceptAt: Int?
+  let inbound: Int?
 }
 
 /// A zoneset as seen by the editor — GeoJSON kept as opaque strings (the backend
@@ -64,6 +69,9 @@ struct StatusResponse: Codable {
   let polls: Int
   let approxCredits: Int
   let zonesets: [ZonesetStatus]
+  // Soonest inbound (for the banner): when ANC engages + the flight's route label.
+  let inboundAt: Int?
+  let inboundRoute: String?
   let recent: [Flight]
   let history: [Int]
 }
@@ -82,6 +90,9 @@ final class StatusModel {
   var approxCredits = 0
   var zonesets: [ZonesetStatus] = []
   var recent: [Flight] = []
+  // Soonest inbound for the banner (engage time + route label).
+  var inboundAt: Int?
+  var inboundRoute: String?
   var history: [Int] = []
   var reachable = false
 
@@ -189,6 +200,8 @@ final class StatusModel {
       polls = status.polls
       approxCredits = status.approxCredits
       zonesets = status.zonesets
+      inboundAt = status.inboundAt
+      inboundRoute = status.inboundRoute
       recent = status.recent
       history = status.history
       reachable = true

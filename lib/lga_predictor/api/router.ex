@@ -223,6 +223,8 @@ defmodule LgaPredictor.API.Router do
       polls: status.polls,
       approx_credits: status.approx_credits,
       zonesets: status.zonesets,
+      inbound_at: status.inbound_at,
+      inbound_route: route_label(status.inbound_callsign),
       recent: History.recent(50) |> Enum.map(&with_route/1),
       # 12 buckets x 5 min = last hour of trigger counts, oldest -> newest
       history: History.counts_per_bucket(300, buckets: 12)
@@ -234,6 +236,18 @@ defmodule LgaPredictor.API.Router do
     if Process.whereis(LgaPredictor.CreditLedger),
       do: LgaPredictor.CreditLedger.month_to_date().used,
       else: nil
+  end
+
+  # "ORIG → DEST" for a callsign (for the inbound banner), or nil if no key / not
+  # resolved / no route.
+  defp route_label(callsign) do
+    with true <- is_binary(callsign) and callsign != "",
+         true <- Process.whereis(LgaPredictor.Routes) != nil,
+         {:ok, origin, dest} <- LgaPredictor.Routes.get(callsign) do
+      "#{origin} → #{dest}"
+    else
+      _ -> nil
+    end
   end
 
   # Enrich a recent-flight event with its airport route (origin/dest IATA) from the

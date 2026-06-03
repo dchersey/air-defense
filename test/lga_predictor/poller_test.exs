@@ -94,6 +94,18 @@ defmodule LgaPredictor.PollerTest do
     assert Actuator.mode() == :anc
   end
 
+  test "tracks intercepts for the UI (per-zone phase + inbound count)" do
+    start([])
+    :ok = Poller.start_session()
+    Process.sleep(80)
+
+    status = Poller.status()
+    zone = Enum.find(status.zonesets, & &1.active)
+    assert zone.inbound >= 1
+    assert zone.phase in ["armed", "engaged"]
+    assert Map.has_key?(status, :inbound_at)
+  end
+
   test "the fetcher is called with the zoneset's monitor box" do
     test_pid = self()
     start(fetcher: fn box -> send(test_pid, {:queried, box}); {:ok, []} end)

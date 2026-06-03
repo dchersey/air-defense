@@ -355,9 +355,12 @@ private struct StatusBanner: View {
         icon: "headphones", tint: Palette.inbound, bg: Palette.inboundSoft,
         strong: "AirPods not connected", rest: " — monitoring paused. Timer still running.")
     case .pending:
+      let route = model.inboundRoute ?? "LGA arrival"
+      let eta =
+        model.inboundAt.map { " Cancellation engages in \(mmss($0))." } ?? " Cancellation arming."
       banner(
         icon: "bolt.fill", tint: Palette.accent, bg: Palette.accentSoft,
-        strong: "Inbound", rest: " — LGA arrival on vector. Cancellation arming.")
+        strong: "Inbound — \(route) on vector.", rest: eta)
     default:
       EmptyView()
     }
@@ -388,22 +391,32 @@ private struct ZoneRow: View {
   let model: StatusModel
   let zone: ZonesetStatus
 
+  // Effective per-zone phase: the backend's phase, but a global headphones-
+  // disconnect overrides it to "paused".
+  private var phase: String {
+    if zone.active && model.phase == .disconnected { return "paused" }
+    return zone.phase ?? (zone.active ? "monitoring" : "idle")
+  }
+
   var body: some View {
-    let armed = zone.active && model.phase == .pending
-    let paused = zone.active && model.phase == .disconnected
-    let dotColor = !zone.active ? Palette.ink3 : (armed || paused ? Palette.inbound : Palette.accent)
+    let dotColor: Color = {
+      switch phase {
+      case "idle": return Palette.ink3
+      case "armed", "paused": return Palette.inbound
+      default: return Palette.accent  // monitoring / engaged
+      }
+    }()
     let (name, qualifier) = splitName(zone.name)
 
     HStack(spacing: 11) {
-      // Monitoring and armed both get the live glow+ping (armed in amber); paused
-      // and idle stay flat.
-      StatusDot(color: dotColor, glow: zone.active && !paused)
+      // Live zones glow (amber when armed/intercepting); idle and paused stay flat.
+      StatusDot(color: dotColor, glow: zone.active && phase != "paused")
 
       VStack(alignment: .leading, spacing: 2) {
         (Text(name).foregroundStyle(Palette.ink)
           + Text(qualifier.map { " \($0)" } ?? "").foregroundStyle(Palette.ink2))
           .font(.adZone)
-        stateLine(armed: armed, paused: paused)
+        stateLine
       }
 
       Spacer(minLength: 6)
@@ -419,19 +432,27 @@ private struct ZoneRow: View {
     .padding(.vertical, 11)
   }
 
-  private func stateLine(armed: Bool, paused: Bool) -> some View {
-    let text: Text
-    if !zone.active {
-      text = Text("idle").foregroundStyle(Palette.ink3)
-    } else if armed {
-      text = Text("armed").foregroundStyle(Palette.inbound)
-    } else if paused {
-      text = Text("paused · ").foregroundStyle(Palette.ink2)
-        + Text("\(countdown(zone.endsAt)) left").foregroundStyle(Palette.inbound)
-    } else {
-      text = Text("monitoring · ").foregroundStyle(Palette.ink2)
-        + Text("\(countdown(zone.endsAt)) left").foregroundStyle(Palette.accent)
-    }
+  private var stateLine: some View {
+    // "armed · intercept 0:42 · 2 inbound", "monitoring · 3h 37m left", etc.
+    let text: Text =
+      switch phase {
+      case "armed":
+        Text("armed · ").foregroundStyle(Palette.inbound)
+          + (zone.interceptAt.map {
+            Text("intercept \(mmss($0)) · ").foregroundStyle(Palette.inbound)
+          } ?? Text(""))
+          + Text("\(zone.inbound ?? 0) inbound").foregroundStyle(Palette.ink2)
+      case "engaged":
+        Text("engaged · overhead").foregroundStyle(Palette.accent)
+      case "paused":
+        Text("paused · ").foregroundStyle(Palette.ink2)
+          + Text("\(countdown(zone.endsAt)) left").foregroundStyle(Palette.inbound)
+      case "idle":
+        Text("idle").foregroundStyle(Palette.ink3)
+      default:  // monitoring
+        Text("monitoring · ").foregroundStyle(Palette.ink2)
+          + Text("\(countdown(zone.endsAt)) left").foregroundStyle(Palette.accent)
+      }
     return text.font(.adMono).monospacedDigit()
   }
 
@@ -481,22 +502,24 @@ private struct ActivityStrip: View {
   private var bars: some View {
     let maxV = max(model.history.max() ?? 1, 1)
     return HStack(alignment: .bottom, spacing: 4) {
-      ForEach(Array(model.history.enumerated()), id: \.offset) { _, value in
+      ForEach(Array(model.history.enumerated()), id: \.offset) { index, value in
+        let hot = index == model.history.count - 1 && model.phase == .pending
         RoundedRectangle(cornerRadius: 2, style: .continuous)
-          .fill(barFill(value: value))
+          .fill(barFill(value: value, hot: hot))
           .frame(height: value == 0 ? 6 : max(10, 56 * Double(value) / Double(maxV)))
       }
     }
     .frame(height: 56, alignment: .bottom)
   }
 
-  // Idle = faint flat stub; active = top-lit gradient fading to 45% at the base.
-  private func barFill(value: Int) -> LinearGradient {
+  // Idle = faint flat stub; active = top-lit gradient fading to 45% at the base;
+  // the current 5-min bucket turns amber ("hot") while a plane is inbound.
+  private func barFill(value: Int, hot: Bool) -> LinearGradient {
     if value == 0 {
       return LinearGradient(colors: [Palette.fill, Palette.fill], startPoint: .top, endPoint: .bottom)
     }
-    return LinearGradient(
-      colors: [Palette.accent, Palette.accent.opacity(0.45)], startPoint: .top, endPoint: .bottom)
+    let c = hot ? Palette.inbound : Palette.accent
+    return LinearGradient(colors: [c, c.opacity(0.45)], startPoint: .top, endPoint: .bottom)
   }
 
   // Plain VStack (no ScrollView — a greedy ScrollView collapses to ~0 height in the
@@ -1088,4 +1111,10 @@ func countdown(_ endsAt: Int?) -> String {
   guard let ends = endsAt else { return "—" }
   let remaining = max(0, ends - Int(Date().timeIntervalSince1970))
   return "\(remaining / 3600)h \((remaining % 3600) / 60)m"
+}
+
+/// "0:42" remaining until a unix-seconds deadline (minutes:seconds).
+func mmss(_ at: Int) -> String {
+  let s = max(0, at - Int(Date().timeIntervalSince1970))
+  return "\(s / 60):" + String(format: "%02d", s % 60)
 }

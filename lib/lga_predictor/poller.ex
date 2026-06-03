@@ -143,7 +143,8 @@ defmodule LgaPredictor.Poller do
           state
           | sessions: sessions,
             poll_timers: Map.delete(state.poll_timers, id),
-            suppress_until: Map.delete(state.suppress_until, id)
+            suppress_until: Map.delete(state.suppress_until, id),
+            intercepts: Map.delete(state.intercepts, id)
         }
 
         if map_size(sessions) == 0, do: go_idle(state), else: state
@@ -160,7 +161,7 @@ defmodule LgaPredictor.Poller do
     Actuator.reset()
     notify_keep_alive(state, :off)
     Logger.info("[poller] all sessions ended — #{state.polls} polls, ~#{state.credits} credits")
-    %{state | poll_timers: %{}, suppress_until: %{}}
+    %{state | poll_timers: %{}, suppress_until: %{}, intercepts: %{}}
   end
 
   # Best-effort — must never crash the session loop if keep-alive is down.
@@ -348,12 +349,24 @@ defmodule LgaPredictor.Poller do
 
     # Lock-on: stop polling this zoneset until the plane is predicted to clear the
     # ANC zone (the latest exit if several planes were caught in one poll).
-    exits_at = System.os_time(:second) + round(window.exits_in)
+    now = System.os_time(:second)
+    exits_at = now + round(window.exits_in)
+    engage_at = now + div(on_ms, 1000)
+
+    # Record the intercept for the UI (armed/intercept/inbound), dropping any of
+    # this zone's prior intercepts that have already cleared.
+    leg = %{callsign: ac.callsign || ac.hex, engage_at: engage_at, exits_at: exits_at}
+
+    intercepts =
+      Map.update(state.intercepts, zoneset_id, [leg], fn legs ->
+        [leg | Enum.filter(legs, &(&1.exits_at > now))]
+      end)
 
     %{
       state
       | actioned: MapSet.put(state.actioned, key),
-        suppress_until: Map.update(state.suppress_until, zoneset_id, exits_at, &max(&1, exits_at))
+        suppress_until: Map.update(state.suppress_until, zoneset_id, exits_at, &max(&1, exits_at)),
+        intercepts: intercepts
     }
   end
 
@@ -366,14 +379,44 @@ defmodule LgaPredictor.Poller do
 
   defp status_of(state) do
     config = state.config_fun.()
+    now = System.os_time(:second)
 
     zonesets =
       Enum.map(config.zonesets, fn zs ->
         session = Map.get(state.sessions, zs.id)
-        %{id: zs.id, name: zs.name, active: session != nil, ends_at: session && session.ends_at}
+        legs = state.intercepts |> Map.get(zs.id, []) |> Enum.filter(&(&1.exits_at > now))
+        armed = Enum.filter(legs, &(&1.engage_at > now))
+
+        phase =
+          cond do
+            session == nil -> "idle"
+            Enum.any?(legs, &(&1.engage_at <= now)) -> "engaged"
+            armed != [] -> "armed"
+            true -> "monitoring"
+          end
+
+        intercept_at = if armed == [], do: nil, else: armed |> Enum.map(& &1.engage_at) |> Enum.min()
+
+        %{
+          id: zs.id,
+          name: zs.name,
+          active: session != nil,
+          ends_at: session && session.ends_at,
+          phase: phase,
+          intercept_at: intercept_at,
+          inbound: length(legs)
+        }
       end)
 
     ends = state.sessions |> Map.values() |> Enum.map(& &1.ends_at)
+
+    # Soonest still-armed intercept across all zones — drives the inbound banner.
+    soonest =
+      state.intercepts
+      |> Map.values()
+      |> List.flatten()
+      |> Enum.filter(&(&1.exits_at > now and &1.engage_at > now))
+      |> Enum.min_by(& &1.engage_at, fn -> nil end)
 
     %{
       active?: map_size(state.sessions) > 0,
@@ -381,7 +424,9 @@ defmodule LgaPredictor.Poller do
       approx_credits: state.credits,
       headphones_connected: state.headphones_connected,
       session_ends_at: if(ends == [], do: nil, else: Enum.max(ends)),
-      zonesets: zonesets
+      zonesets: zonesets,
+      inbound_at: soonest && soonest.engage_at,
+      inbound_callsign: soonest && soonest.callsign
     }
   end
 
@@ -401,6 +446,9 @@ defmodule LgaPredictor.Poller do
       sessions: %{},
       poll_timers: %{},
       suppress_until: %{},
+      # Per-zoneset live intercepts (for the UI's armed/intercept/inbound display):
+      # %{zoneset_id => [%{callsign, engage_at, exits_at}]} (unix seconds).
+      intercepts: %{},
       polls: 0,
       credits: 0,
       headphones_connected: true,
