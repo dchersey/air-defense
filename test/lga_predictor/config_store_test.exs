@@ -67,6 +67,24 @@ defmodule LgaPredictor.ConfigStoreTest do
     assert [%{min_gspeed_kt: 180}] = cfg.zonesets
   end
 
+  test "zoneset type defaults to :arrival and round-trips :departure", %{name: name} do
+    base = %{
+      "id" => "z1",
+      "name" => "T",
+      "enabled" => true,
+      "monitor_zone" => geojson_box(),
+      "anc_zones" => [geojson_box()]
+    }
+
+    {:ok, cfg} = ConfigStore.put(name, %{"zonesets" => [base]})
+    assert [%{type: :arrival}] = cfg.zonesets
+
+    {:ok, cfg} = ConfigStore.put(name, %{"zonesets" => [Map.put(base, "type", "departure")]})
+    assert [%{type: :departure}] = cfg.zonesets
+
+    assert {:error, _} = ConfigStore.put(name, %{"zonesets" => [Map.put(base, "type", "spaceship")]})
+  end
+
   test "put validates, persists, and bumps version", %{name: name, path: path} do
     v0 = ConfigStore.get(name).version
 

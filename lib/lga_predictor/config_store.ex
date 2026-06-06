@@ -263,6 +263,7 @@ defmodule LgaPredictor.ConfigStore do
       not Enum.all?(zs["anc_zones"], &valid_geojson?/1) -> {:error, "zoneset #{zs["id"]}: invalid anc_zone GeoJSON"}
       (zs["reckoning"] || "constant") not in ["constant", "accelerating"] -> {:error, "zoneset #{zs["id"]}: bad reckoning"}
       (zs["trigger"] || "predict") not in ["predict", "assume"] -> {:error, "zoneset #{zs["id"]}: bad trigger"}
+      (zs["type"] || "arrival") not in ["arrival", "departure"] -> {:error, "zoneset #{zs["id"]}: bad type"}
       not is_nil(zs["min_gspeed_kt"]) and not is_number(zs["min_gspeed_kt"]) -> {:error, "zoneset #{zs["id"]}: min_gspeed_kt must be a number"}
       not is_nil(zs["poll_interval_ms"]) and not is_number(zs["poll_interval_ms"]) -> {:error, "zoneset #{zs["id"]}: poll_interval_ms must be a number"}
       true -> :ok
@@ -298,6 +299,7 @@ defmodule LgaPredictor.ConfigStore do
       id: zs["id"],
       name: zs["name"],
       enabled: Map.get(zs, "enabled", true),
+      type: type_atom(zs["type"]),
       reckoning: reckoning_atom(zs["reckoning"]),
       accel_kt_s: zs["accel_kt_s"] || 0.0,
       trigger: trigger_atom(zs["trigger"]),
@@ -322,6 +324,11 @@ defmodule LgaPredictor.ConfigStore do
 
   defp reckoning_atom("accelerating"), do: :accelerating
   defp reckoning_atom(_), do: :constant
+
+  # :departure — engage ANC on actual ANC-zone entry (variable turn points make a
+  # straight-line ETA unreliable); :arrival (default) — ETA-scheduled engage.
+  defp type_atom("departure"), do: :departure
+  defp type_atom(_), do: :arrival
 
   # :assume — any qualifying detection in the monitor zone triggers ANC (for
   # banking departures where straight-line projection into the ANC zone fails);

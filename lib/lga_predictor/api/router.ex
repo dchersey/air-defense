@@ -124,6 +124,7 @@ defmodule LgaPredictor.API.Router do
         %{
           id: zs["id"],
           name: zs["name"],
+          type: zs["type"] || "arrival",
           poll_interval_ms: zs["poll_interval_ms"],
           monitor_geojson: Jason.encode!(zs["monitor_zone"]),
           anc_geojson: Jason.encode!(List.first(zs["anc_zones"] || []))
@@ -176,6 +177,7 @@ defmodule LgaPredictor.API.Router do
     acc = if name = params["name"], do: %{"name" => name}, else: %{}
     # Key present (value may be nil to clear back to the global interval).
     acc = if Map.has_key?(params, "poll_interval_ms"), do: Map.put(acc, "poll_interval_ms", params["poll_interval_ms"]), else: acc
+    acc = if type = params["type"], do: Map.put(acc, "type", type), else: acc
 
     with {:ok, acc} <- maybe_geojson(acc, params, "monitor_geojson", "monitor_zone", & &1),
          {:ok, acc} <- maybe_geojson(acc, params, "anc_geojson", "anc_zones", &[&1]) do

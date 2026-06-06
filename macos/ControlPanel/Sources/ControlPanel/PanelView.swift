@@ -973,6 +973,7 @@ private struct ZoneEditRow: View {
   let model: StatusModel
   @State private var name: String
   @State private var pollSeconds: String
+  @State private var zoneType: String
   @FocusState private var focus: Field?
 
   private enum Field { case name, poll }
@@ -982,6 +983,7 @@ private struct ZoneEditRow: View {
     self.model = model
     _name = State(initialValue: zone.name)
     _pollSeconds = State(initialValue: zone.pollIntervalMs.map { String($0 / 1000) } ?? "")
+    _zoneType = State(initialValue: zone.type ?? "arrival")
   }
 
   var body: some View {
@@ -1005,6 +1007,24 @@ private struct ZoneEditRow: View {
 
       slotRow("Monitor", geojson: zone.monitorGeojson, slot: .monitor)
       slotRow("ANC", geojson: zone.ancGeojson, slot: .anc)
+
+      HStack(spacing: 6) {
+        sectionLabel("Type").frame(width: 56, alignment: .leading)
+        Picker(
+          "",
+          selection: Binding(
+            get: { zoneType },
+            set: { newValue in
+              zoneType = newValue
+              Task { await model.setZoneType(zone.id, type: newValue) }
+            })
+        ) {
+          Text("Arrival").tag("arrival")
+          Text("Departure").tag("departure")
+        }
+        .labelsHidden().pickerStyle(.menu).fixedSize()
+        Spacer(minLength: 0)
+      }
 
       HStack(spacing: 6) {
         sectionLabel("Poll")

@@ -35,6 +35,7 @@ struct ZonesetStatus: Codable, Identifiable {
 struct EditableZone: Identifiable, Codable {
   let id: String
   var name: String
+  var type: String?  // "arrival" | "departure" (drives the engage strategy)
   var pollIntervalMs: Int?
   var monitorGeojson: String
   var ancGeojson: String
@@ -557,6 +558,12 @@ final class StatusModel {
   func setPollInterval(_ id: String, seconds: Int?) async {
     let value: Any = seconds.map { $0 * 1000 } ?? NSNull()
     await mutate("PATCH", "/api/zonesets/\(id)", ["poll_interval_ms": value])
+  }
+
+  /// Set this zone's type: "arrival" (ETA-scheduled) or "departure" (engage on
+  /// actual zone entry, tracked fast).
+  func setZoneType(_ id: String, type: String) async {
+    await mutate("PATCH", "/api/zonesets/\(id)", ["type": type])
   }
 
   func deleteZone(_ id: String) async {

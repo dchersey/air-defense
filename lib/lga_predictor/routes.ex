@@ -15,7 +15,6 @@ defmodule LgaPredictor.Routes do
   Returns `{:ok, origin, dest}` | `:none` | `:pending`.
   """
   use GenServer
-  require Logger
 
   alias LgaPredictor.Keychain
 

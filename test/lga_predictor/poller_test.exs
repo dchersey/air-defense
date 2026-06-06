@@ -37,6 +37,7 @@ defmodule LgaPredictor.PollerTest do
           id: "z1",
           name: "test",
           enabled: true,
+          type: Keyword.get(opts, :type, :arrival),
           reckoning: :constant,
           accel_kt_s: 0.0,
           trigger: Keyword.get(opts, :trigger, :predict),
@@ -92,6 +93,66 @@ defmodule LgaPredictor.PollerTest do
     assert status.polls >= 1
     assert status.approx_credits >= 6
     assert Actuator.mode() == :anc
+  end
+
+  test "departure zone engages ANC when a flight is in the ANC zone" do
+    start(config_fun: fn -> config(type: :departure) end, fetcher: fn _ -> {:ok, [inbound()]} end)
+    :ok = Poller.start_session()
+    Process.sleep(80)
+    assert Actuator.mode() == :anc
+  end
+
+  test "departure zone does NOT engage for a fly-by alongside the zone" do
+    # Same latitude band as the ANC zone but well west of it, heading north → never enters.
+    byflight = %{inbound() | lon: -73.895, track_deg: 0.0}
+    start(config_fun: fn -> config(type: :departure, latency: 0.0) end, fetcher: fn _ -> {:ok, [byflight]} end)
+    :ok = Poller.start_session()
+    Process.sleep(80)
+    assert Actuator.mode() == :transparency
+  end
+
+  test "departure zone drops a flight that has already passed the zone (no engage)" do
+    # South of the ANC zone's south edge, heading south → missed.
+    past = %{inbound() | lat: 40.710, track_deg: 180.0}
+    start(config_fun: fn -> config(type: :departure) end, fetcher: fn _ -> {:ok, [past]} end)
+    :ok = Poller.start_session()
+    Process.sleep(80)
+    assert Actuator.mode() == :transparency
+  end
+
+  test "departure zone polls the monitor+ANC union (+margin)" do
+    test_pid = self()
+
+    start(
+      config_fun: fn -> config(type: :departure) end,
+      fetcher: fn box -> send(test_pid, {:queried, box}); {:ok, []} end
+    )
+
+    :ok = Poller.start_session()
+    # union(@monitor_box {40.738,40.700,-73.880,-73.850}, @anc_zone bbox
+    # {40.732,40.724,-73.870,-73.858}) = {40.738,40.700,-73.880,-73.850}, +0.02°.
+    assert_receive {:queried, {n, s, w, e}}, 500
+    assert_in_delta n, 40.758, 1.0e-6
+    assert_in_delta s, 40.680, 1.0e-6
+    assert_in_delta w, -73.900, 1.0e-6
+    assert_in_delta e, -73.830, 1.0e-6
+  end
+
+  test "departure holds ANC while overhead and records the flight only once" do
+    start_supervised!(LgaPredictor.History)
+    # Same in-zone flight returned every (fast) poll.
+    start(
+      config_fun: fn -> config(type: :departure) end,
+      fetcher: fn _ -> {:ok, [inbound()]} end,
+      poll_interval_ms: 20
+    )
+
+    :ok = Poller.start_session()
+    Process.sleep(150)  # several polls, all in-zone
+
+    assert Actuator.mode() == :anc
+    # Engage-and-hold: recorded once on entry, not re-recorded each poll.
+    assert length(LgaPredictor.History.recent(10)) == 1
   end
 
   test "tracks intercepts for the UI (per-zone phase + inbound count)" do

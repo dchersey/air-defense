@@ -25,7 +25,7 @@ defmodule LgaPredictor.Poller do
   use GenServer
   require Logger
 
-  alias LgaPredictor.{Actuator, ConfigStore, History, KeepAlive, Predictor}
+  alias LgaPredictor.{Actuator, ConfigStore, Geo, History, KeepAlive, Predictor}
 
   @credits_per_aircraft 6
 
@@ -114,7 +114,7 @@ defmodule LgaPredictor.Poller do
     state =
       if map_size(state.sessions) == 0 do
         notify_keep_alive(state, :on)
-        %{state | polls: 0, credits: 0, actioned: MapSet.new()}
+        %{state | polls: 0, credits: 0, actioned: MapSet.new(), engaged: MapSet.new()}
       else
         state
       end
@@ -161,7 +161,7 @@ defmodule LgaPredictor.Poller do
     Actuator.reset()
     notify_keep_alive(state, :off)
     Logger.info("[poller] all sessions ended — #{state.polls} polls, ~#{state.credits} credits")
-    %{state | poll_timers: %{}, suppress_until: %{}, intercepts: %{}}
+    %{state | poll_timers: %{}, suppress_until: %{}, intercepts: %{}, engaged: MapSet.new()}
   end
 
   # Best-effort — must never crash the session loop if keep-alive is down.
@@ -228,6 +228,27 @@ defmodule LgaPredictor.Poller do
 
   defp interval_ms(state, zoneset), do: zoneset.poll_interval_ms || state.poll_interval
 
+  # Arrivals are detected upstream in the drawn monitor zone and ETA-scheduled.
+  # Departures poll the UNION of the monitor zone + the ANC zone (+ margin): the
+  # monitor zone puts the plane "on radar", the union spans any gap between the two
+  # so the plane is never lost, and the ANC-zone coverage lets us engage on the
+  # ACTUAL (about-to-)entry and release on the ACTUAL exit. Activation timing still
+  # lives in consider_departure (engage only when in/entering the ANC zone, latency-
+  # adjusted) — the wide box only governs which flights we can see.
+  @departure_margin_deg 0.02
+  defp query_box(%{type: :departure} = zoneset), do: departure_box(zoneset)
+  defp query_box(zoneset), do: zoneset.monitor_box
+
+  defp departure_box(zoneset) do
+    boxes = [zoneset.monitor_box | Enum.map(zoneset.anc_zones, &Geo.bbox/1)]
+    m = @departure_margin_deg
+    n = boxes |> Enum.map(&elem(&1, 0)) |> Enum.max()
+    s = boxes |> Enum.map(&elem(&1, 1)) |> Enum.min()
+    w = boxes |> Enum.map(&elem(&1, 2)) |> Enum.min()
+    e = boxes |> Enum.map(&elem(&1, 3)) |> Enum.max()
+    {n + m, s - m, w - m, e + m}
+  end
+
   defp suppressed?(state, id), do: Map.get(state.suppress_until, id, 0) > System.os_time(:second)
 
   defp suppress_delay_ms(state, id) do
@@ -235,7 +256,7 @@ defmodule LgaPredictor.Poller do
   end
 
   defp poll_zoneset(state, zoneset, config) do
-    case state.fetcher.(zoneset.monitor_box) do
+    case state.fetcher.(query_box(zoneset)) do
       {:ok, aircraft} ->
         spent = length(aircraft) * @credits_per_aircraft
         record_monthly_credits(spent)
@@ -279,6 +300,9 @@ defmodule LgaPredictor.Poller do
       (ac.gspeed_kt || 0) < (zoneset.min_gspeed_kt || 0) ->
         state
 
+      zoneset.type == :departure ->
+        consider_departure(ac, zoneset, key, config, state)
+
       zoneset.trigger == :assume ->
         # Per-flight ETA from distance ÷ groundspeed (heading-independent), with
         # dwell capped. Falls back to the fixed assume window only if ETA can't be
@@ -296,6 +320,114 @@ defmodule LgaPredictor.Poller do
         end
     end
   end
+
+  # Departure zones: turn points vary, so don't schedule from a far-out ETA. Track
+  # at the zoneset's fast cadence and engage only when the flight is *at* the ANC
+  # zone — now, or projected `anc_latency` ahead (so ANC is on as it crosses in, and
+  # near-misses whose projected point stays outside never trigger). Once a flight has
+  # gone past the zone's latitude band on the side it's heading, abandon it.
+  defp consider_departure(ac, zoneset, key, config, state) do
+    {flat, flon} = project_ahead(ac, config.anc_latency_seconds || 0.0)
+
+    in_zone? =
+      Enum.any?(zoneset.anc_zones, fn z ->
+        Geo.point_in_zone?({ac.lat, ac.lon}, z) or Geo.point_in_zone?({flat, flon}, z)
+      end)
+
+    engaged? = MapSet.member?(state.engaged, key)
+
+    cond do
+      in_zone? ->
+        # Engage now and (re)hold a short window. Re-covering each poll keeps ANC on
+        # while the plane is overhead (the Actuator coalesces by pushing the off
+        # time), so a banking path stays covered; once it exits we stop covering and
+        # ANC releases as the last hold lapses — release tracks the *actual* exit,
+        # not a straight-line dwell that under-counts a curve.
+        Actuator.cover(0, departure_hold_ms(zoneset, state), key)
+
+        if engaged? do
+          state
+        else
+          # First detection inside: record once for history + the UI.
+          dwell = departure_dwell(ac, zoneset, config)
+          now = System.os_time(:second)
+
+          record_history(%{
+            at: now,
+            callsign: ac.callsign,
+            hex: ac.hex,
+            alt_ft: ac.alt_ft,
+            enters_in: 0,
+            dwell: round(dwell)
+          })
+
+          Logger.info("[poller] DEPART #{key} alt=#{ac.alt_ft}ft gs=#{ac.gspeed_kt}kt — ANC on (release on exit)")
+
+          leg = %{callsign: ac.callsign || ac.hex, engage_at: now, exits_at: now + round(dwell)}
+
+          %{
+            state
+            | engaged: MapSet.put(state.engaged, key),
+              intercepts:
+                Map.update(state.intercepts, zoneset.id, [leg], fn legs ->
+                  [leg | Enum.filter(legs, &(&1.exits_at > now))]
+                end)
+          }
+        end
+
+      engaged? ->
+        # It was overhead and has now left the zone: stop holding (ANC releases as
+        # the last hold lapses) and don't re-engage it this session.
+        %{state | engaged: MapSet.delete(state.engaged, key), actioned: MapSet.put(state.actioned, key)}
+
+      passed_zone?(ac, zoneset.anc_zones) ->
+        %{state | actioned: MapSet.put(state.actioned, key)}
+
+      true ->
+        state
+    end
+  end
+
+  # Per-poll ANC hold for a departure: comfortably longer than the poll cadence so
+  # ANC never gaps between polls; it's the lag between the plane exiting and ANC
+  # releasing. Released early-on-exit is the failure we're avoiding, so err long.
+  defp departure_hold_ms(zoneset, state) do
+    poll = zoneset.poll_interval_ms || state.poll_interval
+    max(2 * poll, 7_000)
+  end
+
+  # Nominal dwell for history/UI only (the real release is exit-driven).
+  defp departure_dwell(ac, zoneset, config) do
+    case Predictor.predict_eta(ac, zoneset.anc_zones, max_dwell_seconds: config.max_dwell_seconds) do
+      %{dwell_seconds: d} -> d
+      _ -> zoneset.assume_duration_seconds
+    end
+  end
+
+  # Dead-reckon `secs` ahead → {lat, lon}; falls back to the current point when
+  # track/groundspeed are missing.
+  defp project_ahead(%{track_deg: t, gspeed_kt: g} = ac, secs)
+       when is_number(t) and is_number(g) do
+    p = Geo.project(ac, secs)
+    {p.lat, p.lon}
+  end
+
+  defp project_ahead(ac, _secs), do: {ac.lat, ac.lon}
+
+  # True once the flight is beyond the ANC zones' latitude band on the side its track
+  # is carrying it (north of the north edge heading north, or south of the south edge
+  # heading south) — i.e. it has missed the zone. Bidirectional (works either side of
+  # the airport). `cos(track)` is the north/south component (track 0° = north).
+  defp passed_zone?(%{track_deg: t, lat: lat}, anc_zones)
+       when is_number(t) and is_number(lat) and anc_zones != [] do
+    boxes = Enum.map(anc_zones, &Geo.bbox/1)
+    north = boxes |> Enum.map(&elem(&1, 0)) |> Enum.max()
+    south = boxes |> Enum.map(&elem(&1, 1)) |> Enum.min()
+    northward = :math.cos(t * :math.pi() / 180.0)
+    (lat > north and northward > 0) or (lat < south and northward < 0)
+  end
+
+  defp passed_zone?(_ac, _zones), do: false
 
   # :assume fallback when ETA can't be computed: fixed delay + duration.
   defp assume_window(zoneset) do
@@ -449,6 +581,9 @@ defmodule LgaPredictor.Poller do
       # Per-zoneset live intercepts (for the UI's armed/intercept/inbound display):
       # %{zoneset_id => [%{callsign, engage_at, exits_at}]} (unix seconds).
       intercepts: %{},
+      # Departure flights currently held overhead (engage-and-hold; released on
+      # actual exit, not a predicted dwell). MapSet of flight keys.
+      engaged: MapSet.new(),
       polls: 0,
       credits: 0,
       headphones_connected: true,
