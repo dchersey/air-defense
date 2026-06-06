@@ -14,7 +14,17 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp ".build/release/ControlPanel" "$app/Contents/MacOS/AirDefense"
 cp "$here/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
-cp "$here/all-clear.mp3" "$app/Contents/Resources/all-clear.mp3"  # quiet-period alert
+# Quiet-period "all clear" chime. The committed default (all-clear.mp3) is generic;
+# a local build prefers a personal version (all-clear-rego.mp3) if present, while CI
+# (GitHub Actions) always ships the generic one. Override explicitly with ALLCLEAR=.
+allclear="$here/all-clear.mp3"
+if [ -n "${ALLCLEAR:-}" ]; then
+  allclear="$ALLCLEAR"
+elif [ -z "${CI:-}${GITHUB_ACTIONS:-}" ] && [ -f "$here/all-clear-rego.mp3" ]; then
+  allclear="$here/all-clear-rego.mp3"
+fi
+cp "$allclear" "$app/Contents/Resources/all-clear.mp3"
+echo "all-clear chime: $(basename "$allclear")"
 
 cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
