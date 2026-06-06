@@ -3,20 +3,12 @@
 [![CI](https://github.com/dchersey/air-defense/actions/workflows/ci.yml/badge.svg)](https://github.com/dchersey/air-defense/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-<p align="center">
-  <img src="media/air-defense.gif" alt="Air Defense menu-bar panel tracking a flight and switching ANC" width="400">
-</p>
+https://github.com/user-attachments/assets/0748e274-c487-4781-aa19-3b3a418021ef
 
 A macOS menu-bar app that watches the sky and automatically switches your AirPods
 Max into **Active Noise Cancellation** the moment an aircraft is about to pass over
 you — then back to **Transparency** once it's gone. A little SAM site for airplane
 noise: detect the inbound, lock on, engage.
-
-## Demo
-
-https://github.com/user-attachments/assets/0748e274-c487-4781-aa19-3b3a418021ef
-
-Radar tracking and the menu-bar panel switching ANC in real time.
 
 ## The problem
 
