@@ -262,14 +262,30 @@ defmodule LgaPredictor.Poller do
         record_monthly_credits(spent)
         state = %{state | credits: state.credits + spent}
 
-        aircraft
-        |> Enum.reject(&ramp?/1)
-        |> Enum.reduce(state, &consider(&1, zoneset, config, &2))
+        state =
+          aircraft
+          |> Enum.reject(&ramp?/1)
+          |> Enum.reduce(state, &consider(&1, zoneset, config, &2))
+
+        # Sweep this zoneset's intercept legs for flights no longer in the feed (flew
+        # out of the box, or an ADS-B dropout) so a vanished plane never leaves a
+        # phantom inbound/overhead marker lingering in the UI. The Actuator releases
+        # ANC on its own as the last hold lapses.
+        sweep_legs(state, zoneset.id, MapSet.new(aircraft, &(&1.hex || &1.callsign)))
 
       {:error, reason} ->
         Logger.warning("[poller] fetch error (#{zoneset.id}): #{inspect(reason)} (skipping)")
         state
     end
+  end
+
+  defp sweep_legs(state, zoneset_id, seen_keys) do
+    kept =
+      state.intercepts
+      |> Map.get(zoneset_id, [])
+      |> Enum.filter(&MapSet.member?(seen_keys, Map.get(&1, :key)))
+
+    %{state | intercepts: Map.put(state.intercepts, zoneset_id, kept)}
   end
 
   # Feed each poll's spend into the month-to-date self-tally (skipped in tests,
@@ -327,71 +343,76 @@ defmodule LgaPredictor.Poller do
   # near-misses whose projected point stays outside never trigger). Once a flight has
   # gone past the zone's latitude band on the side it's heading, abandon it.
   defp consider_departure(ac, zoneset, key, config, state) do
-    # Engage when the plane will be in the zone in `lead` seconds. Match the arrival
-    # path's effective lead exactly: arrivals fire at enters_in == latency -
-    # engage_delta (see dispatch/6), so departures dead-reckon that same horizon.
-    # Without engage_delta a departure leads by the raw latency — engage_delta short
-    # of arrivals — which read as engaging a few seconds too soon.
-    lead = max((config.anc_latency_seconds || 0.0) - (config.engage_delta_seconds || 0), 0.0)
-    {flat, flon} = project_ahead(ac, lead)
+    # `lead` is the effective engage horizon, matching the arrival path exactly:
+    # arrivals fire at enters_in == latency - engage_delta (see dispatch/6). It can be
+    # NEGATIVE (engage_delta > latency means "engage that many seconds AFTER the plane
+    # reaches the zone" — a deliberate late engage the user tuned for arrivals).
+    lead = (config.anc_latency_seconds || 0.0) - (config.engage_delta_seconds || 0)
+    zones = zoneset.anc_zones
 
-    in_zone? =
-      Enum.any?(zoneset.anc_zones, fn z ->
-        Geo.point_in_zone?({ac.lat, ac.lon}, z) or Geo.point_in_zone?({flat, flon}, z)
-      end)
+    cur_in? = in_any_zone?(zones, {ac.lat, ac.lon})
+    # Hold while overhead — look only forward (bridges the early-engage gap + the exit
+    # between polls); never backward, or we'd hold after the plane has left.
+    {fx, fy} = project_ahead(ac, max(lead, 0.0))
+    overhead? = cur_in? or in_any_zone?(zones, {fx, fy})
+
+    # First-engage moment. Positive lead: engage early/at entry (forward projection).
+    # Negative lead: engage only once the plane's position `|lead|`s ago was already
+    # in the zone — i.e. it's been inside |lead|s — so the engage lands after entry,
+    # matching arrivals.
+    engage_now? =
+      if lead >= 0.0 do
+        overhead?
+      else
+        {bx, by} = project_ahead(ac, lead)
+        in_any_zone?(zones, {bx, by})
+      end
 
     engaged? = MapSet.member?(state.engaged, key)
     now = System.os_time(:second)
+    ttl = round(departure_hold_ms(zoneset, state) / 1000) + 2
 
     cond do
-      in_zone? ->
-        # Engage now and (re)hold a short window. Re-covering each poll keeps ANC on
-        # while the plane is overhead (the Actuator coalesces by pushing the off
-        # time), so a banking path stays covered; once it exits we stop covering and
-        # ANC releases as the last hold lapses — release tracks the *actual* exit,
-        # not a straight-line dwell that under-counts a curve.
+      engaged? and overhead? ->
+        # Re-cover each poll to keep ANC on while overhead (the Actuator coalesces by
+        # pushing the off time), so a banking path stays covered; release tracks the
+        # ACTUAL exit. Refresh the leg (keep the original engage time).
         Actuator.cover(0, departure_hold_ms(zoneset, state), key)
-        ttl = round(departure_hold_ms(zoneset, state) / 1000) + 2
-
-        if engaged? do
-          # Refresh the engaged leg so the UI keeps reading "engaged" through a long
-          # bank (keep the original engage time, push the exit horizon).
-          engage_at = (find_leg(state, zoneset.id, key) || %{engage_at: now}).engage_at || now
-          put_leg(state, zoneset.id, key, ac, engage_at: engage_at, exits_at: now + ttl)
-        else
-          # First detection inside: record once for history.
-          dwell = departure_dwell(ac, zoneset, config)
-
-          record_history(%{
-            at: now,
-            callsign: ac.callsign,
-            hex: ac.hex,
-            alt_ft: ac.alt_ft,
-            enters_in: 0,
-            dwell: round(dwell)
-          })
-
-          Logger.info("[poller] DEPART #{key} alt=#{ac.alt_ft}ft gs=#{ac.gspeed_kt}kt — ANC on (release on exit)")
-
-          state
-          |> Map.update!(:engaged, &MapSet.put(&1, key))
-          |> put_leg(zoneset.id, key, ac, engage_at: now, exits_at: now + ttl)
-        end
+        engage_at = (find_leg(state, zoneset.id, key) || %{engage_at: now}).engage_at || now
+        put_leg(state, zoneset.id, key, ac, engage_at: engage_at, exits_at: now + ttl)
 
       engaged? ->
-        # It was overhead and has now left the zone: stop holding (ANC releases as
-        # the last hold lapses) and don't re-engage it this session.
+        # Was overhead, now gone from the zone: stop holding (ANC releases as the last
+        # hold lapses) and don't re-engage it this session.
         %{state | engaged: MapSet.delete(state.engaged, key), actioned: MapSet.put(state.actioned, key)}
         |> drop_leg(zoneset.id, key)
 
-      passed_zone?(ac, zoneset.anc_zones) ->
+      engage_now? ->
+        Actuator.cover(0, departure_hold_ms(zoneset, state), key)
+        dwell = departure_dwell(ac, zoneset, config)
+
+        record_history(%{
+          at: now,
+          callsign: ac.callsign,
+          hex: ac.hex,
+          alt_ft: ac.alt_ft,
+          enters_in: 0,
+          dwell: round(dwell)
+        })
+
+        Logger.info("[poller] DEPART #{key} alt=#{ac.alt_ft}ft gs=#{ac.gspeed_kt}kt — ANC on (release on exit)")
+
+        state
+        |> Map.update!(:engaged, &MapSet.put(&1, key))
+        |> put_leg(zoneset.id, key, ac, engage_at: now, exits_at: now + ttl)
+
+      passed_zone?(ac, zones) ->
         %{state | actioned: MapSet.put(state.actioned, key)} |> drop_leg(zoneset.id, key)
 
-      approaching?(ac, zoneset.anc_zones, lead) ->
+      approaching?(ac, zones, lead) ->
         # On radar and closing on the zone, not yet overhead → inbound/armed (amber),
         # ANC still off. No engage time yet (departures engage on actual entry), so
         # the leg carries engage_at: nil — the UI shows "inbound", no countdown.
-        ttl = round(departure_hold_ms(zoneset, state) / 1000) + 2
         put_leg(state, zoneset.id, key, ac, engage_at: nil, exits_at: now + ttl, approaching: true)
 
       true ->
@@ -399,6 +420,8 @@ defmodule LgaPredictor.Poller do
         drop_leg(state, zoneset.id, key)
     end
   end
+
+  defp in_any_zone?(zones, point), do: Enum.any?(zones, &Geo.point_in_zone?(point, &1))
 
   # Closing-on-the-zone test for departures: dead-reckon a fixed lookahead and check
   # the distance to the nearest ANC zone shrinks. Distinguishes a real approach from a

@@ -137,6 +137,62 @@ defmodule LgaPredictor.PollerTest do
     assert Actuator.mode() == :transparency
   end
 
+  test "departure with negative effective lead delays engage past entry" do
+    # latency 2, engage_delta 6 → lead -4s. A plane that has only just crossed the
+    # south edge should NOT engage yet (matches arrivals' enters_in == latency -
+    # engage_delta = -4, i.e. engage 4 s after geometric entry).
+    just_in = %{inbound() | lat: 40.7245, lon: -73.864, track_deg: 0.0}
+
+    start(
+      config_fun: fn -> config(type: :departure, latency: 2.0, engage_delta: 6) end,
+      fetcher: fn _ -> {:ok, [just_in]} end
+    )
+
+    :ok = Poller.start_session()
+    Process.sleep(80)
+    assert Actuator.mode() == :transparency
+  end
+
+  test "departure with negative lead engages once it is that far into the zone" do
+    # Same calibration; a plane already well inside (its position 4 s ago is still in
+    # the zone) → engage now.
+    deep = %{inbound() | lat: 40.728, lon: -73.864, track_deg: 0.0}
+
+    start(
+      config_fun: fn -> config(type: :departure, latency: 2.0, engage_delta: 6) end,
+      fetcher: fn _ -> {:ok, [deep]} end
+    )
+
+    :ok = Poller.start_session()
+    Process.sleep(80)
+    assert Actuator.mode() == :anc
+  end
+
+  test "departure leg clears when the flight vanishes from the feed (no phantom amber)" do
+    # An approaching plane (amber) that then disappears from the feed must not leave a
+    # lingering armed leg — the next poll with it absent sweeps it.
+    approaching = %{inbound() | lat: 40.712, lon: -73.864, track_deg: 0.0}
+    # The fetcher returns the plane on the first poll, then nothing (it dropped off
+    # ADS-B). An Agent flips state since the fetcher runs inside the GenServer.
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    start(
+      config_fun: fn -> config(type: :departure, latency: 0.0, zone_interval: 50) end,
+      fetcher: fn _ ->
+        n = Agent.get_and_update(calls, &{&1, &1 + 1})
+        if n == 0, do: {:ok, [approaching]}, else: {:ok, []}
+      end
+    )
+
+    # start_session polls once synchronously → the approaching leg exists now.
+    :ok = Poller.start_session()
+    assert hd(Poller.status().zonesets).phase == "armed"
+
+    # The next poll (~50 ms) sees an empty feed → the leg is swept.
+    Process.sleep(90)
+    assert hd(Poller.status().zonesets).phase == "monitoring"
+  end
+
   test "departure engages with full latency lead when engage_delta is 0" do
     # Same flight as above; with no engage_delta the 30 s latency lead carries the
     # projected point into the zone → engages.
