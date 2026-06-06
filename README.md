@@ -161,6 +161,26 @@ mix deps.get
 `mix test` runs the suite. Developed on macOS 26 ("Tahoe"); the Control Center
 automation targets that layout and may need small tweaks on other versions.
 
+### Cutting & validating a release
+
+Push a `v*` tag (e.g. `git tag v0.5.0 && git push origin v0.5.0`) — `release.yml`
+builds the self-contained backend, signs the app with the Developer ID, notarizes
+and staples it, and publishes the GitHub Release. A follow-up `validate` job then
+re-downloads the just-published assets and confirms a fresh install would be clean.
+
+That same check is a script you can run any time — it's **non-destructive** (temp
+dir only; it never touches your LaunchAgent, `/Applications`, the Accessibility
+grant, or a running dev build):
+
+```sh
+scripts/validate-release.sh            # the latest release
+scripts/validate-release.sh v0.5.0     # a specific tag
+```
+
+It verifies the installer's download URLs resolve, the backend release boots under
+its own bundled ERTS (no system Elixir/Erlang) without binding the API port, and the
+app is Developer ID-signed, notarized, stapled, and accepted by Gatekeeper.
+
 ## Using it
 
 - **Data source** picker: `airplanes.live` / `adsb.lol` (free, default) or
@@ -209,7 +229,7 @@ macos/build_app.sh      Builds the app + installs to /Applications
 config.example.json     My two real zonesets (one arrival, one departure) as a sample
 install.sh              End-user curl installer (backend release + app)
 priv/launchd/           Dev LaunchAgent (runs the service from source)
-scripts/                One-off FR24 probes + the historic backtest
+scripts/                FR24 probes, the historic backtest, validate-release.sh
 test/                   ExUnit tests (TDD)
 ```
 

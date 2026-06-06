@@ -74,3 +74,14 @@ jobs:
           gh release create "$TAG" \
             AirDefense.zip air-defense-backend-macos-arm64.tar.gz \
             --title "$TAG" --generate-notes
+
+  # Re-download the just-published assets and verify a fresh install would be clean:
+  # the URLs resolve, the self-contained backend boots, and the app is signed,
+  # notarized, stapled, and Gatekeeper-accepted. Fails the run if anything is off.
+  validate:
+    needs: release
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate the published release
+        run: ./scripts/validate-release.sh "${{ github.ref_name }}"
