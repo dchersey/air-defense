@@ -14,9 +14,9 @@ noise: detect the inbound, lock on, engage.
 
 ## Demo
 
-<video src="https://github.com/dchersey/air-defense/raw/main/media/air-defense-radar.mp4" controls width="640">
-  Your browser can't play this inline — <a href="media/air-defense-radar.mp4">download the demo (mp4)</a>.
-</video>
+[![Air Defense demo — radar tracking and the menu-bar panel switching ANC](media/demo-poster.png)](https://github.com/dchersey/air-defense/blob/main/media/air-defense-radar.mp4)
+
+▶ **[Watch the demo](https://github.com/dchersey/air-defense/blob/main/media/air-defense-radar.mp4)** — radar tracking and the menu-bar panel switching ANC in real time.
 
 ## The problem
 
