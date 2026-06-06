@@ -14,9 +14,9 @@ noise: detect the inbound, lock on, engage.
 
 ## Demo
 
-[![Air Defense demo — radar tracking and the menu-bar panel switching ANC](media/demo-poster.png)](https://github.com/dchersey/air-defense/blob/main/media/air-defense-radar.mp4)
+https://github.com/user-attachments/assets/0748e274-c487-4781-aa19-3b3a418021ef
 
-▶ **[Watch the demo](https://github.com/dchersey/air-defense/blob/main/media/air-defense-radar.mp4)** — radar tracking and the menu-bar panel switching ANC in real time.
+Radar tracking and the menu-bar panel switching ANC in real time.
 
 ## The problem
 
