@@ -35,7 +35,10 @@ sed -e "s|@REPO@|$REPO|g" \
 echo "Wrote $PLIST"
 
 # Fetch deps + compile once so the agent doesn't fail on first boot.
-( cd "$REPO" && MIX_ENV=prod mix deps.get >/dev/null && MIX_ENV=prod mix compile >/dev/null ) \
+# Record the toolchain marker so boot.sh sees a matching build and skips a
+# redundant clean-rebuild on the first launch.
+( cd "$REPO" && MIX_ENV=prod mix deps.get >/dev/null && MIX_ENV=prod mix compile >/dev/null \
+  && mkdir -p _build/prod && elixir --version | tr -d '\n' > _build/prod/.toolchain ) \
   && echo "Compiled (prod)." || { echo "ERROR: prod compile failed"; exit 1; }
 
 # Reload cleanly.

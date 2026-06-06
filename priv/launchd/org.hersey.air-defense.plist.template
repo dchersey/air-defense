@@ -13,13 +13,12 @@
   <key>Label</key>
   <string>org.hersey.air-defense</string>
 
+  <!-- boot.sh recompiles if the Elixir/OTP toolchain changed (e.g. after a weekly
+       `topgrade`) before exec'ing the app, so the service self-heals. -->
   <key>ProgramArguments</key>
   <array>
-    <string>@ELIXIR@</string>
-    <string>-S</string>
-    <string>mix</string>
-    <string>run</string>
-    <string>--no-halt</string>
+    <string>/bin/bash</string>
+    <string>@REPO@/priv/launchd/boot.sh</string>
   </array>
 
   <key>WorkingDirectory</key>
