@@ -211,7 +211,7 @@ defmodule LgaPredictor.API.Router do
     %{
       active: status.active?,
       mode: Actuator.mode(),
-      anc_phase: Actuator.phase(),
+      anc_phase: menu_phase(status),
       headphones_connected: status.headphones_connected,
       engage_delta_seconds: config.engage_delta_seconds,
       release_delta_seconds: config.release_delta_seconds,
@@ -227,10 +227,31 @@ defmodule LgaPredictor.API.Router do
       zonesets: status.zonesets,
       inbound_at: status.inbound_at,
       inbound_route: route_label(status.inbound_callsign),
+      overhead_at: status.overhead_at,
+      overhead_route: route_label(status.overhead_callsign),
       recent: History.recent(50) |> Enum.map(&with_route/1),
       # 12 buckets x 5 min = last hour of trigger counts, oldest -> newest
       history: History.counts_per_bucket(300, buckets: 12)
     }
+  end
+
+  # The menu-bar glyph phase. The Actuator knows about scheduled covers (arrival
+  # lead → :armed, ANC on → :engaged), but an *approaching departure* engages on
+  # actual entry with no pre-scheduled cover, so the Actuator stays idle while the
+  # Poller already flags that zone "armed". Fold the Poller's per-zone phase in so the
+  # glyph goes amber for an inbound departure too.
+  defp menu_phase(status) do
+    case Actuator.phase() do
+      phase when phase in [:engaged, :armed] ->
+        phase
+
+      other ->
+        cond do
+          Enum.any?(status.zonesets, &(&1.phase == "engaged")) -> :engaged
+          Enum.any?(status.zonesets, &(&1.phase == "armed")) -> :armed
+          true -> other
+        end
+    end
   end
 
   # Month-to-date credits consumed (nil if the ledger isn't running, e.g. tests).

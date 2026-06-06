@@ -327,7 +327,13 @@ defmodule LgaPredictor.Poller do
   # near-misses whose projected point stays outside never trigger). Once a flight has
   # gone past the zone's latitude band on the side it's heading, abandon it.
   defp consider_departure(ac, zoneset, key, config, state) do
-    {flat, flon} = project_ahead(ac, config.anc_latency_seconds || 0.0)
+    # Engage when the plane will be in the zone in `lead` seconds. Match the arrival
+    # path's effective lead exactly: arrivals fire at enters_in == latency -
+    # engage_delta (see dispatch/6), so departures dead-reckon that same horizon.
+    # Without engage_delta a departure leads by the raw latency — engage_delta short
+    # of arrivals — which read as engaging a few seconds too soon.
+    lead = max((config.anc_latency_seconds || 0.0) - (config.engage_delta_seconds || 0), 0.0)
+    {flat, flon} = project_ahead(ac, lead)
 
     in_zone? =
       Enum.any?(zoneset.anc_zones, fn z ->
@@ -335,6 +341,7 @@ defmodule LgaPredictor.Poller do
       end)
 
     engaged? = MapSet.member?(state.engaged, key)
+    now = System.os_time(:second)
 
     cond do
       in_zone? ->
@@ -344,13 +351,16 @@ defmodule LgaPredictor.Poller do
         # ANC releases as the last hold lapses — release tracks the *actual* exit,
         # not a straight-line dwell that under-counts a curve.
         Actuator.cover(0, departure_hold_ms(zoneset, state), key)
+        ttl = round(departure_hold_ms(zoneset, state) / 1000) + 2
 
         if engaged? do
-          state
+          # Refresh the engaged leg so the UI keeps reading "engaged" through a long
+          # bank (keep the original engage time, push the exit horizon).
+          engage_at = (find_leg(state, zoneset.id, key) || %{engage_at: now}).engage_at || now
+          put_leg(state, zoneset.id, key, ac, engage_at: engage_at, exits_at: now + ttl)
         else
-          # First detection inside: record once for history + the UI.
+          # First detection inside: record once for history.
           dwell = departure_dwell(ac, zoneset, config)
-          now = System.os_time(:second)
 
           record_history(%{
             at: now,
@@ -363,29 +373,75 @@ defmodule LgaPredictor.Poller do
 
           Logger.info("[poller] DEPART #{key} alt=#{ac.alt_ft}ft gs=#{ac.gspeed_kt}kt — ANC on (release on exit)")
 
-          leg = %{callsign: ac.callsign || ac.hex, engage_at: now, exits_at: now + round(dwell)}
-
-          %{
-            state
-            | engaged: MapSet.put(state.engaged, key),
-              intercepts:
-                Map.update(state.intercepts, zoneset.id, [leg], fn legs ->
-                  [leg | Enum.filter(legs, &(&1.exits_at > now))]
-                end)
-          }
+          state
+          |> Map.update!(:engaged, &MapSet.put(&1, key))
+          |> put_leg(zoneset.id, key, ac, engage_at: now, exits_at: now + ttl)
         end
 
       engaged? ->
         # It was overhead and has now left the zone: stop holding (ANC releases as
         # the last hold lapses) and don't re-engage it this session.
         %{state | engaged: MapSet.delete(state.engaged, key), actioned: MapSet.put(state.actioned, key)}
+        |> drop_leg(zoneset.id, key)
 
       passed_zone?(ac, zoneset.anc_zones) ->
-        %{state | actioned: MapSet.put(state.actioned, key)}
+        %{state | actioned: MapSet.put(state.actioned, key)} |> drop_leg(zoneset.id, key)
+
+      approaching?(ac, zoneset.anc_zones, lead) ->
+        # On radar and closing on the zone, not yet overhead → inbound/armed (amber),
+        # ANC still off. No engage time yet (departures engage on actual entry), so
+        # the leg carries engage_at: nil — the UI shows "inbound", no countdown.
+        ttl = round(departure_hold_ms(zoneset, state) / 1000) + 2
+        put_leg(state, zoneset.id, key, ac, engage_at: nil, exits_at: now + ttl, approaching: true)
 
       true ->
-        state
+        # On radar but not closing (e.g. a parallel fly-by) → clear any stale leg.
+        drop_leg(state, zoneset.id, key)
     end
+  end
+
+  # Closing-on-the-zone test for departures: dead-reckon a fixed lookahead and check
+  # the distance to the nearest ANC zone shrinks. Distinguishes a real approach from a
+  # parallel fly-by (whose distance grows). No track/groundspeed → not closing.
+  @approach_lookahead_seconds 30.0
+  defp approaching?(ac, anc_zones, lead) do
+    {flat, flon} = project_ahead(ac, max(lead, @approach_lookahead_seconds))
+    min_zone_distance(ac.lat, ac.lon, anc_zones) - min_zone_distance(flat, flon, anc_zones) > 0.0
+  end
+
+  defp min_zone_distance(lat, lon, anc_zones) do
+    anc_zones |> Enum.map(&Geo.distance_to_zone({lat, lon}, &1)) |> Enum.min()
+  end
+
+  # Per-zoneset intercept legs are a list; departures upsert/remove by flight key.
+  defp find_leg(state, zid, key) do
+    state.intercepts |> Map.get(zid, []) |> Enum.find(&(Map.get(&1, :key) == key))
+  end
+
+  defp put_leg(state, zid, key, ac, fields) do
+    now = System.os_time(:second)
+
+    leg =
+      Enum.into(fields, %{
+        key: key,
+        callsign: ac.callsign || ac.hex,
+        approaching: false,
+        # Departures are released on actual exit, not a predicted dwell — the UI shows
+        # a live-tracking radar mark rather than a clear-by countdown.
+        tracked: true
+      })
+
+    others =
+      state.intercepts
+      |> Map.get(zid, [])
+      |> Enum.reject(&(Map.get(&1, :key) == key or &1.exits_at <= now))
+
+    %{state | intercepts: Map.put(state.intercepts, zid, [leg | others])}
+  end
+
+  defp drop_leg(state, zid, key) do
+    legs = state.intercepts |> Map.get(zid, []) |> Enum.reject(&(Map.get(&1, :key) == key))
+    %{state | intercepts: Map.put(state.intercepts, zid, legs)}
   end
 
   # Per-poll ANC hold for a departure: comfortably longer than the poll cadence so
@@ -487,7 +543,16 @@ defmodule LgaPredictor.Poller do
 
     # Record the intercept for the UI (armed/intercept/inbound), dropping any of
     # this zone's prior intercepts that have already cleared.
-    leg = %{callsign: ac.callsign || ac.hex, engage_at: engage_at, exits_at: exits_at}
+    # Arrivals are ETA-scheduled, so exits_at is a real prediction → the UI shows a
+    # clear-by countdown (tracked: false). approaching: false — armed via engage_at.
+    leg = %{
+      key: key,
+      callsign: ac.callsign || ac.hex,
+      engage_at: engage_at,
+      exits_at: exits_at,
+      approaching: false,
+      tracked: false
+    }
 
     intercepts =
       Map.update(state.intercepts, zoneset_id, [leg], fn legs ->
@@ -517,17 +582,20 @@ defmodule LgaPredictor.Poller do
       Enum.map(config.zonesets, fn zs ->
         session = Map.get(state.sessions, zs.id)
         legs = state.intercepts |> Map.get(zs.id, []) |> Enum.filter(&(&1.exits_at > now))
-        armed = Enum.filter(legs, &(&1.engage_at > now))
+        armed = Enum.filter(legs, &armed_leg?(&1, now))
 
         phase =
           cond do
             session == nil -> "idle"
-            Enum.any?(legs, &(&1.engage_at <= now)) -> "engaged"
+            Enum.any?(legs, &engaged_leg?(&1, now)) -> "engaged"
             armed != [] -> "armed"
             true -> "monitoring"
           end
 
-        intercept_at = if armed == [], do: nil, else: armed |> Enum.map(& &1.engage_at) |> Enum.min()
+        # Countdown only for armed legs with a real engage time (arrivals); an
+        # approaching departure has none (engages on actual entry).
+        intercept_at =
+          armed |> Enum.map(& &1.engage_at) |> Enum.reject(&is_nil/1) |> Enum.min(fn -> nil end)
 
         %{
           id: zs.id,
@@ -543,12 +611,25 @@ defmodule LgaPredictor.Poller do
     ends = state.sessions |> Map.values() |> Enum.map(& &1.ends_at)
 
     # Soonest still-armed intercept across all zones — drives the inbound banner.
+    # Prefer one with a real engage time (arrival countdown); otherwise fall back to
+    # an approaching departure (banner shows the route, "arming", no countdown).
+    armed = state.intercepts |> Map.values() |> List.flatten() |> Enum.filter(&armed_leg?(&1, now))
+
     soonest =
+      armed
+      |> Enum.filter(&(&1.engage_at != nil))
+      |> Enum.min_by(& &1.engage_at, fn -> nil end) ||
+        List.first(armed)
+
+    # Currently-overhead flight (ANC engaged) → the red banner. Soonest to clear.
+    # Arrivals carry a real exit prediction (clear-by countdown); departures are
+    # live-tracked (tracked: true → no countdown, a radar mark instead).
+    overhead =
       state.intercepts
       |> Map.values()
       |> List.flatten()
-      |> Enum.filter(&(&1.exits_at > now and &1.engage_at > now))
-      |> Enum.min_by(& &1.engage_at, fn -> nil end)
+      |> Enum.filter(&engaged_leg?(&1, now))
+      |> Enum.min_by(& &1.exits_at, fn -> nil end)
 
     %{
       active?: map_size(state.sessions) > 0,
@@ -558,8 +639,22 @@ defmodule LgaPredictor.Poller do
       session_ends_at: if(ends == [], do: nil, else: Enum.max(ends)),
       zonesets: zonesets,
       inbound_at: soonest && soonest.engage_at,
-      inbound_callsign: soonest && soonest.callsign
+      inbound_callsign: soonest && soonest.callsign,
+      overhead_callsign: overhead && overhead.callsign,
+      overhead_at: overhead && not Map.get(overhead, :tracked, false) && overhead.exits_at || nil
     }
+  end
+
+  # A leg is "armed" (inbound, amber) while it hasn't engaged yet: an approaching
+  # departure, or an arrival whose scheduled engage is still in the future. "engaged"
+  # once its real engage time has passed. (engage_at may be nil for approaching
+  # departures — guard before comparing, since nil sorts above integers in Elixir.)
+  defp armed_leg?(leg, now) do
+    Map.get(leg, :approaching, false) or (leg.engage_at != nil and leg.engage_at > now)
+  end
+
+  defp engaged_leg?(leg, now) do
+    not Map.get(leg, :approaching, false) and leg.engage_at != nil and leg.engage_at <= now
   end
 
   ## Helpers

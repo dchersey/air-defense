@@ -70,6 +70,7 @@ enum Palette {
   static let go = Color.theme(light: 0x5D9150, dark: 0x5BE37A)
   static let goSoft = Color.theme(light: 0x5D9150, dark: 0x5BE37A, lightAlpha: 0.16, darkAlpha: 0.16)
   static let stop = Color.theme(light: 0xD05641, dark: 0xFF6F6B)
+  static let stopSoft = Color.theme(light: 0xD05641, dark: 0xFF6F6B, lightAlpha: 0.16, darkAlpha: 0.16)
   // Text on an accent fill: white on the light blue Start button, dark on cyan.
   static let onAccent = Color.theme(light: 0xFFFFFF, dark: 0x04221E)
 
@@ -355,12 +356,25 @@ private struct StatusBanner: View {
         icon: "headphones", tint: Palette.inbound, bg: Palette.inboundSoft,
         strong: "AirPods not connected", rest: " — monitoring paused. Timer still running.")
     case .pending:
-      let route = model.inboundRoute ?? "LGA arrival"
+      let route = model.inboundRoute ?? "LGA traffic"
       let eta =
         model.inboundAt.map { " Cancellation engages in \(mmss($0))." } ?? " Cancellation arming."
       banner(
         icon: "bolt.fill", tint: Palette.accent, bg: Palette.accentSoft,
         strong: "Inbound — \(route) on vector.", rest: eta)
+    case .engaged:
+      // Overhead now (ANC on, red). Arrivals show a clear-by countdown; departures
+      // are live-tracked (no reliable exit prediction) → a radar mark instead.
+      let route = model.overheadRoute ?? "LGA traffic"
+      if let at = model.overheadAt {
+        banner(
+          icon: "headphones", tint: Palette.stop, bg: Palette.stopSoft,
+          strong: "Overhead — \(route).", rest: " Clears in \(mmss(at)).")
+      } else {
+        banner(
+          icon: "dot.radiowaves.up.forward", tint: Palette.stop, bg: Palette.stopSoft,
+          strong: "Overhead — \(route).", rest: " Live-tracking until it clears.")
+      }
     default:
       EmptyView()
     }

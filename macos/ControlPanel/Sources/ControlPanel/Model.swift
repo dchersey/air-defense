@@ -73,6 +73,10 @@ struct StatusResponse: Codable {
   // Soonest inbound (for the banner): when ANC engages + the flight's route label.
   let inboundAt: Int?
   let inboundRoute: String?
+  // Currently-overhead flight (ANC engaged): route label + clear-by time. overheadAt
+  // is nil for live-tracked departures (radar mark instead of a countdown).
+  let overheadAt: Int?
+  let overheadRoute: String?
   let recent: [Flight]
   let history: [Int]
 }
@@ -94,6 +98,10 @@ final class StatusModel {
   // Soonest inbound for the banner (engage time + route label).
   var inboundAt: Int?
   var inboundRoute: String?
+  // Currently-overhead flight (engaged): clear-by time (nil for live-tracked
+  // departures) + route label.
+  var overheadAt: Int?
+  var overheadRoute: String?
   var history: [Int] = []
   var reachable = false
 
@@ -203,6 +211,8 @@ final class StatusModel {
       zonesets = status.zonesets
       inboundAt = status.inboundAt
       inboundRoute = status.inboundRoute
+      overheadAt = status.overheadAt
+      overheadRoute = status.overheadRoute
       recent = status.recent
       history = status.history
       reachable = true

@@ -120,6 +120,96 @@ defmodule LgaPredictor.PollerTest do
     assert Actuator.mode() == :transparency
   end
 
+  test "departure engage applies engage_delta (same lead as arrivals)" do
+    # Flight ~0.012° south of the ANC zone's south edge (40.724), heading north at
+    # 100 kt (~0.000463°/s). With a 30 s latency lead it projects INTO the zone; the
+    # +10 s engage_delta cuts the lead to 20 s, so the projected point stays short —
+    # no engage. Proves departures honor engage_delta the way arrivals do.
+    approaching = %{inbound() | lat: 40.712, lon: -73.864, track_deg: 0.0}
+
+    start(
+      config_fun: fn -> config(type: :departure, latency: 30.0, engage_delta: 10) end,
+      fetcher: fn _ -> {:ok, [approaching]} end
+    )
+
+    :ok = Poller.start_session()
+    Process.sleep(80)
+    assert Actuator.mode() == :transparency
+  end
+
+  test "departure engages with full latency lead when engage_delta is 0" do
+    # Same flight as above; with no engage_delta the 30 s latency lead carries the
+    # projected point into the zone → engages.
+    approaching = %{inbound() | lat: 40.712, lon: -73.864, track_deg: 0.0}
+
+    start(
+      config_fun: fn -> config(type: :departure, latency: 30.0, engage_delta: 0) end,
+      fetcher: fn _ -> {:ok, [approaching]} end
+    )
+
+    :ok = Poller.start_session()
+    Process.sleep(80)
+    assert Actuator.mode() == :anc
+  end
+
+  test "departure approaching the zone reports armed (amber), not engaged" do
+    # South of the ANC zone, heading north, closing on it but not yet in/at it
+    # (latency 0 → no projection lead). Should read as inbound/armed, ANC still off.
+    approaching = %{inbound() | lat: 40.712, lon: -73.864, track_deg: 0.0}
+
+    start(
+      config_fun: fn -> config(type: :departure, latency: 0.0, engage_delta: 0) end,
+      fetcher: fn _ -> {:ok, [approaching]} end
+    )
+
+    :ok = Poller.start_session()
+    Process.sleep(80)
+
+    assert Actuator.mode() == :transparency
+    status = Poller.status()
+    zone = hd(status.zonesets)
+    assert zone.phase == "armed"
+    assert zone.inbound >= 1
+    assert status.inbound_callsign == "INBND"
+  end
+
+  test "departure parallel fly-by does not report armed (not closing)" do
+    # In the latitude band but well west, heading due north → distance to the zone
+    # grows, not shrinks: it's a miss, so no amber.
+    byflight = %{inbound() | lon: -73.895, track_deg: 0.0}
+
+    start(
+      config_fun: fn -> config(type: :departure, latency: 0.0) end,
+      fetcher: fn _ -> {:ok, [byflight]} end
+    )
+
+    :ok = Poller.start_session()
+    Process.sleep(80)
+    assert hd(Poller.status().zonesets).phase == "monitoring"
+  end
+
+  test "departure overhead exposes live-tracking (no clear-by time)" do
+    start(config_fun: fn -> config(type: :departure) end, fetcher: fn _ -> {:ok, [inbound()]} end)
+    :ok = Poller.start_session()
+    Process.sleep(80)
+
+    status = Poller.status()
+    assert Actuator.mode() == :anc
+    assert status.overhead_callsign == "INBND"
+    # Departures release on actual exit, not a prediction → no countdown.
+    assert status.overhead_at == nil
+  end
+
+  test "arrival overhead exposes a clear-by time" do
+    start([])
+    :ok = Poller.start_session()
+    Process.sleep(80)
+
+    status = Poller.status()
+    assert status.overhead_callsign == "INBND"
+    assert is_integer(status.overhead_at)
+  end
+
   test "departure zone polls the monitor+ANC union (+margin)" do
     test_pid = self()
 
