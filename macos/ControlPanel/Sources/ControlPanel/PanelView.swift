@@ -360,7 +360,7 @@ private struct StatusBanner: View {
       let eta =
         model.inboundAt.map { " Cancellation engages in \(mmss($0))." } ?? " Cancellation arming."
       banner(
-        icon: "bolt.fill", tint: Palette.accent, bg: Palette.accentSoft,
+        icon: "bolt.fill", tint: Palette.inbound, bg: Palette.inboundSoft,
         strong: "Inbound — \(route) on vector.", rest: eta)
     case .engaged:
       // Overhead now (ANC on, red). Arrivals show a clear-by countdown; departures
