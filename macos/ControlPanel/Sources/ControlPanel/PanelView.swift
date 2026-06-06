@@ -482,6 +482,7 @@ private struct ZoneRow: View {
 private struct ActivityStrip: View {
   let model: StatusModel
   @State private var showFlights = false
+  @State private var hoveredBar: Int?
 
   var body: some View {
     if model.reachable {
@@ -518,12 +519,81 @@ private struct ActivityStrip: View {
     return HStack(alignment: .bottom, spacing: 4) {
       ForEach(Array(model.history.enumerated()), id: \.offset) { index, value in
         let hot = index == model.history.count - 1 && model.phase == .pending
-        RoundedRectangle(cornerRadius: 2, style: .continuous)
-          .fill(barFill(value: value, hot: hot))
-          .frame(height: value == 0 ? 6 : max(10, 56 * Double(value) / Double(maxV)))
+        // The bar sits at the bottom of a full-height, transparent column so the
+        // whole 5-min slot is a hover target (empty bars are only a 6 pt stub).
+        ZStack(alignment: .bottom) {
+          Color.clear
+          RoundedRectangle(cornerRadius: 2, style: .continuous)
+            .fill(barFill(value: value, hot: hot))
+            .frame(height: value == 0 ? 6 : max(10, 56 * Double(value) / Double(maxV)))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onHover { inside in
+          if inside { hoveredBar = index } else if hoveredBar == index { hoveredBar = nil }
+        }
       }
     }
     .frame(height: 56, alignment: .bottom)
+    // Floating hovertip (a real .help() tooltip doesn't fire inside MenuBarExtra's
+    // window), anchored over the hovered bar, clamped to the chart width.
+    .overlay { hoverCard }
+  }
+
+  @ViewBuilder private var hoverCard: some View {
+    if let h = hoveredBar {
+      GeometryReader { geo in
+        let flights = bucketFlights(h)
+        let shown = Array(flights.prefix(8))
+        let cardW: CGFloat = 196
+        let cardH = CGFloat(max(shown.count, 1)) * 16 + 16
+        let n = max(model.history.count, 1)
+        let center = geo.size.width * (CGFloat(h) + 0.5) / CGFloat(n)
+        let x = min(max(center, cardW / 2), geo.size.width - cardW / 2)
+        tooltipCard(flights, shown: shown)
+          .frame(width: cardW, alignment: .leading)
+          .position(x: x, y: -cardH / 2 - 6)
+      }
+      .allowsHitTesting(false)
+    }
+  }
+
+  private func tooltipCard(_ flights: [Flight], shown: [Flight]) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+      if shown.isEmpty {
+        Text("No overflights").font(.adMono).foregroundStyle(Palette.ink3)
+      } else {
+        ForEach(shown) { f in
+          (Text(ancTime(f)).foregroundStyle(Palette.accent)
+            + Text("  ").font(.adMono)
+            + Text(routeLabel(f)).foregroundStyle(Palette.ink))
+            .font(.adMono).monospacedDigit().lineLimit(1)
+        }
+        if flights.count > shown.count {
+          Text("+\(flights.count - shown.count) more").font(.adMono).foregroundStyle(Palette.ink3)
+        }
+      }
+    }
+    .padding(.horizontal, 9)
+    .padding(.vertical, 7)
+    .background(
+      RoundedRectangle(cornerRadius: 7, style: .continuous)
+        .fill(Palette.panelTop)
+        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(Palette.line, lineWidth: 1))
+        .shadow(color: .black.opacity(0.28), radius: 8, y: 3)
+    )
+  }
+
+  // Flights whose detection time falls in bar `index`'s 5-min window (the bars are
+  // 12 buckets, oldest→newest, the newest ending ~now), most recent first.
+  private func bucketFlights(_ index: Int) -> [Flight] {
+    let now = Date().timeIntervalSince1970
+    let bucketsFromNewest = Double(model.history.count - 1 - index)
+    let end = now - bucketsFromNewest * 300
+    let start = end - 300
+    return model.recent
+      .filter { Double($0.at) >= start && Double($0.at) < end }
+      .sorted { $0.at > $1.at }
   }
 
   // Idle = faint flat stub; active = top-lit gradient fading to 45% at the base;
