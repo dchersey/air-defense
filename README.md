@@ -65,6 +65,37 @@ exit. Two global sliders (±15 s) nudge the on/off moments to taste, and a
 configurable `anc_latency_seconds` fires each switch slightly early so the mode has
 actually changed by the time the plane arrives.
 
+### Two kinds of zone: arrivals (steady) vs departures (accelerating)
+
+Each zoneset has a **type** — set it with the Arrival / Departure picker in the zone
+editor — because the two flight phases behave differently:
+
+- **Arrival (steady).** On final approach a jet is already on a stable vector:
+  roughly constant heading and speed. "Distance ÷ ground speed" is a good predictor,
+  so an arrival zone **schedules** the engage/release from that ETA, exactly as
+  above, and shows a **clear-by countdown** while the plane is overhead.
+
+- **Departure (accelerating).** Climbing out, a jet is still **accelerating and
+  banking**, and it turns at a different point on different days — some climb
+  straight, some make a big turn, some pass you entirely. A far-out ETA mistimes the
+  engage, and a near-distance threshold false-triggers on the ones that miss. So a
+  departure zone doesn't predict — it **tracks**: it polls fast (the free feed is
+  unmetered) over the **union** of the monitor and ANC zones to keep the climbing
+  plane on radar through the gap, **engages on actual entry** (latency-adjusted so
+  the mode flips just as it crosses in), **holds** ANC while it's overhead, and
+  **releases on the actual exit** rather than a straight-line dwell that would
+  under-count a curving path. A plane that's merely near the zone but tracking away
+  (a miss) never engages and is dropped once it's past. While it's live-tracked the
+  banner shows a **radar mark** instead of a countdown.
+
+Both types drive the same menu-bar signals: **amber** when a plane is inbound and
+closing, **red** while ANC is engaged.
+
+See [`config.example.json`](config.example.json) for my two actual zones — one of
+each type — as a worked example you can adapt (copy it to
+`~/Library/Application Support/air-defense/config.json`, or just read it alongside
+the zone editor).
+
 Sessions are manual: hit **Start** on a zone when the planes start, and it runs for
 ~4 hours or until you stop it. Idle — and free — otherwise.
 
@@ -173,6 +204,7 @@ lib/lga_predictor/      Elixir service: geo, predictor, fr24 client, poller,
                         config_store, credit_ledger, actuator, api/router
 macos/ControlPanel/     SwiftUI menu-bar app (control panel + ANC actuator)
 macos/build_app.sh      Builds the app + installs to /Applications
+config.example.json     My two real zonesets (one arrival, one departure) as a sample
 install.sh              End-user curl installer (backend release + app)
 priv/launchd/           Dev LaunchAgent (runs the service from source)
 scripts/                One-off FR24 probes + the historic backtest
@@ -182,8 +214,9 @@ test/                   ExUnit tests (TDD)
 ## Limitations
 
 - **Apple Silicon, macOS 15+.** Intel: build from source.
-- It's tuned for *my* apartment under *LaGuardia's* paths — the default zones are
-  mine. You'll draw your own monitor/ANC zones for wherever you are.
+- It's tuned for *my* apartment under *LaGuardia's* paths — the zones in
+  [`config.example.json`](config.example.json) are mine. You'll draw your own
+  monitor/ANC zones for wherever you are.
 - It can only switch a device that's currently your active output and connected;
   pair it with Keep Sound Alive so the AirPods don't nap mid-session.
 - ANC is toggled by automating Control Center — it needs the Accessibility grant and

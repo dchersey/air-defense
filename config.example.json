@@ -1,0 +1,192 @@
+{
+  "version": 22,
+  "provider": "airplanes_live",
+  "global_ceiling_ft": 6000,
+  "anc_latency_seconds": 2.0,
+  "engage_delta_seconds": 6,
+  "release_delta_seconds": -3,
+  "max_dwell_seconds": 30,
+  "billing_reset_day": 1,
+  "zonesets": [
+    {
+      "id": "dep1",
+      "name": "Departures (accelerating)",
+      "type": "departure",
+      "enabled": true,
+      "poll_interval_ms": 3000,
+      "trigger": "assume",
+      "reckoning": "accelerating",
+      "assume_delay_seconds": 20,
+      "assume_duration_seconds": 40,
+      "monitor_zone": {
+        "geometry": {
+          "coordinates": [
+            [
+              [
+                -73.8931859,
+                40.7655697
+              ],
+              [
+                -73.8988514,
+                40.7568512
+              ],
+              [
+                -73.8945298,
+                40.7468257
+              ],
+              [
+                -73.8541611,
+                40.7529224
+              ],
+              [
+                -73.8571935,
+                40.7586444
+              ],
+              [
+                -73.8931859,
+                40.7655697
+              ]
+            ]
+          ],
+          "type": "Polygon"
+        },
+        "properties": {},
+        "type": "Feature"
+      },
+      "anc_zones": [
+        {
+          "geometry": {
+            "coordinates": [
+              [
+                [
+                  -73.8459017,
+                  40.7251932
+                ],
+                [
+                  -73.8652121,
+                  40.7204134
+                ],
+                [
+                  -73.8946446,
+                  40.7256322
+                ],
+                [
+                  -73.8962945,
+                  40.7461902
+                ],
+                [
+                  -73.8588155,
+                  40.7516922
+                ],
+                [
+                  -73.8459017,
+                  40.7251932
+                ]
+              ]
+            ],
+            "type": "Polygon"
+          },
+          "properties": {},
+          "type": "Feature"
+        }
+      ]
+    },
+    {
+      "id": "arr1",
+      "name": "Arrivals (vectoring)",
+      "type": "arrival",
+      "enabled": true,
+      "poll_interval_ms": 10000,
+      "trigger": "assume",
+      "reckoning": "constant",
+      "min_gspeed_kt": 120,
+      "assume_delay_seconds": 25,
+      "assume_duration_seconds": 35,
+      "monitor_zone": {
+        "features": [
+          {
+            "geometry": {
+              "coordinates": [
+                [
+                  [
+                    -73.8764517,
+                    40.7336041
+                  ],
+                  [
+                    -73.873093,
+                    40.7154936
+                  ],
+                  [
+                    -73.9005378,
+                    40.7127776
+                  ],
+                  [
+                    -73.902875,
+                    40.7211741
+                  ],
+                  [
+                    -73.9044709,
+                    40.7246607
+                  ],
+                  [
+                    -73.886326,
+                    40.7308527
+                  ],
+                  [
+                    -73.8764517,
+                    40.7336041
+                  ]
+                ]
+              ],
+              "type": "Polygon"
+            },
+            "properties": {},
+            "type": "Feature"
+          }
+        ],
+        "type": "FeatureCollection"
+      },
+      "anc_zones": [
+        {
+          "geometry": {
+            "coordinates": [
+              [
+                [
+                  -73.8910152,
+                  40.7392087
+                ],
+                [
+                  -73.8580692,
+                  40.7105204
+                ],
+                [
+                  -73.8488432,
+                  40.7254337
+                ],
+                [
+                  -73.8647084,
+                  40.7336245
+                ],
+                [
+                  -73.8723934,
+                  40.7360423
+                ],
+                [
+                  -73.8794785,
+                  40.7394079
+                ],
+                [
+                  -73.8910152,
+                  40.7392087
+                ]
+              ]
+            ],
+            "type": "Polygon"
+          },
+          "properties": {},
+          "type": "Feature"
+        }
+      ]
+    }
+  ]
+}
