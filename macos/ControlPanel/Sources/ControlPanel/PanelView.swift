@@ -197,6 +197,13 @@ struct PanelView: View {
         }
       }
       .animation(.easeInOut(duration: 0.2), value: model.toast)
+      // MenuBarExtra(.window) keeps this view alive across open/close, so navigation
+      // state would otherwise persist. Reset to the main page when the panel closes
+      // (the window resigns key and orders out) so it always reopens on the main view.
+      .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+        showSettings = false
+        showEditor = false
+      }
   }
 
   @ViewBuilder private var content: some View {
