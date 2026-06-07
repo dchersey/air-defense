@@ -87,12 +87,18 @@ defmodule LgaPredictor.Poller do
   def handle_call(:status, _from, state), do: {:reply, status_of(state), state}
 
   def handle_call({:set_headphones, connected}, _from, state) do
-    if connected != state.headphones_connected do
-      Logger.info("[poller] headphones #{if connected, do: "connected — resuming", else: "disconnected — pausing"}")
-      unless connected, do: Actuator.reset()
-    end
+    state =
+      if connected != state.headphones_connected do
+        Logger.info("[poller] headphones #{if connected, do: "connected — resuming", else: "disconnected — pausing"}")
+        unless connected, do: Actuator.reset()
+        # Release our keep-alive hold while the buds are gone (let the route idle)
+        # and re-acquire it on reconnect.
+        reconcile_keep_alive(%{state | headphones_connected: connected})
+      else
+        state
+      end
 
-    {:reply, :ok, %{state | headphones_connected: connected}}
+    {:reply, :ok, state}
   end
 
   @impl true
@@ -109,11 +115,9 @@ defmodule LgaPredictor.Poller do
   ## Session lifecycle
 
   defp start_one(state, id) do
-    # Reset stats only when starting from fully idle; the first session also asks
-    # keep-alive to hold the audio route.
+    # Reset stats only when starting from fully idle.
     state =
       if map_size(state.sessions) == 0 do
-        notify_keep_alive(state, :on)
         %{state | polls: 0, credits: 0, actioned: MapSet.new(), engaged: MapSet.new()}
       else
         state
@@ -125,6 +129,8 @@ defmodule LgaPredictor.Poller do
     Logger.info("[poller] session START #{id} — #{div(state.session_duration, 60_000)} min")
 
     state = %{state | sessions: Map.put(state.sessions, id, %{ends_at: ends_at, timer: timer})}
+    # Hold the audio route only while the AirPods are actually connected.
+    state = reconcile_keep_alive(state)
     # Poll this zoneset right away, then on its own per-zoneset cadence.
     poll_tick(state, id)
   end
@@ -159,9 +165,30 @@ defmodule LgaPredictor.Poller do
   defp go_idle(state) do
     Enum.each(state.poll_timers, fn {_id, ref} -> Process.cancel_timer(ref) end)
     Actuator.reset()
-    notify_keep_alive(state, :off)
+    state = reconcile_keep_alive(state)
     Logger.info("[poller] all sessions ended — #{state.polls} polls, ~#{state.credits} credits")
     %{state | poll_timers: %{}, suppress_until: %{}, intercepts: %{}, engaged: MapSet.new()}
+  end
+
+  # Push/pop our single keep-alive hold so it's held exactly while a session is
+  # active AND the AirPods are connected: when the buds disconnect we release the
+  # hold (let the route idle) and re-acquire it on reconnect. `keep_alive_held`
+  # guards the LIFO so we never double-push or double-pop.
+  defp reconcile_keep_alive(state) do
+    want = map_size(state.sessions) > 0 and state.headphones_connected
+
+    cond do
+      want and not state.keep_alive_held ->
+        notify_keep_alive(state, :on)
+        %{state | keep_alive_held: true}
+
+      not want and state.keep_alive_held ->
+        notify_keep_alive(state, :off)
+        %{state | keep_alive_held: false}
+
+      true ->
+        state
+    end
   end
 
   # Best-effort — must never crash the session loop if keep-alive is down.
@@ -705,6 +732,7 @@ defmodule LgaPredictor.Poller do
       polls: 0,
       credits: 0,
       headphones_connected: true,
+      keep_alive_held: false,
       actioned: MapSet.new(),
       fetcher: Keyword.get(opts, :fetcher, &default_fetch(&1, sandbox?)),
       config_fun: Keyword.get(opts, :config_fun, fn -> ConfigStore.get() end),

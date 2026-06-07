@@ -505,6 +505,50 @@ defmodule LgaPredictor.PollerTest do
     assert_receive {:keep_alive, :off}
   end
 
+  test "keep-alive: released when AirPods disconnect mid-session, re-acquired on reconnect" do
+    test_pid = self()
+
+    start(
+      config_fun: fn -> config2() end,
+      fetcher: fn _ -> {:ok, []} end,
+      keep_alive_fun: fn which -> send(test_pid, {:keep_alive, which}) end
+    )
+
+    :ok = Poller.start_session("z1")
+    assert_receive {:keep_alive, :on}
+
+    # buds drop — release the hold (don't keep a disconnected route awake)
+    :ok = Poller.set_headphones(false)
+    assert_receive {:keep_alive, :off}
+
+    # buds back — re-acquire while the session is still running
+    :ok = Poller.set_headphones(true)
+    assert_receive {:keep_alive, :on}
+
+    # ending the session pops it once more, not twice
+    :ok = Poller.stop_session("z1")
+    assert_receive {:keep_alive, :off}
+    refute_receive {:keep_alive, _}, 50
+  end
+
+  test "keep-alive: no hold acquired when a session starts with AirPods already off" do
+    test_pid = self()
+
+    start(
+      config_fun: fn -> config2() end,
+      fetcher: fn _ -> {:ok, []} end,
+      keep_alive_fun: fn which -> send(test_pid, {:keep_alive, which}) end
+    )
+
+    :ok = Poller.set_headphones(false)
+    :ok = Poller.start_session("z1")
+    refute_receive {:keep_alive, :on}, 50
+
+    # connecting now acquires it
+    :ok = Poller.set_headphones(true)
+    assert_receive {:keep_alive, :on}
+  end
+
   test "keep-alive failures never block a session" do
     start(
       config_fun: fn -> config2() end,
