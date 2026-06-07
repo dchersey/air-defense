@@ -136,6 +136,15 @@ final class StatusModel {
   @ObservationIgnored private var alertPlayer: AVAudioPlayer?
   private let quietGap: TimeInterval = 600
 
+  // Headphones-off (not-monitoring) spans observed during a session, kept for the
+  // last hour. Used to (a) NOT count off-time toward the quiet-alert window — else
+  // reconnecting after a long pause would instantly trip the 10-min gap — and (b)
+  // compact the activity chart so a pause shows no empty bars (with a separator if
+  // the off span exceeded a bucket). The app is the source of truth for headphone
+  // state (it polls CoreAudio every 2s), so these are recorded locally.
+  private(set) var pauseIntervals: [DateInterval] = []
+  private(set) var currentPauseStart: Date?
+
   // Soft pulse (0.5...1.0) for the menu-bar glyph while monitoring. Driven by a
   // timer rather than a SwiftUI animation — MenuBarExtra(.window) tears if a
   // repeatForever animation runs in the scene, so we animate by swapping the
@@ -218,6 +227,7 @@ final class StatusModel {
       reachable = true
 
       updateHeadphones()
+      trackPauses()
       applyModeIfChanged(status.mode)
       updateMenuPulse()
       evaluateQuietAlert()
@@ -249,11 +259,61 @@ final class StatusModel {
       lastFlight >= start
     else { return }
 
+    // Measure the gap in MONITORED time only — subtract any headphones-off spans
+    // since the reference, so a long pause doesn't make us fire the instant the buds
+    // come back on.
     let reference = max(lastFlight, lastQuietAlertAt ?? .distantPast)
-    if Date().timeIntervalSince(reference) >= quietGap {
+    let monitored = Date().timeIntervalSince(reference) - pausedSeconds(since: reference)
+    if monitored >= quietGap {
       playQuietAlert()
       lastQuietAlertAt = Date()
     }
+  }
+
+  // Record headphones-off spans (only while a session is active) and prune to the
+  // last hour. Runs every refresh tick, after `updateHeadphones()` sets the state.
+  private func trackPauses() {
+    let now = Date()
+    if active && !headphonesConnected {
+      if currentPauseStart == nil { currentPauseStart = now }
+    } else if let start = currentPauseStart {
+      pauseIntervals.append(DateInterval(start: start, end: now))
+      currentPauseStart = nil
+    }
+    let cutoff = now.addingTimeInterval(-3600)
+    pauseIntervals.removeAll { $0.end < cutoff }
+  }
+
+  // Total headphones-off time after `ref` (completed spans + any open pause to now).
+  private func pausedSeconds(since ref: Date) -> TimeInterval {
+    let now = Date()
+    var total: TimeInterval = 0
+    for iv in pauseIntervals {
+      let lo = max(iv.start, ref)
+      if iv.end > lo { total += iv.end.timeIntervalSince(lo) }
+    }
+    if let open = currentPauseStart {
+      let lo = max(open, ref)
+      if now > lo { total += now.timeIntervalSince(lo) }
+    }
+    return total
+  }
+
+  // Seconds of the wall-clock window [start, end] (unix epoch) that were NOT
+  // monitored (headphones off). Drives the activity chart's gap compaction.
+  func pausedOverlap(start: TimeInterval, end: TimeInterval) -> TimeInterval {
+    let s = Date(timeIntervalSince1970: start)
+    let e = Date(timeIntervalSince1970: end)
+    var total: TimeInterval = 0
+    for iv in pauseIntervals {
+      let lo = max(iv.start, s), hi = min(iv.end, e)
+      if hi > lo { total += hi.timeIntervalSince(lo) }
+    }
+    if let open = currentPauseStart {
+      let lo = max(open, s), hi = min(Date(), e)
+      if hi > lo { total += hi.timeIntervalSince(lo) }
+    }
+    return total
   }
 
   // Play the bundled "all-clear" message at a modest volume through the active output.

@@ -521,41 +521,95 @@ private struct ActivityStrip: View {
     }
   }
 
+  // One drawn bar: its original history bucket index (for hover/time mapping) + count.
+  private struct ChartBucket { let index: Int; let value: Int }
+
+  // Drop buckets that were entirely headphones-off (not monitoring) so the chart shows
+  // no empty gap, and mark where a removed span exceeded 5 min so a separator is drawn
+  // between the surrounding bars. Buckets with detections are always kept.
+  private func displayedBuckets() -> (bars: [ChartBucket], separatorsAfter: Set<Int>) {
+    let n = model.history.count
+    guard n > 0 else { return ([], []) }
+    let now = Date().timeIntervalSince1970
+    var bars: [ChartBucket] = []
+    var seps: Set<Int> = []
+    var removed: TimeInterval = 0
+
+    for i in 0..<n {
+      let end = now - Double(n - 1 - i) * 300
+      let start = end - 300
+      let value = model.history[i]
+      let paused = model.pausedOverlap(start: start, end: end)
+
+      if value == 0 && paused >= 150 {  // mostly not monitoring, nothing to show → drop
+        removed += paused
+        continue
+      }
+      // A >5-min removed span between two kept bars gets a separator (never leading).
+      if removed > 300 && !bars.isEmpty { seps.insert(bars.count - 1) }
+      removed = 0
+      bars.append(ChartBucket(index: i, value: value))
+    }
+    return (bars, seps)
+  }
+
   private var bars: some View {
-    let maxV = max(model.history.max() ?? 1, 1)
+    let (buckets, seps) = displayedBuckets()
+    let maxV = max(buckets.map(\.value).max() ?? 1, 1)
+    let count = max(buckets.count, 1)
     return HStack(alignment: .bottom, spacing: 4) {
-      ForEach(Array(model.history.enumerated()), id: \.offset) { index, value in
-        let hot = index == model.history.count - 1 && model.phase == .pending
-        // The bar sits at the bottom of a full-height, transparent column so the
-        // whole 5-min slot is a hover target (empty bars are only a 6 pt stub).
-        ZStack(alignment: .bottom) {
-          Color.clear
-          RoundedRectangle(cornerRadius: 2, style: .continuous)
-            .fill(barFill(value: value, hot: hot))
-            .frame(height: value == 0 ? 6 : max(10, 56 * Double(value) / Double(maxV)))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(Rectangle())
-        .onHover { inside in
-          if inside { hoveredBar = index } else if hoveredBar == index { hoveredBar = nil }
+      if buckets.isEmpty {
+        Color.clear
+      } else {
+        ForEach(Array(buckets.enumerated()), id: \.offset) { _, b in
+          let hot = b.index == model.history.count - 1 && model.phase == .pending
+          // The bar sits at the bottom of a full-height, transparent column so the
+          // whole 5-min slot is a hover target (empty bars are only a 6 pt stub).
+          ZStack(alignment: .bottom) {
+            Color.clear
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+              .fill(barFill(value: b.value, hot: hot))
+              .frame(height: b.value == 0 ? 6 : max(10, 56 * Double(b.value) / Double(maxV)))
+          }
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .contentShape(Rectangle())
+          .onHover { inside in
+            if inside { hoveredBar = b.index } else if hoveredBar == b.index { hoveredBar = nil }
+          }
         }
       }
     }
     .frame(height: 56, alignment: .bottom)
+    // Vertical separators at the boundaries where a >5-min headphones-off span was
+    // compacted out (zero layout impact so the bars stay uniform width).
+    .overlay { separators(seps, count: count) }
     // Floating hovertip (a real .help() tooltip doesn't fire inside MenuBarExtra's
     // window), anchored over the hovered bar, clamped to the chart width.
-    .overlay { hoverCard }
+    .overlay { hoverCard(buckets) }
   }
 
-  @ViewBuilder private var hoverCard: some View {
-    if let h = hoveredBar {
+  @ViewBuilder private func separators(_ seps: Set<Int>, count: Int) -> some View {
+    if !seps.isEmpty {
+      GeometryReader { geo in
+        ForEach(Array(seps), id: \.self) { k in
+          Rectangle()
+            .fill(Palette.ink3.opacity(0.55))
+            .frame(width: 1)
+            .position(x: geo.size.width * CGFloat(k + 1) / CGFloat(count), y: geo.size.height / 2)
+        }
+      }
+    }
+  }
+
+  @ViewBuilder private func hoverCard(_ buckets: [ChartBucket]) -> some View {
+    if let h = hoveredBar, let ord = buckets.firstIndex(where: { $0.index == h }) {
       GeometryReader { geo in
         let flights = bucketFlights(h)
         let shown = Array(flights.prefix(8))
         let cardW: CGFloat = 196
         let cardH = CGFloat(max(shown.count, 1)) * 16 + 16
-        let n = max(model.history.count, 1)
-        let center = geo.size.width * (CGFloat(h) + 0.5) / CGFloat(n)
+        let n = max(buckets.count, 1)
+        let center = geo.size.width * (CGFloat(ord) + 0.5) / CGFloat(n)
         let x = min(max(center, cardW / 2), geo.size.width - cardW / 2)
         tooltipCard(flights, shown: shown)
           .frame(width: cardW, alignment: .leading)
