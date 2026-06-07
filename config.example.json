@@ -3,7 +3,7 @@
   "provider": "airplanes_live",
   "global_ceiling_ft": 6000,
   "anc_latency_seconds": 2.0,
-  "engage_delta_seconds": 6,
+  "engage_delta_seconds": 0,
   "release_delta_seconds": -3,
   "max_dwell_seconds": 30,
   "billing_reset_day": 1,

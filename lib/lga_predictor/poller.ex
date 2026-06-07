@@ -327,6 +327,16 @@ defmodule LgaPredictor.Poller do
   # Parked/taxiing aircraft: no position-relevant motion, don't pay attention.
   defp ramp?(ac), do: (ac.alt_ft || 0) == 0 or (ac.gspeed_kt || 0) == 0
 
+  # Per-zone-type baseline engage bias, in the same units/sign as the manual
+  # `engage_delta_seconds` slider (positive = engage later) and applied identically
+  # in each path. Calibrated on-aircraft so the *single global* slider can sit at 0
+  # and time BOTH zone types correctly: arrivals run a touch early, departures (whose
+  # actual ANC-zone entry we engage on) a touch late — historically 9s apart, forcing
+  # a re-tune on every zone switch. Baking the per-type bias here means the slider is
+  # neutral by default and any adjustment moves both algorithms in parity.
+  @arrival_engage_bias -3
+  @departure_engage_bias 6
+
   defp consider(ac, zoneset, config, state) do
     key = ac.hex || ac.callsign
     ceiling = zoneset.altitude_ceiling_ft || config.global_ceiling_ft
@@ -374,7 +384,7 @@ defmodule LgaPredictor.Poller do
     # arrivals fire at enters_in == latency - engage_delta (see dispatch/6). It can be
     # NEGATIVE (engage_delta > latency means "engage that many seconds AFTER the plane
     # reaches the zone" — a deliberate late engage the user tuned for arrivals).
-    lead = (config.anc_latency_seconds || 0.0) - (config.engage_delta_seconds || 0)
+    lead = (config.anc_latency_seconds || 0.0) - (config.engage_delta_seconds || 0) - @departure_engage_bias
     zones = zoneset.anc_zones
 
     cur_in? = in_any_zone?(zones, {ac.lat, ac.lon})
@@ -563,7 +573,7 @@ defmodule LgaPredictor.Poller do
     # Predictions assume zero latency; fire `latency` seconds early. The
     # engage/release deltas are the manual control-panel tuning offsets (±s).
     latency = config.anc_latency_seconds
-    on_ms = max(round((window.enters_in - latency + config.engage_delta_seconds) * 1000), 0)
+    on_ms = max(round((window.enters_in - latency + config.engage_delta_seconds + @arrival_engage_bias) * 1000), 0)
     off_ms = max(round((window.exits_in - latency + config.release_delta_seconds) * 1000), 0)
 
     dist_km = Float.round(window.enters_in * (ac.gspeed_kt || 0) * 1.852 / 3600, 2)

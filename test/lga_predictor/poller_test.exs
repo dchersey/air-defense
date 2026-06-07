@@ -154,12 +154,12 @@ defmodule LgaPredictor.PollerTest do
   end
 
   test "departure with negative lead engages once it is that far into the zone" do
-    # Same calibration; a plane already well inside (its position 4 s ago is still in
-    # the zone) → engage now.
+    # With the baked +6 departure bias, engage_delta 0 + latency 2 gives lead -4: a plane
+    # already well inside (its position 4 s ago is still in the zone) → engage now.
     deep = %{inbound() | lat: 40.728, lon: -73.864, track_deg: 0.0}
 
     start(
-      config_fun: fn -> config(type: :departure, latency: 2.0, engage_delta: 6) end,
+      config_fun: fn -> config(type: :departure, latency: 2.0, engage_delta: 0) end,
       fetcher: fn _ -> {:ok, [deep]} end
     )
 
@@ -193,13 +193,13 @@ defmodule LgaPredictor.PollerTest do
     assert hd(Poller.status().zonesets).phase == "monitoring"
   end
 
-  test "departure engages with full latency lead when engage_delta is 0" do
-    # Same flight as above; with no engage_delta the 30 s latency lead carries the
-    # projected point into the zone → engages.
+  test "departure engages when the projected lead carries it into the zone" do
+    # Same flight as above; latency 36 minus the baked +6 departure bias = 30 s lead,
+    # whose projected point reaches the zone → engages (engage_delta 0).
     approaching = %{inbound() | lat: 40.712, lon: -73.864, track_deg: 0.0}
 
     start(
-      config_fun: fn -> config(type: :departure, latency: 30.0, engage_delta: 0) end,
+      config_fun: fn -> config(type: :departure, latency: 36.0, engage_delta: 0) end,
       fetcher: fn _ -> {:ok, [approaching]} end
     )
 
@@ -560,6 +560,19 @@ defmodule LgaPredictor.PollerTest do
     assert Poller.status().active?
     assert :ok = Poller.stop_session("z1")
     refute Poller.status().active?
+  end
+
+  test "arrival engage bias fires early: a +3 engage_delta is cancelled by the -3 baseline" do
+    # The baked -3 arrival bias offsets a +3 engage_delta, so a plane already in the
+    # zone engages now; without the bias the +3 would defer engagement past this sleep.
+    start(
+      config_fun: fn -> config(trigger: :assume, engage_delta: 3, latency: 0.0) end,
+      fetcher: fn _ -> {:ok, [inbound()]} end
+    )
+
+    :ok = Poller.start_session()
+    Process.sleep(80)
+    assert Actuator.mode() == :anc
   end
 
   test "engage_delta_seconds shifts the engage time (manual offset)" do
