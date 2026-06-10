@@ -242,9 +242,9 @@ final class StatusModel {
     UserDefaults.standard.object(forKey: "quietAlertEnabled") as? Bool ?? true
   }
 
-  // Fire (and periodically re-fire) the alert after `quietGap` seconds of silence —
-  // but ONLY following actual activity this session (a flight, then nothing). A
-  // session that's quiet from the start never alerts.
+  // Fire (and periodically re-fire) the alert after `quietGap` seconds of MONITORED
+  // silence, measured from the later of session start or the last detection. So both
+  // "busy, then quiet" AND "activated a monitor but nothing showed" alert the user.
   private func evaluateQuietAlert() {
     guard active else {
       activeSince = nil
@@ -254,15 +254,17 @@ final class StatusModel {
     if activeSince == nil { activeSince = Date() }
     guard let start = activeSince, headphonesConnected, quietAlertEnabled else { return }
 
-    // Require a detection that occurred during this session.
-    guard let lastFlight = recent.first.map({ Date(timeIntervalSince1970: TimeInterval($0.at)) }),
-      lastFlight >= start
-    else { return }
+    // Quiet window runs from the most recent of: session start, last alert, or the
+    // last detection this session (stale flights from before `start` are ignored).
+    var reference = max(start, lastQuietAlertAt ?? .distantPast)
+    if let lastFlight = recent.first.map({ Date(timeIntervalSince1970: TimeInterval($0.at)) }),
+      lastFlight > reference {
+      reference = lastFlight
+    }
 
     // Measure the gap in MONITORED time only — subtract any headphones-off spans
     // since the reference, so a long pause doesn't make us fire the instant the buds
     // come back on.
-    let reference = max(lastFlight, lastQuietAlertAt ?? .distantPast)
     let monitored = Date().timeIntervalSince(reference) - pausedSeconds(since: reference)
     if monitored >= quietGap {
       playQuietAlert()
