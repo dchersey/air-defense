@@ -29,6 +29,12 @@ defmodule LgaPredictor.Poller do
 
   @credits_per_aircraft 6
 
+  # Arrivals ramp from their slow monitor cadence to this fast cadence once a flight is
+  # within `@arrival_ramp_seconds` (ETA) of the ANC zone, so we catch its actual entry.
+  # ETA decides WHEN to ramp; the fast poll then drives the engage.
+  @ramp_poll_interval_ms 3000
+  @arrival_ramp_seconds 90
+
   ## API
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -231,7 +237,17 @@ defmodule LgaPredictor.Poller do
 
       true ->
         state = state |> poll_zoneset(zoneset, config) |> bump_polls(id)
-        delay = if suppressed?(state, id), do: suppress_delay_ms(state, id), else: interval_ms(state, zoneset)
+
+        delay =
+          cond do
+            suppressed?(state, id) -> suppress_delay_ms(state, id)
+            # An armed (approaching) flight → ramp to the fast cadence to catch its
+            # ACTUAL zone entry (but never slower than the zoneset's own interval).
+            # ETA decides when arming begins (consider_arrival).
+            ramping?(state, id) -> min(@ramp_poll_interval_ms, interval_ms(state, zoneset))
+            true -> interval_ms(state, zoneset)
+          end
+
         reschedule_poll(state, id, delay)
     end
   end
@@ -255,18 +271,16 @@ defmodule LgaPredictor.Poller do
 
   defp interval_ms(state, zoneset), do: zoneset.poll_interval_ms || state.poll_interval
 
-  # Arrivals are detected upstream in the drawn monitor zone and ETA-scheduled.
-  # Departures poll the UNION of the monitor zone + the ANC zone (+ margin): the
-  # monitor zone puts the plane "on radar", the union spans any gap between the two
-  # so the plane is never lost, and the ANC-zone coverage lets us engage on the
-  # ACTUAL (about-to-)entry and release on the ACTUAL exit. Activation timing still
-  # lives in consider_departure (engage only when in/entering the ANC zone, latency-
-  # adjusted) — the wide box only governs which flights we can see.
+  # Poll the UNION of the monitor zone + the ANC zone (+ margin): the monitor zone
+  # puts the plane "on radar", the union spans any gap between the two so the plane is
+  # never lost, and the ANC-zone coverage lets BOTH arrivals and departures engage on
+  # the ACTUAL (about-to-)entry. Activation timing lives in consider_arrival/
+  # consider_departure (engage only when in/entering the ANC zone) — the wide box only
+  # governs which flights we can see.
   @departure_margin_deg 0.02
-  defp query_box(%{type: :departure} = zoneset), do: departure_box(zoneset)
-  defp query_box(zoneset), do: zoneset.monitor_box
+  defp query_box(zoneset), do: tracking_box(zoneset)
 
-  defp departure_box(zoneset) do
+  defp tracking_box(zoneset) do
     boxes = [zoneset.monitor_box | Enum.map(zoneset.anc_zones, &Geo.bbox/1)]
     m = @departure_margin_deg
     n = boxes |> Enum.map(&elem(&1, 0)) |> Enum.max()
@@ -277,6 +291,16 @@ defmodule LgaPredictor.Poller do
   end
 
   defp suppressed?(state, id), do: Map.get(state.suppress_until, id, 0) > System.os_time(:second)
+
+  # An armed (approaching, not-yet-engaged) leg means a flight is closing on the ANC
+  # zone → poll fast to catch its actual entry.
+  defp ramping?(state, id) do
+    now = System.os_time(:second)
+
+    state.intercepts
+    |> Map.get(id, [])
+    |> Enum.any?(&(Map.get(&1, :approaching, false) and &1.exits_at > now))
+  end
 
   defp suppress_delay_ms(state, id) do
     max(Map.get(state.suppress_until, id, 0) - System.os_time(:second), 0) * 1000
@@ -327,14 +351,13 @@ defmodule LgaPredictor.Poller do
   # Parked/taxiing aircraft: no position-relevant motion, don't pay attention.
   defp ramp?(ac), do: (ac.alt_ft || 0) == 0 or (ac.gspeed_kt || 0) == 0
 
-  # Per-zone-type baseline engage bias, in the same units/sign as the manual
-  # `engage_delta_seconds` slider (positive = engage later) and applied identically
-  # in each path. Calibrated on-aircraft so the *single global* slider can sit at 0
-  # and time BOTH zone types correctly: arrivals run a touch early, departures (whose
-  # actual ANC-zone entry we engage on) a touch late — historically 9s apart, forcing
-  # a re-tune on every zone switch. Baking the per-type bias here means the slider is
-  # neutral by default and any adjustment moves both algorithms in parity.
-  @arrival_engage_bias -3
+  # Per-zone-type engage-lead bias (same units/sign as the manual `engage_delta`
+  # slider; positive = engage later). BOTH zone types now engage on the ACTUAL
+  # ANC-zone entry detected by fast polling; this fine-tunes the small dead-reckoning
+  # lead. Arrivals: 0 (lead 0 → engage when actually at the boundary, never early —
+  # ANC ramps up over its latency as the plane proceeds toward the louder overhead
+  # centre). Departures: 6, tuned on-aircraft. The slider sits at 0 and shifts both.
+  @arrival_engage_bias 0
   @departure_engage_bias 6
 
   defp consider(ac, zoneset, config, state) do
@@ -357,20 +380,88 @@ defmodule LgaPredictor.Poller do
         consider_departure(ac, zoneset, key, config, state)
 
       zoneset.trigger == :assume ->
-        # Per-flight ETA from distance ÷ groundspeed (heading-independent), with
-        # dwell capped. Falls back to the fixed assume window only if ETA can't be
-        # computed (no groundspeed / no ANC zones).
-        window =
-          Predictor.predict_eta(ac, zoneset.anc_zones, max_dwell_seconds: config.max_dwell_seconds) ||
-            assume_window(zoneset)
-
-        dispatch(window, ac, key, config, zoneset.id, state)
+        consider_arrival(ac, zoneset, key, config, state)
 
       true ->
         case first_window(ac, zoneset, ceiling, state.window) do
           nil -> state
           window -> dispatch(window, ac, key, config, zoneset.id, state)
         end
+    end
+  end
+
+  # Arrival zones: ANC engages on the ACTUAL detected ANC-zone entry (fast polling),
+  # not a far-out ETA — long-range dead-reckoning mis-timed the engage (3–10 s early).
+  # The ETA is still used, but only to decide WHEN to ramp to the fast cadence
+  # (arming). Release stays the predicted-dwell lock-on, which times the cutoff well.
+  defp consider_arrival(ac, zoneset, key, config, state) do
+    zones = zoneset.anc_zones
+    window =
+      Predictor.predict_eta(ac, zones, max_dwell_seconds: config.max_dwell_seconds) ||
+        assume_window(zoneset)
+
+    latency = config.anc_latency_seconds || 0.0
+    # Engage when the plane is ACTUALLY at the boundary — no forward lead by default
+    # (the user wants no early trigger; the predicted ETA proved too eager). The slider
+    # still shifts it: +engage_delta → negative lead → engage deeper; −engage_delta →
+    # positive lead → engage earlier. Same sign convention as departures.
+    lead = -(config.engage_delta_seconds || 0) - @arrival_engage_bias
+    now = System.os_time(:second)
+
+    cur_in? = in_any_zone?(zones, {ac.lat, ac.lon})
+    {fx, fy} = project_ahead(ac, max(lead, 0.0))
+    entering? = cur_in? or in_any_zone?(zones, {fx, fy})
+
+    cond do
+      entering? ->
+        # Engage now (on actual entry); release on the predicted dwell (lock-on until
+        # the plane is predicted to clear — mirrors dispatch/6's release).
+        off_ms = max(round((window.exits_in - latency + (config.release_delta_seconds || 0)) * 1000), 0)
+        Actuator.cover(0, off_ms, key)
+        exits_at = now + round(window.exits_in)
+
+        record_history(%{
+          at: now,
+          callsign: ac.callsign,
+          hex: ac.hex,
+          alt_ft: ac.alt_ft,
+          enters_in: 0,
+          dwell: round(window.dwell_seconds)
+        })
+
+        Logger.info(
+          "[poller] ARRIVE #{key} alt=#{ac.alt_ft}ft gs=#{ac.gspeed_kt}kt — ANC on (clear in ~#{round(window.dwell_seconds)}s)"
+        )
+
+        %{
+          state
+          | actioned: MapSet.put(state.actioned, key),
+            suppress_until: Map.update(state.suppress_until, zoneset.id, exits_at, &max(&1, exits_at))
+        }
+        |> put_leg(zoneset.id, key, ac, engage_at: now, exits_at: exits_at, approaching: false, tracked: false)
+
+      passed_zone?(ac, zones) ->
+        # Missed the zone (past its latitude band on the side it's heading) → abandon.
+        %{state | actioned: MapSet.put(state.actioned, key)} |> drop_leg(zoneset.id, key)
+
+      window.enters_in <= @arrival_ramp_seconds and approaching?(ac, zones, lead) ->
+        # Within the ETA ramp and closing → arm (amber) and ramp to the fast cadence
+        # to catch the actual entry. engage_at carries the ETA estimate for the inbound
+        # countdown; approaching: true keeps it from flipping to "engaged" if that
+        # estimate lapses before the plane is actually detected in the zone.
+        est = now + max(round(window.enters_in - latency), 0)
+
+        put_leg(state, zoneset.id, key, ac,
+          engage_at: est,
+          exits_at: now + round(window.exits_in),
+          approaching: true,
+          tracked: false
+        )
+
+      true ->
+        # On radar but still beyond the ramp (or not closing) → no leg; keep the slow
+        # monitor cadence until the ETA pulls it inside the ramp.
+        drop_leg(state, zoneset.id, key)
     end
   end
 

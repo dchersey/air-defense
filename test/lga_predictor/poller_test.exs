@@ -313,11 +313,15 @@ defmodule LgaPredictor.PollerTest do
     assert Map.has_key?(status, :inbound_at)
   end
 
-  test "the fetcher is called with the zoneset's monitor box" do
+  test "the fetcher is called with a box covering the monitor zone and the ANC zone" do
     test_pid = self()
     start(fetcher: fn box -> send(test_pid, {:queried, box}); {:ok, []} end)
     :ok = Poller.start_session()
-    assert_receive {:queried, @monitor_box}, 500
+    # The query box is the union of the monitor zone + ANC zone (+ margin) so we can
+    # see a plane both approaching and inside the ANC zone.
+    assert_receive {:queried, {n, s, w, e}}, 500
+    {mn, ms, mw, me} = @monitor_box
+    assert n >= mn and s <= ms and w <= mw and e >= me
   end
 
   test "ramp traffic (alt 0 / gs 0) is ignored" do
@@ -407,8 +411,10 @@ defmodule LgaPredictor.PollerTest do
     )
 
     assert :ok = Poller.start_session("z1")
-    assert_receive {:queried, @monitor_box}, 500
-    refute_receive {:queried, @z2_box}, 100
+    # z1's box encloses its monitor zone; z2 is never polled (no session).
+    assert_receive {:queried, {n, s, w, e}}, 500
+    {mn, ms, mw, me} = @monitor_box
+    assert n >= mn and s <= ms and w <= mw and e >= me
 
     zonesets = Poller.status().zonesets
     assert Enum.find(zonesets, &(&1.id == "z1")).active
@@ -562,30 +568,39 @@ defmodule LgaPredictor.PollerTest do
     refute Poller.status().active?
   end
 
-  test "arrival engage bias fires early: a +3 engage_delta is cancelled by the -3 baseline" do
-    # The baked -3 arrival bias offsets a +3 engage_delta, so a plane already in the
-    # zone engages now; without the bias the +3 would defer engagement past this sleep.
+  test "arrival approaching the ANC zone arms (amber) but does not engage until it enters" do
+    # ~1 km south of the ANC zone, heading north at 100 kt → within the ETA ramp and
+    # closing, but not yet in/at the zone. Engage is driven by ACTUAL entry, so ANC
+    # stays off and the zone reads "armed".
+    approaching = %{inbound() | lat: 40.715, lon: -73.864, track_deg: 0.0}
+
     start(
-      config_fun: fn -> config(trigger: :assume, engage_delta: 3, latency: 0.0) end,
-      fetcher: fn _ -> {:ok, [inbound()]} end
+      config_fun: fn -> config(trigger: :assume) end,
+      fetcher: fn _ -> {:ok, [approaching]} end
     )
 
     :ok = Poller.start_session()
     Process.sleep(80)
-    assert Actuator.mode() == :anc
+
+    assert Actuator.mode() == :transparency
+    assert hd(Poller.status().zonesets).phase == "armed"
   end
 
-  test "engage_delta_seconds shifts the engage time (manual offset)" do
-    # inbound is inside the ANC zone -> enters_in 0 -> would engage immediately;
-    # a +10s engage delta pushes it out, so it's still transparency shortly after.
+  test "arrival beyond the ETA ramp is not yet armed (still monitoring)" do
+    # ~7 km south of the ANC zone at 100 kt → ETA well past the ramp horizon, so we
+    # stay on the slow monitor cadence with no intercept leg and ANC off.
+    far = %{inbound() | lat: 40.660, lon: -73.864, track_deg: 0.0}
+
     start(
-      config_fun: fn -> config(trigger: :assume, engage_delta: 10) end,
-      fetcher: fn _ -> {:ok, [inbound()]} end
+      config_fun: fn -> config(trigger: :assume) end,
+      fetcher: fn _ -> {:ok, [far]} end
     )
 
     :ok = Poller.start_session()
     Process.sleep(80)
+
     assert Actuator.mode() == :transparency
+    assert hd(Poller.status().zonesets).phase == "monitoring"
   end
 
   test "after a detection the zoneset stops polling until the plane clears (lock-on)" do
@@ -599,10 +614,10 @@ defmodule LgaPredictor.PollerTest do
 
     :ok = Poller.start_session()
     # First poll detects the (inside-the-ANC-zone) plane and engages.
-    assert_receive {:queried, @monitor_box}, 200
+    assert_receive {:queried, box}, 200
     # Locked on: with a 30ms interval we'd normally re-poll ~6x in 200ms, but the
     # zoneset is suppressed until the plane's predicted exit (seconds away).
-    refute_receive {:queried, @monitor_box}, 200
+    refute_receive {:queried, ^box}, 200
     assert Actuator.mode() == :anc
   end
 
@@ -622,9 +637,12 @@ defmodule LgaPredictor.PollerTest do
     Process.sleep(300)
 
     counts = drain_q(%{})
-    # z1 at 25ms should poll many times; z2 at the 250ms global only ~once or twice.
-    assert Map.get(counts, @monitor_box, 0) >= 5
-    assert Map.get(counts, @monitor_box, 0) > Map.get(counts, @z2_box, 0)
+    # Two distinct query boxes (one per zoneset). z1 at 25ms should poll many times;
+    # z2 at the 250ms global only ~once or twice.
+    assert map_size(counts) == 2
+    [hi, lo] = counts |> Map.values() |> Enum.sort(:desc)
+    assert hi >= 5
+    assert hi > lo
   end
 
   defp drain_q(acc) do
