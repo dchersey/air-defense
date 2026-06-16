@@ -82,7 +82,8 @@ defmodule LgaPredictor.ConfigStoreTest do
     {:ok, cfg} = ConfigStore.put(name, %{"zonesets" => [Map.put(base, "type", "departure")]})
     assert [%{type: :departure}] = cfg.zonesets
 
-    assert {:error, _} = ConfigStore.put(name, %{"zonesets" => [Map.put(base, "type", "spaceship")]})
+    assert {:error, _} =
+             ConfigStore.put(name, %{"zonesets" => [Map.put(base, "type", "spaceship")]})
   end
 
   test "put validates, persists, and bumps version", %{name: name, path: path} do
@@ -97,7 +98,9 @@ defmodule LgaPredictor.ConfigStoreTest do
       "anc_zones" => [geojson_box()]
     }
 
-    assert {:ok, cfg} = ConfigStore.put(name, %{"zonesets" => [zoneset], "global_ceiling_ft" => 4500})
+    assert {:ok, cfg} =
+             ConfigStore.put(name, %{"zonesets" => [zoneset], "global_ceiling_ft" => 4500})
+
     assert cfg.global_ceiling_ft == 4500
     assert cfg.version == v0 + 1
     assert [%{id: "z1", reckoning: :constant}] = cfg.zonesets
@@ -155,6 +158,36 @@ defmodule LgaPredictor.ConfigStoreTest do
       "monitor_zone" => geojson_box(),
       "anc_zones" => [geojson_box()],
       "poll_interval_ms" => "fast"
+    }
+
+    assert {:error, _} = ConfigStore.put(name, %{"zonesets" => [bad]})
+  end
+
+  test "zoneset engage/release deltas are optional (nil when absent) and round-trip", %{
+    name: name
+  } do
+    base = %{
+      "id" => "z1",
+      "name" => "T",
+      "monitor_zone" => geojson_box(),
+      "anc_zones" => [geojson_box()]
+    }
+
+    {:ok, cfg} = ConfigStore.put(name, %{"zonesets" => [base]})
+    assert [%{engage_delta_seconds: nil, release_delta_seconds: nil}] = cfg.zonesets
+
+    overrides = base |> Map.put("engage_delta_seconds", -4) |> Map.put("release_delta_seconds", 3)
+    {:ok, cfg} = ConfigStore.put(name, %{"zonesets" => [overrides]})
+    assert [%{engage_delta_seconds: -4, release_delta_seconds: 3}] = cfg.zonesets
+  end
+
+  test "rejects a non-number per-zone engage_delta_seconds", %{name: name} do
+    bad = %{
+      "id" => "z1",
+      "name" => "T",
+      "monitor_zone" => geojson_box(),
+      "anc_zones" => [geojson_box()],
+      "engage_delta_seconds" => "soon"
     }
 
     assert {:error, _} = ConfigStore.put(name, %{"zonesets" => [bad]})

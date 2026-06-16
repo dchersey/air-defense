@@ -1119,9 +1119,11 @@ private struct ZoneEditRow: View {
   @State private var name: String
   @State private var pollSeconds: String
   @State private var zoneType: String
+  @State private var engageDelta: String
+  @State private var releaseDelta: String
   @FocusState private var focus: Field?
 
-  private enum Field { case name, poll }
+  private enum Field { case name, poll, engage, release }
 
   init(zone: EditableZone, model: StatusModel) {
     self.zone = zone
@@ -1129,6 +1131,8 @@ private struct ZoneEditRow: View {
     _name = State(initialValue: zone.name)
     _pollSeconds = State(initialValue: zone.pollIntervalMs.map { String($0 / 1000) } ?? "")
     _zoneType = State(initialValue: zone.type ?? "arrival")
+    _engageDelta = State(initialValue: zone.engageDeltaSeconds.map { String(Int($0)) } ?? "")
+    _releaseDelta = State(initialValue: zone.releaseDeltaSeconds.map { String(Int($0)) } ?? "")
   }
 
   var body: some View {
@@ -1181,11 +1185,30 @@ private struct ZoneEditRow: View {
         Text("s").font(.adMono).foregroundStyle(Palette.ink2)
         Text("blank = global").font(.adMono).foregroundStyle(Palette.ink3)
       }
+
+      // Per-zone ANC timing offsets — calibrate arrival vs departure independently
+      // (negative engage = fire earlier). Blank uses the global Settings offset.
+      HStack(spacing: 6) {
+        sectionLabel("Offset").frame(width: 56, alignment: .leading)
+        Text("eng").font(.adMono).foregroundStyle(Palette.ink2)
+        TextField("0", text: $engageDelta)
+          .textFieldStyle(.roundedBorder).font(.adMono).monospacedDigit().frame(width: 40)
+          .focused($focus, equals: .engage)
+          .onSubmit { commitEngage() }
+        Text("rel").font(.adMono).foregroundStyle(Palette.ink2)
+        TextField("0", text: $releaseDelta)
+          .textFieldStyle(.roundedBorder).font(.adMono).monospacedDigit().frame(width: 40)
+          .focused($focus, equals: .release)
+          .onSubmit { commitRelease() }
+        Text("s · blank = global").font(.adMono).foregroundStyle(Palette.ink3)
+      }
     }
     .padding(.vertical, 4)
     .onChange(of: focus) { old, _ in
       if old == .name { commitName() }
       if old == .poll { commitPoll() }
+      if old == .engage { commitEngage() }
+      if old == .release { commitRelease() }
     }
   }
 
@@ -1199,6 +1222,18 @@ private struct ZoneEditRow: View {
     let seconds = Int(pollSeconds.trimmingCharacters(in: .whitespaces))
     guard seconds.map({ $0 * 1000 }) != zone.pollIntervalMs else { return }
     Task { await model.setPollInterval(zone.id, seconds: seconds) }
+  }
+
+  private func commitEngage() {
+    let seconds = Int(engageDelta.trimmingCharacters(in: .whitespaces))
+    guard seconds.map(Double.init) != zone.engageDeltaSeconds else { return }
+    Task { await model.setEngageDelta(zone.id, seconds: seconds) }
+  }
+
+  private func commitRelease() {
+    let seconds = Int(releaseDelta.trimmingCharacters(in: .whitespaces))
+    guard seconds.map(Double.init) != zone.releaseDeltaSeconds else { return }
+    Task { await model.setReleaseDelta(zone.id, seconds: seconds) }
   }
 
   private func slotRow(_ label: String, geojson: String, slot: ZoneSlot) -> some View {

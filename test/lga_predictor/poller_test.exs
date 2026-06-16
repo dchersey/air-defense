@@ -5,7 +5,8 @@ defmodule LgaPredictor.PollerTest do
   alias LgaPredictor.FR24.Aircraft
 
   # ANC zone: a box around home. The monitor zone is a wider box to its south.
-  @anc_zone {:polygon, [{40.724, -73.870}, {40.732, -73.870}, {40.732, -73.858}, {40.724, -73.858}]}
+  @anc_zone {:polygon,
+             [{40.724, -73.870}, {40.732, -73.870}, {40.732, -73.858}, {40.724, -73.858}]}
   @monitor_box {40.738, 40.700, -73.880, -73.850}
   # A second, disjoint monitor box for the two-zoneset (independent sessions) tests.
   @z2_box {40.800, 40.780, -73.900, -73.880}
@@ -44,6 +45,9 @@ defmodule LgaPredictor.PollerTest do
           # Default 0 so existing fixtures (inbound is 100 kt) still trigger.
           min_gspeed_kt: Keyword.get(opts, :min_gspeed, 0),
           poll_interval_ms: Keyword.get(opts, :zone_interval, nil),
+          # Per-zone ANC offsets; nil → fall back to the global engage/release deltas.
+          engage_delta_seconds: Keyword.get(opts, :zone_engage_delta, nil),
+          release_delta_seconds: Keyword.get(opts, :zone_release_delta, nil),
           assume_delay_seconds: Keyword.get(opts, :assume_delay, 0.0),
           assume_duration_seconds: Keyword.get(opts, :assume_duration, 30.0),
           altitude_ceiling_ft: nil,
@@ -105,7 +109,12 @@ defmodule LgaPredictor.PollerTest do
   test "departure zone does NOT engage for a fly-by alongside the zone" do
     # Same latitude band as the ANC zone but well west of it, heading north → never enters.
     byflight = %{inbound() | lon: -73.895, track_deg: 0.0}
-    start(config_fun: fn -> config(type: :departure, latency: 0.0) end, fetcher: fn _ -> {:ok, [byflight]} end)
+
+    start(
+      config_fun: fn -> config(type: :departure, latency: 0.0) end,
+      fetcher: fn _ -> {:ok, [byflight]} end
+    )
+
     :ok = Poller.start_session()
     Process.sleep(80)
     assert Actuator.mode() == :transparency
@@ -271,7 +280,10 @@ defmodule LgaPredictor.PollerTest do
 
     start(
       config_fun: fn -> config(type: :departure) end,
-      fetcher: fn box -> send(test_pid, {:queried, box}); {:ok, []} end
+      fetcher: fn box ->
+        send(test_pid, {:queried, box})
+        {:ok, []}
+      end
     )
 
     :ok = Poller.start_session()
@@ -294,7 +306,8 @@ defmodule LgaPredictor.PollerTest do
     )
 
     :ok = Poller.start_session()
-    Process.sleep(150)  # several polls, all in-zone
+    # several polls, all in-zone
+    Process.sleep(150)
 
     assert Actuator.mode() == :anc
     # Engage-and-hold: recorded once on entry, not re-recorded each poll.
@@ -315,7 +328,14 @@ defmodule LgaPredictor.PollerTest do
 
   test "the fetcher is called with a box covering the monitor zone and the ANC zone" do
     test_pid = self()
-    start(fetcher: fn box -> send(test_pid, {:queried, box}); {:ok, []} end)
+
+    start(
+      fetcher: fn box ->
+        send(test_pid, {:queried, box})
+        {:ok, []}
+      end
+    )
+
     :ok = Poller.start_session()
     # The query box is the union of the monitor zone + ANC zone (+ margin) so we can
     # see a plane both approaching and inside the ANC zone.
@@ -451,7 +471,13 @@ defmodule LgaPredictor.PollerTest do
 
   test "a session paused (headphones disconnected) does not poll or spend credits" do
     test_pid = self()
-    start(fetcher: fn box -> send(test_pid, {:queried, box}); {:ok, [inbound()]} end)
+
+    start(
+      fetcher: fn box ->
+        send(test_pid, {:queried, box})
+        {:ok, [inbound()]}
+      end
+    )
 
     :ok = Poller.set_headphones(false)
     :ok = Poller.start_session()
@@ -586,6 +612,52 @@ defmodule LgaPredictor.PollerTest do
     assert hd(Poller.status().zonesets).phase == "armed"
   end
 
+  test "arrival honors a per-zone engage delta (engages earlier than the global)" do
+    # Same ~1 km-south approaching plane that the test above leaves merely armed, but
+    # this zone carries its own engage_delta of -30 s → a 30 s forward lead whose
+    # dead-reckoned point lands inside the ANC zone, so ANC engages now even though the
+    # plane hasn't physically crossed the boundary. Proves a per-zone offset overrides
+    # the global one (0) for arrivals.
+    approaching = %{inbound() | lat: 40.715, lon: -73.864, track_deg: 0.0}
+
+    start(
+      config_fun: fn -> config(trigger: :assume, zone_engage_delta: -30) end,
+      fetcher: fn _ -> {:ok, [approaching]} end
+    )
+
+    :ok = Poller.start_session()
+    Process.sleep(80)
+
+    assert Actuator.mode() == :anc
+  end
+
+  test "arrival stays armed across the monitor→ANC gap (no green flicker once tracking)" do
+    # First poll: ~1 km south and closing → arms (amber). Later polls: the plane has
+    # advanced into the gap just short of the ANC zone, where a fresh approaching?
+    # check fails (projecting 30 s ahead overshoots the zone, so the look-ahead point
+    # is FARTHER from it) — yet the plane is neither in the zone nor a miss. It must
+    # STAY armed rather than flicker back to "monitoring" (green). An Agent flips the
+    # fixture since the fetcher runs inside the GenServer; the flight key is unchanged
+    # so the leg isn't swept.
+    far = %{inbound() | lat: 40.715, lon: -73.864, track_deg: 0.0}
+    gap = %{inbound() | lat: 40.7235, lon: -73.864, track_deg: 0.0}
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    start(
+      config_fun: fn -> config(trigger: :assume) end,
+      fetcher: fn _ ->
+        n = Agent.get_and_update(calls, &{&1, &1 + 1})
+        {:ok, [if(n == 0, do: far, else: gap)]}
+      end
+    )
+
+    :ok = Poller.start_session()
+    Process.sleep(120)
+
+    assert Actuator.mode() == :transparency
+    assert hd(Poller.status().zonesets).phase == "armed"
+  end
+
   test "arrival beyond the ETA ramp is not yet armed (still monitoring)" do
     # ~7 km south of the ANC zone at 100 kt → ETA well past the ramp horizon, so we
     # stay on the slow monitor cadence with no intercept leg and ANC off.
@@ -608,7 +680,10 @@ defmodule LgaPredictor.PollerTest do
 
     start(
       config_fun: fn -> config(trigger: :assume) end,
-      fetcher: fn box -> send(test_pid, {:queried, box}); {:ok, [inbound()]} end,
+      fetcher: fn box ->
+        send(test_pid, {:queried, box})
+        {:ok, [inbound()]}
+      end,
       poll_interval_ms: 30
     )
 
@@ -631,7 +706,15 @@ defmodule LgaPredictor.PollerTest do
     end
 
     # Empty fetches -> no detection/suppression, so polling continues at cadence.
-    start(config_fun: cfg, fetcher: fn box -> send(test_pid, {:q, box}); {:ok, []} end, poll_interval_ms: 250)
+    start(
+      config_fun: cfg,
+      fetcher: fn box ->
+        send(test_pid, {:q, box})
+        {:ok, []}
+      end,
+      poll_interval_ms: 250
+    )
+
     :ok = Poller.start_session("z1")
     :ok = Poller.start_session("z2")
     Process.sleep(300)

@@ -95,7 +95,10 @@ defmodule LgaPredictor.Poller do
   def handle_call({:set_headphones, connected}, _from, state) do
     state =
       if connected != state.headphones_connected do
-        Logger.info("[poller] headphones #{if connected, do: "connected — resuming", else: "disconnected — pausing"}")
+        Logger.info(
+          "[poller] headphones #{if connected, do: "connected — resuming", else: "disconnected — pausing"}"
+        )
+
         unless connected, do: Actuator.reset()
         # Release our keep-alive hold while the buds are gone (let the route idle)
         # and re-acquire it on reconnect.
@@ -110,7 +113,9 @@ defmodule LgaPredictor.Poller do
   @impl true
   def handle_info({:poll, id}, state) do
     # Ignore stale timers for a zoneset whose session has ended.
-    if Map.has_key?(state.sessions, id), do: {:noreply, poll_tick(state, id)}, else: {:noreply, state}
+    if Map.has_key?(state.sessions, id),
+      do: {:noreply, poll_tick(state, id)},
+      else: {:noreply, state}
   end
 
   def handle_info({:end_session, id}, state) do
@@ -360,6 +365,15 @@ defmodule LgaPredictor.Poller do
   @arrival_engage_bias 0
   @departure_engage_bias 6
 
+  # Effective ANC timing offsets: a zoneset's own offset overrides the global one
+  # (nil → global). Arrival and departure zones have different geometry, so a single
+  # global pair forced a re-tune on every zone switch; per-zone keeps each calibrated.
+  defp engage_delta(zoneset, config),
+    do: Map.get(zoneset, :engage_delta_seconds) || config.engage_delta_seconds || 0
+
+  defp release_delta(zoneset, config),
+    do: Map.get(zoneset, :release_delta_seconds) || config.release_delta_seconds || 0
+
   defp consider(ac, zoneset, config, state) do
     key = ac.hex || ac.callsign
     ceiling = zoneset.altitude_ceiling_ft || config.global_ceiling_ft
@@ -385,7 +399,7 @@ defmodule LgaPredictor.Poller do
       true ->
         case first_window(ac, zoneset, ceiling, state.window) do
           nil -> state
-          window -> dispatch(window, ac, key, config, zoneset.id, state)
+          window -> dispatch(window, ac, key, config, zoneset, state)
         end
     end
   end
@@ -396,6 +410,7 @@ defmodule LgaPredictor.Poller do
   # (arming). Release stays the predicted-dwell lock-on, which times the cutoff well.
   defp consider_arrival(ac, zoneset, key, config, state) do
     zones = zoneset.anc_zones
+
     window =
       Predictor.predict_eta(ac, zones, max_dwell_seconds: config.max_dwell_seconds) ||
         assume_window(zoneset)
@@ -404,8 +419,8 @@ defmodule LgaPredictor.Poller do
     # Engage when the plane is ACTUALLY at the boundary — no forward lead by default
     # (the user wants no early trigger; the predicted ETA proved too eager). The slider
     # still shifts it: +engage_delta → negative lead → engage deeper; −engage_delta →
-    # positive lead → engage earlier. Same sign convention as departures.
-    lead = -(config.engage_delta_seconds || 0) - @arrival_engage_bias
+    # positive lead → engage earlier. Same sign convention as departures, and per-zone.
+    lead = -engage_delta(zoneset, config) - @arrival_engage_bias
     now = System.os_time(:second)
 
     cur_in? = in_any_zone?(zones, {ac.lat, ac.lon})
@@ -416,7 +431,9 @@ defmodule LgaPredictor.Poller do
       entering? ->
         # Engage now (on actual entry); release on the predicted dwell (lock-on until
         # the plane is predicted to clear — mirrors dispatch/6's release).
-        off_ms = max(round((window.exits_in - latency + (config.release_delta_seconds || 0)) * 1000), 0)
+        off_ms =
+          max(round((window.exits_in - latency + release_delta(zoneset, config)) * 1000), 0)
+
         Actuator.cover(0, off_ms, key)
         exits_at = now + round(window.exits_in)
 
@@ -436,19 +453,31 @@ defmodule LgaPredictor.Poller do
         %{
           state
           | actioned: MapSet.put(state.actioned, key),
-            suppress_until: Map.update(state.suppress_until, zoneset.id, exits_at, &max(&1, exits_at))
+            suppress_until:
+              Map.update(state.suppress_until, zoneset.id, exits_at, &max(&1, exits_at))
         }
-        |> put_leg(zoneset.id, key, ac, engage_at: now, exits_at: exits_at, approaching: false, tracked: false)
+        |> put_leg(zoneset.id, key, ac,
+          engage_at: now,
+          exits_at: exits_at,
+          approaching: false,
+          tracked: false
+        )
 
       passed_zone?(ac, zones) ->
         # Missed the zone (past its latitude band on the side it's heading) → abandon.
         %{state | actioned: MapSet.put(state.actioned, key)} |> drop_leg(zoneset.id, key)
 
-      window.enters_in <= @arrival_ramp_seconds and approaching?(ac, zones, lead) ->
-        # Within the ETA ramp and closing → arm (amber) and ramp to the fast cadence
-        # to catch the actual entry. engage_at carries the ETA estimate for the inbound
-        # countdown; approaching: true keeps it from flipping to "engaged" if that
-        # estimate lapses before the plane is actually detected in the zone.
+      tracking_arrival?(state, zoneset.id, key) or
+          (window.enters_in <= @arrival_ramp_seconds and approaching?(ac, zones, lead)) ->
+        # Arm (amber) and ramp to the fast cadence to catch the actual entry — and KEEP
+        # it armed once tracking has begun, so the indicator doesn't flicker back to
+        # green in the gap between the monitor and ANC zones (where the monitor zone no
+        # longer contains the plane) or when a single poll's ETA/approaching check
+        # wavers. It clears only on actual entry (engage, above), a confirmed miss
+        # (passed_zone?, above), or the flight vanishing from the feed (sweep_legs).
+        # engage_at carries the ETA estimate for the inbound countdown; approaching:
+        # true keeps it from flipping to "engaged" before the plane is actually
+        # detected in the zone.
         est = now + max(round(window.enters_in - latency), 0)
 
         put_leg(state, zoneset.id, key, ac,
@@ -459,10 +488,16 @@ defmodule LgaPredictor.Poller do
         )
 
       true ->
-        # On radar but still beyond the ramp (or not closing) → no leg; keep the slow
-        # monitor cadence until the ETA pulls it inside the ramp.
+        # On radar but still beyond the ramp (or not closing) and not yet tracked → no
+        # leg; keep the slow monitor cadence until the ETA pulls it inside the ramp.
         drop_leg(state, zoneset.id, key)
     end
+  end
+
+  # Already tracking this flight as an inbound (amber) arrival? Used to hold the armed
+  # state once it's begun rather than re-deciding from scratch each poll.
+  defp tracking_arrival?(state, zid, key) do
+    match?(%{approaching: true}, find_leg(state, zid, key))
   end
 
   # Departure zones: turn points vary, so don't schedule from a far-out ETA. Track
@@ -475,7 +510,9 @@ defmodule LgaPredictor.Poller do
     # arrivals fire at enters_in == latency - engage_delta (see dispatch/6). It can be
     # NEGATIVE (engage_delta > latency means "engage that many seconds AFTER the plane
     # reaches the zone" — a deliberate late engage the user tuned for arrivals).
-    lead = (config.anc_latency_seconds || 0.0) - (config.engage_delta_seconds || 0) - @departure_engage_bias
+    lead =
+      (config.anc_latency_seconds || 0.0) - engage_delta(zoneset, config) - @departure_engage_bias
+
     zones = zoneset.anc_zones
 
     cur_in? = in_any_zone?(zones, {ac.lat, ac.lon})
@@ -512,7 +549,11 @@ defmodule LgaPredictor.Poller do
       engaged? ->
         # Was overhead, now gone from the zone: stop holding (ANC releases as the last
         # hold lapses) and don't re-engage it this session.
-        %{state | engaged: MapSet.delete(state.engaged, key), actioned: MapSet.put(state.actioned, key)}
+        %{
+          state
+          | engaged: MapSet.delete(state.engaged, key),
+            actioned: MapSet.put(state.actioned, key)
+        }
         |> drop_leg(zoneset.id, key)
 
       engage_now? ->
@@ -528,7 +569,9 @@ defmodule LgaPredictor.Poller do
           dwell: round(dwell)
         })
 
-        Logger.info("[poller] DEPART #{key} alt=#{ac.alt_ft}ft gs=#{ac.gspeed_kt}kt — ANC on (release on exit)")
+        Logger.info(
+          "[poller] DEPART #{key} alt=#{ac.alt_ft}ft gs=#{ac.gspeed_kt}kt — ANC on (release on exit)"
+        )
 
         state
         |> Map.update!(:engaged, &MapSet.put(&1, key))
@@ -541,7 +584,11 @@ defmodule LgaPredictor.Poller do
         # On radar and closing on the zone, not yet overhead → inbound/armed (amber),
         # ANC still off. No engage time yet (departures engage on actual entry), so
         # the leg carries engage_at: nil — the UI shows "inbound", no countdown.
-        put_leg(state, zoneset.id, key, ac, engage_at: nil, exits_at: now + ttl, approaching: true)
+        put_leg(state, zoneset.id, key, ac,
+          engage_at: nil,
+          exits_at: now + ttl,
+          approaching: true
+        )
 
       true ->
         # On radar but not closing (e.g. a parallel fly-by) → clear any stale leg.
@@ -660,12 +707,23 @@ defmodule LgaPredictor.Poller do
     |> Enum.min_by(& &1.enters_in, fn -> nil end)
   end
 
-  defp dispatch(window, ac, key, config, zoneset_id, state) do
+  defp dispatch(window, ac, key, config, zoneset, state) do
+    zoneset_id = zoneset.id
     # Predictions assume zero latency; fire `latency` seconds early. The
-    # engage/release deltas are the manual control-panel tuning offsets (±s).
+    # engage/release deltas are the manual control-panel tuning offsets (±s),
+    # per-zone with a global fallback.
     latency = config.anc_latency_seconds
-    on_ms = max(round((window.enters_in - latency + config.engage_delta_seconds + @arrival_engage_bias) * 1000), 0)
-    off_ms = max(round((window.exits_in - latency + config.release_delta_seconds) * 1000), 0)
+
+    on_ms =
+      max(
+        round(
+          (window.enters_in - latency + engage_delta(zoneset, config) + @arrival_engage_bias) *
+            1000
+        ),
+        0
+      )
+
+    off_ms = max(round((window.exits_in - latency + release_delta(zoneset, config)) * 1000), 0)
 
     dist_km = Float.round(window.enters_in * (ac.gspeed_kt || 0) * 1.852 / 3600, 2)
 
@@ -713,7 +771,8 @@ defmodule LgaPredictor.Poller do
     %{
       state
       | actioned: MapSet.put(state.actioned, key),
-        suppress_until: Map.update(state.suppress_until, zoneset_id, exits_at, &max(&1, exits_at)),
+        suppress_until:
+          Map.update(state.suppress_until, zoneset_id, exits_at, &max(&1, exits_at)),
         intercepts: intercepts
     }
   end
@@ -764,7 +823,8 @@ defmodule LgaPredictor.Poller do
     # Soonest still-armed intercept across all zones — drives the inbound banner.
     # Prefer one with a real engage time (arrival countdown); otherwise fall back to
     # an approaching departure (banner shows the route, "arming", no countdown).
-    armed = state.intercepts |> Map.values() |> List.flatten() |> Enum.filter(&armed_leg?(&1, now))
+    armed =
+      state.intercepts |> Map.values() |> List.flatten() |> Enum.filter(&armed_leg?(&1, now))
 
     soonest =
       armed
@@ -792,7 +852,8 @@ defmodule LgaPredictor.Poller do
       inbound_at: soonest && soonest.engage_at,
       inbound_callsign: soonest && soonest.callsign,
       overhead_callsign: overhead && overhead.callsign,
-      overhead_at: overhead && not Map.get(overhead, :tracked, false) && overhead.exits_at || nil
+      overhead_at:
+        (overhead && not Map.get(overhead, :tracked, false) && overhead.exits_at) || nil
     }
   end
 
@@ -838,9 +899,24 @@ defmodule LgaPredictor.Poller do
       fetcher: Keyword.get(opts, :fetcher, &default_fetch(&1, sandbox?)),
       config_fun: Keyword.get(opts, :config_fun, fn -> ConfigStore.get() end),
       keep_alive_fun: Keyword.get(opts, :keep_alive_fun, &default_keep_alive/1),
-      window: Keyword.get(opts, :window_seconds, Application.get_env(:lga_predictor, :prediction_window_seconds, 120)),
-      poll_interval: Keyword.get(opts, :poll_interval_ms, Application.get_env(:lga_predictor, :poll_interval_ms, 60_000)),
-      session_duration: Keyword.get(opts, :session_duration_ms, Application.get_env(:lga_predictor, :session_duration_ms, 4 * 60 * 60 * 1000))
+      window:
+        Keyword.get(
+          opts,
+          :window_seconds,
+          Application.get_env(:lga_predictor, :prediction_window_seconds, 120)
+        ),
+      poll_interval:
+        Keyword.get(
+          opts,
+          :poll_interval_ms,
+          Application.get_env(:lga_predictor, :poll_interval_ms, 60_000)
+        ),
+      session_duration:
+        Keyword.get(
+          opts,
+          :session_duration_ms,
+          Application.get_env(:lga_predictor, :session_duration_ms, 4 * 60 * 60 * 1000)
+        )
     }
   end
 

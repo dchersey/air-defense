@@ -148,7 +148,13 @@ defmodule LgaPredictor.ConfigStore do
   ## Persistence
 
   defp default_path do
-    Path.join([System.user_home!(), "Library", "Application Support", "air-defense", "config.json"])
+    Path.join([
+      System.user_home!(),
+      "Library",
+      "Application Support",
+      "air-defense",
+      "config.json"
+    ])
   end
 
   defp load_or_default(path) do
@@ -256,17 +262,44 @@ defmodule LgaPredictor.ConfigStore do
 
   defp validate_zoneset(zs) do
     cond do
-      not is_binary(zs["id"]) -> {:error, "zoneset.id required"}
-      not is_binary(zs["name"]) -> {:error, "zoneset.name required"}
-      not valid_geojson?(zs["monitor_zone"]) -> {:error, "zoneset #{zs["id"]}: invalid monitor_zone GeoJSON"}
-      not is_list(zs["anc_zones"]) -> {:error, "zoneset #{zs["id"]}: anc_zones must be a list"}
-      not Enum.all?(zs["anc_zones"], &valid_geojson?/1) -> {:error, "zoneset #{zs["id"]}: invalid anc_zone GeoJSON"}
-      (zs["reckoning"] || "constant") not in ["constant", "accelerating"] -> {:error, "zoneset #{zs["id"]}: bad reckoning"}
-      (zs["trigger"] || "predict") not in ["predict", "assume"] -> {:error, "zoneset #{zs["id"]}: bad trigger"}
-      (zs["type"] || "arrival") not in ["arrival", "departure"] -> {:error, "zoneset #{zs["id"]}: bad type"}
-      not is_nil(zs["min_gspeed_kt"]) and not is_number(zs["min_gspeed_kt"]) -> {:error, "zoneset #{zs["id"]}: min_gspeed_kt must be a number"}
-      not is_nil(zs["poll_interval_ms"]) and not is_number(zs["poll_interval_ms"]) -> {:error, "zoneset #{zs["id"]}: poll_interval_ms must be a number"}
-      true -> :ok
+      not is_binary(zs["id"]) ->
+        {:error, "zoneset.id required"}
+
+      not is_binary(zs["name"]) ->
+        {:error, "zoneset.name required"}
+
+      not valid_geojson?(zs["monitor_zone"]) ->
+        {:error, "zoneset #{zs["id"]}: invalid monitor_zone GeoJSON"}
+
+      not is_list(zs["anc_zones"]) ->
+        {:error, "zoneset #{zs["id"]}: anc_zones must be a list"}
+
+      not Enum.all?(zs["anc_zones"], &valid_geojson?/1) ->
+        {:error, "zoneset #{zs["id"]}: invalid anc_zone GeoJSON"}
+
+      (zs["reckoning"] || "constant") not in ["constant", "accelerating"] ->
+        {:error, "zoneset #{zs["id"]}: bad reckoning"}
+
+      (zs["trigger"] || "predict") not in ["predict", "assume"] ->
+        {:error, "zoneset #{zs["id"]}: bad trigger"}
+
+      (zs["type"] || "arrival") not in ["arrival", "departure"] ->
+        {:error, "zoneset #{zs["id"]}: bad type"}
+
+      not is_nil(zs["min_gspeed_kt"]) and not is_number(zs["min_gspeed_kt"]) ->
+        {:error, "zoneset #{zs["id"]}: min_gspeed_kt must be a number"}
+
+      not is_nil(zs["poll_interval_ms"]) and not is_number(zs["poll_interval_ms"]) ->
+        {:error, "zoneset #{zs["id"]}: poll_interval_ms must be a number"}
+
+      not is_nil(zs["engage_delta_seconds"]) and not is_number(zs["engage_delta_seconds"]) ->
+        {:error, "zoneset #{zs["id"]}: engage_delta_seconds must be a number"}
+
+      not is_nil(zs["release_delta_seconds"]) and not is_number(zs["release_delta_seconds"]) ->
+        {:error, "zoneset #{zs["id"]}: release_delta_seconds must be a number"}
+
+      true ->
+        :ok
     end
   end
 
@@ -305,6 +338,11 @@ defmodule LgaPredictor.ConfigStore do
       trigger: trigger_atom(zs["trigger"]),
       min_gspeed_kt: zs["min_gspeed_kt"] || @default_min_gspeed_kt,
       poll_interval_ms: zs["poll_interval_ms"],
+      # Per-zone ANC timing offsets (seconds); nil → fall back to the global offset.
+      # Lets arrival vs departure zones be calibrated independently (their geometry
+      # differs, so one global pair forces a re-tune on every zone switch).
+      engage_delta_seconds: zs["engage_delta_seconds"],
+      release_delta_seconds: zs["release_delta_seconds"],
       assume_delay_seconds: zs["assume_delay_seconds"] || 0.0,
       assume_duration_seconds: zs["assume_duration_seconds"] || 30.0,
       altitude_ceiling_ft: zs["altitude_ceiling_ft"],

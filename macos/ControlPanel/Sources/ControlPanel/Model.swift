@@ -37,6 +37,10 @@ struct EditableZone: Identifiable, Codable {
   var name: String
   var type: String?  // "arrival" | "departure" (drives the engage strategy)
   var pollIntervalMs: Int?
+  // Per-zone ANC timing offsets (seconds); nil → fall back to the global offset. Lets
+  // arrival and departure zones be calibrated independently.
+  var engageDeltaSeconds: Double?
+  var releaseDeltaSeconds: Double?
   var monitorGeojson: String
   var ancGeojson: String
 }
@@ -636,6 +640,19 @@ final class StatusModel {
   /// actual zone entry, tracked fast).
   func setZoneType(_ id: String, type: String) async {
     await mutate("PATCH", "/api/zonesets/\(id)", ["type": type])
+  }
+
+  /// Set this zone's ANC engage offset (seconds, may be negative = engage earlier);
+  /// nil clears it to the global default.
+  func setEngageDelta(_ id: String, seconds: Int?) async {
+    let value: Any = seconds.map { $0 as Any } ?? NSNull()
+    await mutate("PATCH", "/api/zonesets/\(id)", ["engage_delta_seconds": value])
+  }
+
+  /// Set this zone's ANC release offset (seconds); nil clears it to the global default.
+  func setReleaseDelta(_ id: String, seconds: Int?) async {
+    let value: Any = seconds.map { $0 as Any } ?? NSNull()
+    await mutate("PATCH", "/api/zonesets/\(id)", ["release_delta_seconds": value])
   }
 
   func deleteZone(_ id: String) async {
