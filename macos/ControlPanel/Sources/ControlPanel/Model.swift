@@ -137,6 +137,11 @@ final class StatusModel {
   // and they can take the headphones off). Re-alerts every 10 min while still quiet.
   @ObservationIgnored private var activeSince: Date?
   @ObservationIgnored private var lastQuietAlertAt: Date?
+  // Last moment a flight was being tracked (inbound/amber or overhead/red). Folded
+  // into the quiet-window reference so the all-clear never fires over an active
+  // target and the clock restarts once it clears — even for a near-miss that tracks
+  // through without engaging (so never lands in `recent`).
+  @ObservationIgnored private var lastActivityAt: Date?
   @ObservationIgnored private var alertPlayer: AVAudioPlayer?
   private let quietGap: TimeInterval = 600
 
@@ -253,18 +258,30 @@ final class StatusModel {
     guard active else {
       activeSince = nil
       lastQuietAlertAt = nil
+      lastActivityAt = nil
       return
     }
     if activeSince == nil { activeSince = Date() }
     guard let start = activeSince, headphonesConnected, quietAlertEnabled else { return }
 
-    // Quiet window runs from the most recent of: session start, last alert, or the
-    // last detection this session (stale flights from before `start` are ignored).
+    // A flight currently inbound (amber/armed) or overhead (red/engaged) is activity:
+    // never sound the all-clear over it, and stamp the moment so the quiet clock
+    // restarts once it clears (covers near-misses that track through but never engage,
+    // so never appear in `recent`).
+    if phase == .pending || phase == .engaged {
+      lastActivityAt = Date()
+      return
+    }
+
+    // Quiet window runs from the most recent of: session start, last alert, the last
+    // detection this session, or the last time a flight was being tracked (stale
+    // flights from before `start` are ignored).
     var reference = max(start, lastQuietAlertAt ?? .distantPast)
     if let lastFlight = recent.first.map({ Date(timeIntervalSince1970: TimeInterval($0.at)) }),
       lastFlight > reference {
       reference = lastFlight
     }
+    if let activity = lastActivityAt, activity > reference { reference = activity }
 
     // Measure the gap in MONITORED time only — subtract any headphones-off spans
     // since the reference, so a long pause doesn't make us fire the instant the buds
