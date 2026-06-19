@@ -478,7 +478,13 @@ defmodule LgaPredictor.Poller do
         # engage_at carries the ETA estimate for the inbound countdown; approaching:
         # true keeps it from flipping to "engaged" before the plane is actually
         # detected in the zone.
-        est = now + max(round(window.enters_in - latency), 0)
+        #
+        # Predict the ACTUAL engage moment, not the geometric boundary crossing: the
+        # trigger fires when the flight is `lead` seconds (forward dead-reckoning) from
+        # the zone, so it engages at enters_in - lead. `lead` already folds in the
+        # per-zone engage offset and the arrival bias, so the amber countdown lands on
+        # the same instant the red banner appears instead of running ~latency ahead of it.
+        est = now + max(round(window.enters_in - lead), 0)
 
         put_leg(state, zoneset.id, key, ac,
           engage_at: est,
