@@ -357,6 +357,19 @@ private struct StatusBanner: View {
   let model: StatusModel
 
   var body: some View {
+    // A dead data feed takes priority — we're blind, not quiet. Only trust it when the
+    // backend itself is reachable (a down backend is handled by .offline in the switch).
+    if model.active && model.reachable && !model.feedOk {
+      banner(
+        icon: "antenna.radiowaves.left.and.right.slash", tint: Palette.inbound,
+        bg: Palette.inboundSoft, strong: "Feed unreachable.",
+        rest: " Can't see traffic — monitoring paused until the data feed recovers.")
+    } else {
+      bannerForPhase
+    }
+  }
+
+  @ViewBuilder private var bannerForPhase: some View {
     switch model.phase {
     case .disconnected:
       banner(

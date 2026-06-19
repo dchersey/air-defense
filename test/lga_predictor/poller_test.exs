@@ -275,6 +275,31 @@ defmodule LgaPredictor.PollerTest do
     assert is_integer(status.overhead_at)
   end
 
+  test "feed_ok flips false after consecutive fetch errors and recovers on success" do
+    # A test-controlled mode flag (not a poll counter — that races the timing): the
+    # feed errors (provider/network down), then the test flips it healthy. feed_ok must
+    # drop so the UI can flag a dead feed (and not sound the all-clear), then recover.
+    {:ok, mode} = Agent.start_link(fn -> :error end)
+
+    start(
+      config_fun: fn -> config(trigger: :assume) end,
+      fetcher: fn _ ->
+        if Agent.get(mode, & &1) == :error, do: {:error, :timeout}, else: {:ok, []}
+      end,
+      poll_interval_ms: 20
+    )
+
+    assert Poller.status().feed_ok, "feed_ok is true while idle"
+
+    :ok = Poller.start_session()
+    Process.sleep(80)
+    refute Poller.status().feed_ok, "feed_ok drops after repeated fetch errors"
+
+    Agent.update(mode, fn _ -> :ok end)
+    Process.sleep(80)
+    assert Poller.status().feed_ok, "feed_ok recovers once polls succeed"
+  end
+
   test "departure zone polls the monitor+ANC union (+margin)" do
     test_pid = self()
 

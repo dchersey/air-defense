@@ -63,6 +63,9 @@ struct StatusResponse: Codable {
   let mode: String
   let sessionEndsAt: Int?
   let ancPhase: String
+  // False when the data feed (provider) has been erroring — we're blind, not quiet.
+  // Optional so an older backend (no field) decodes as healthy.
+  let feedOk: Bool?
   let engageDeltaSeconds: Double
   let releaseDeltaSeconds: Double
   let creditsUsedMonth: Int?
@@ -108,6 +111,10 @@ final class StatusModel {
   var overheadRoute: String?
   var history: [Int] = []
   var reachable = false
+  // Whether the backend's data feed is currently returning data (false = provider/
+  // network down). Drives the "feed unreachable" banner and pauses the quiet-alert
+  // clock so a dead feed never reads as a quiet sky.
+  var feedOk = true
 
   // Manual ANC timing offsets (seconds), from the service config.
   var engageDelta: Double = 0
@@ -215,6 +222,7 @@ final class StatusModel {
       active = status.active
       mode = status.mode
       ancPhase = status.ancPhase
+      feedOk = status.feedOk ?? true
       engageDelta = status.engageDeltaSeconds
       releaseDelta = status.releaseDeltaSeconds
       creditsUsedMonth = status.creditsUsedMonth
@@ -297,7 +305,10 @@ final class StatusModel {
   // last hour. Runs every refresh tick, after `updateHeadphones()` sets the state.
   private func trackPauses() {
     let now = Date()
-    if active && !headphonesConnected {
+    // "Not monitoring" = headphones off OR the data feed is down. Both mean we can't
+    // see traffic, so neither should count toward the quiet-alert window or leave a
+    // gap of empty bars on the chart.
+    if active && (!headphonesConnected || !feedOk) {
       if currentPauseStart == nil { currentPauseStart = now }
     } else if let start = currentPauseStart {
       pauseIntervals.append(DateInterval(start: start, end: now))
@@ -360,7 +371,8 @@ final class StatusModel {
   // Run the menu-bar pulse only while actively monitoring (session up, nothing
   // inbound/engaged, headphones present — i.e. phase == .idle && active).
   private func updateMenuPulse() {
-    if active && phase == .idle { startPulse() } else { stopPulse() }
+    // Pulse only while genuinely monitoring — not while blind on a dead feed.
+    if active && phase == .idle && feedOk { startPulse() } else { stopPulse() }
   }
 
   private func startPulse() {

@@ -29,6 +29,11 @@ defmodule LgaPredictor.Poller do
 
   @credits_per_aircraft 6
 
+  # An active zoneset whose last N polls all errored (provider/network down) is
+  # reported as feed-unreachable, so the UI can flag it and NOT sound the all-clear —
+  # a dead feed must never read as a quiet sky.
+  @feed_down_threshold 2
+
   # Arrivals ramp from their slow monitor cadence to this fast cadence once a flight is
   # within `@arrival_ramp_seconds` (ETA) of the ANC zone, so we catch its actual entry.
   # ETA decides WHEN to ramp; the fast poll then drives the engage.
@@ -161,7 +166,8 @@ defmodule LgaPredictor.Poller do
           | sessions: sessions,
             poll_timers: Map.delete(state.poll_timers, id),
             suppress_until: Map.delete(state.suppress_until, id),
-            intercepts: Map.delete(state.intercepts, id)
+            intercepts: Map.delete(state.intercepts, id),
+            fetch_errors: Map.delete(state.fetch_errors, id)
         }
 
         if map_size(sessions) == 0, do: go_idle(state), else: state
@@ -178,7 +184,15 @@ defmodule LgaPredictor.Poller do
     Actuator.reset()
     state = reconcile_keep_alive(state)
     Logger.info("[poller] all sessions ended — #{state.polls} polls, ~#{state.credits} credits")
-    %{state | poll_timers: %{}, suppress_until: %{}, intercepts: %{}, engaged: MapSet.new()}
+
+    %{
+      state
+      | poll_timers: %{},
+        suppress_until: %{},
+        intercepts: %{},
+        engaged: MapSet.new(),
+        fetch_errors: %{}
+    }
   end
 
   # Push/pop our single keep-alive hold so it's held exactly while a session is
@@ -314,6 +328,7 @@ defmodule LgaPredictor.Poller do
   defp poll_zoneset(state, zoneset, config) do
     case state.fetcher.(query_box(zoneset)) do
       {:ok, aircraft} ->
+        state = note_fetch_ok(state, zoneset.id)
         spent = length(aircraft) * @credits_per_aircraft
         record_monthly_credits(spent)
         state = %{state | credits: state.credits + spent}
@@ -331,8 +346,24 @@ defmodule LgaPredictor.Poller do
 
       {:error, reason} ->
         Logger.warning("[poller] fetch error (#{zoneset.id}): #{inspect(reason)} (skipping)")
-        state
+        note_fetch_error(state, zoneset.id)
     end
+  end
+
+  # Per-zoneset consecutive-fetch-error tally → feeds the status feed_ok flag. A good
+  # poll clears it; an errored poll bumps it. (Skipped polls — headphones off — don't
+  # fetch, so they neither clear nor bump it.)
+  defp note_fetch_ok(state, id), do: %{state | fetch_errors: Map.put(state.fetch_errors, id, 0)}
+
+  defp note_fetch_error(state, id),
+    do: %{state | fetch_errors: Map.update(state.fetch_errors, id, 1, &(&1 + 1))}
+
+  # The feed is "ok" unless some active zoneset's last @feed_down_threshold polls all
+  # errored. No active sessions → ok (nothing is being polled to fail).
+  defp feed_ok?(state) do
+    state.sessions
+    |> Map.keys()
+    |> Enum.all?(&(Map.get(state.fetch_errors, &1, 0) < @feed_down_threshold))
   end
 
   defp sweep_legs(state, zoneset_id, seen_keys) do
@@ -856,6 +887,7 @@ defmodule LgaPredictor.Poller do
       active?: map_size(state.sessions) > 0,
       polls: state.polls,
       approx_credits: state.credits,
+      feed_ok: feed_ok?(state),
       headphones_connected: state.headphones_connected,
       session_ends_at: if(ends == [], do: nil, else: Enum.max(ends)),
       zonesets: zonesets,
@@ -901,6 +933,8 @@ defmodule LgaPredictor.Poller do
       # Departure flights currently held overhead (engage-and-hold; released on
       # actual exit, not a predicted dwell). MapSet of flight keys.
       engaged: MapSet.new(),
+      # Per-zoneset consecutive fetch-error count (provider/network health).
+      fetch_errors: %{},
       polls: 0,
       credits: 0,
       headphones_connected: true,

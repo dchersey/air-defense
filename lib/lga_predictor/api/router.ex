@@ -176,7 +176,11 @@ defmodule LgaPredictor.API.Router do
   defp zoneset_fields(params) do
     acc = if name = params["name"], do: %{"name" => name}, else: %{}
     # Key present (value may be nil to clear back to the global interval).
-    acc = if Map.has_key?(params, "poll_interval_ms"), do: Map.put(acc, "poll_interval_ms", params["poll_interval_ms"]), else: acc
+    acc =
+      if Map.has_key?(params, "poll_interval_ms"),
+        do: Map.put(acc, "poll_interval_ms", params["poll_interval_ms"]),
+        else: acc
+
     acc = if type = params["type"], do: Map.put(acc, "type", type), else: acc
 
     with {:ok, acc} <- maybe_geojson(acc, params, "monitor_geojson", "monitor_zone", & &1),
@@ -212,6 +216,7 @@ defmodule LgaPredictor.API.Router do
       active: status.active?,
       mode: Actuator.mode(),
       anc_phase: menu_phase(status),
+      feed_ok: status.feed_ok,
       headphones_connected: status.headphones_connected,
       engage_delta_seconds: config.engage_delta_seconds,
       release_delta_seconds: config.release_delta_seconds,
@@ -282,8 +287,12 @@ defmodule LgaPredictor.API.Router do
 
     {origin, destination, private} =
       cond do
-        not (is_binary(cs) and cs != "") -> {nil, nil, true}
-        Process.whereis(LgaPredictor.Routes) == nil -> {nil, nil, false}
+        not (is_binary(cs) and cs != "") ->
+          {nil, nil, true}
+
+        Process.whereis(LgaPredictor.Routes) == nil ->
+          {nil, nil, false}
+
         true ->
           case LgaPredictor.Routes.get(cs) do
             {:ok, o, d} -> {o, d, false}
