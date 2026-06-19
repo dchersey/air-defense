@@ -28,14 +28,14 @@ defmodule LgaPredictor.ConfigStore do
     # credit ledger rolls over on this day and the pace bar measures the cycle
     # from it. 1 = calendar month (default until the real billing day is known).
     "billing_reset_day" => 1,
-    # Flight-data source for ALL zones: "airplanes_live"/"adsb_lol" (free ADS-B,
-    # no key) or "fr24" (FlightRadar24, needs an API key, costs credits).
+    # Flight-data source for ALL zones: "airplanes_live" (free ADS-B, no key) or
+    # "fr24" (FlightRadar24, needs an API key, costs credits).
     "provider" => "airplanes_live",
     "version" => 0,
     "zonesets" => []
   }
 
-  @providers ~w(airplanes_live adsb_lol fr24)
+  @providers ~w(airplanes_live fr24)
   @default_min_gspeed_kt 150
 
   ## API
@@ -160,13 +160,21 @@ defmodule LgaPredictor.ConfigStore do
   defp load_or_default(path) do
     case File.read(path) do
       {:ok, body} ->
-        Map.merge(@global_defaults, Jason.decode!(body))
+        @global_defaults |> Map.merge(Jason.decode!(body)) |> migrate_legacy()
 
       {:error, _} ->
         write!(path, @global_defaults)
         @global_defaults
     end
   end
+
+  # adsb.lol was removed as a provider (unreliable — TCP connects routinely time out).
+  # Fold any stored "adsb_lol" back to the default so an existing config keeps working
+  # and stays valid instead of failing validation on the next edit.
+  defp migrate_legacy(%{"provider" => "adsb_lol"} = raw),
+    do: %{raw | "provider" => "airplanes_live"}
+
+  defp migrate_legacy(raw), do: raw
 
   defp zonesets(state), do: state.raw["zonesets"] || []
 
@@ -357,7 +365,6 @@ defmodule LgaPredictor.ConfigStore do
   # the dev `mix run` runtime the provider's defining module may not be loaded yet,
   # so its atom wouldn't exist. These literals live in this (always-loaded) module.
   defp provider_atom("fr24"), do: :fr24
-  defp provider_atom("adsb_lol"), do: :adsb_lol
   defp provider_atom(_), do: :airplanes_live
 
   defp reckoning_atom("accelerating"), do: :accelerating

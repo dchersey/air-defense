@@ -27,13 +27,30 @@ defmodule LgaPredictor.ConfigStoreTest do
     assert {:ok, cfg} = ConfigStore.put(name, %{"provider" => "fr24"})
     assert cfg.provider == :fr24
 
-    assert {:ok, cfg} = ConfigStore.put(name, %{"provider" => "adsb_lol"})
-    assert cfg.provider == :adsb_lol
+    assert {:ok, cfg} = ConfigStore.put(name, %{"provider" => "airplanes_live"})
+    assert cfg.provider == :airplanes_live
   end
 
-  test "provider rejects unknown values", %{name: name} do
+  test "provider rejects unknown values (incl. the removed adsb_lol)", %{name: name} do
     assert {:error, _} = ConfigStore.put(name, %{"provider" => "skynet"})
+    assert {:error, _} = ConfigStore.put(name, %{"provider" => "adsb_lol"})
     assert ConfigStore.get(name).provider == :airplanes_live
+  end
+
+  test "a stored adsb_lol provider migrates to airplanes_live on load" do
+    # adsb.lol was removed; an existing on-disk config must keep working (and stay
+    # editable) rather than derive to a dead provider or fail validation on next put.
+    path = Path.join(System.tmp_dir!(), "ndcfg_legacy_#{System.unique_integer([:positive])}.json")
+    on_exit(fn -> File.rm(path) end)
+    File.write!(path, Jason.encode!(%{"provider" => "adsb_lol", "zonesets" => []}))
+
+    name = :"cfg_legacy_#{System.unique_integer([:positive])}"
+    # Distinct child id — the setup block already supervises a ConfigStore (same module).
+    start_supervised!(Supervisor.child_spec({ConfigStore, name: name, path: path}, id: name))
+
+    assert ConfigStore.get(name).provider == :airplanes_live
+    # and a later edit doesn't trip validation on the legacy value
+    assert {:ok, _} = ConfigStore.put(name, %{"global_ceiling_ft" => 5000})
   end
 
   test "billing_reset_day defaults to 1 and round-trips a valid day", %{name: name} do

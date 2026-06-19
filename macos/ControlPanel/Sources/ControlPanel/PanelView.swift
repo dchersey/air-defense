@@ -882,7 +882,6 @@ private struct DataSource: View {
 
   private let providers = [
     ("airplanes_live", "airplanes.live (free)"),
-    ("adsb_lol", "adsb.lol (free)"),
     ("fr24", "FlightRadar24 (API key)"),
   ]
 

@@ -4,8 +4,8 @@ defmodule LgaPredictor.Sources do
   `Poller` is source-agnostic. All providers return the same
   `LgaPredictor.FR24.Aircraft` structs.
 
-    :airplanes_live | :adsb_lol  → free ADS-B feed (no key, no credits)
-    :fr24                        → FlightRadar24 (API key, billed per flight)
+    :airplanes_live → free ADS-B feed (no key, no credits)
+    :fr24           → FlightRadar24 (API key, billed per flight)
   """
 
   alias LgaPredictor.{ADSB, FR24}
@@ -16,7 +16,7 @@ defmodule LgaPredictor.Sources do
 
   def positions(bounds, :fr24, opts), do: FR24.Client.positions(bounds, :light, opts)
 
-  def positions(bounds, provider, opts) when provider in [:airplanes_live, :adsb_lol] do
-    ADSB.Client.positions(bounds, Keyword.put(opts, :provider, provider))
+  def positions(bounds, :airplanes_live, opts) do
+    ADSB.Client.positions(bounds, Keyword.put(opts, :provider, :airplanes_live))
   end
 end

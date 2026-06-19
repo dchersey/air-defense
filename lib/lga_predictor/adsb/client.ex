@@ -1,9 +1,8 @@
 defmodule LgaPredictor.ADSB.Client do
   @moduledoc """
-  Free ADS-B feed client (airplanes.live / adsb.lol — both expose the readsb
-  schema). A drop-in alternative to `FR24.Client`: returns the same
-  `LgaPredictor.FR24.Aircraft` structs the `Poller` consumes, at zero cost and
-  with no API key.
+  Free ADS-B feed client (airplanes.live, readsb schema). A drop-in alternative to
+  `FR24.Client`: returns the same `LgaPredictor.FR24.Aircraft` structs the `Poller`
+  consumes, at zero cost and with no API key.
 
   These feeds query a **point + radius** (a circle), not a bounding box, so we
   circumscribe the monitor box with a circle, fetch, then trim back to the box —
@@ -15,21 +14,22 @@ defmodule LgaPredictor.ADSB.Client do
   alias LgaPredictor.FR24.Aircraft
 
   @hosts %{
-    airplanes_live: "https://api.airplanes.live",
-    adsb_lol: "https://api.adsb.lol"
+    airplanes_live: "https://api.airplanes.live"
   }
 
   @type bounds :: {number(), number(), number(), number()}
 
   @doc """
   Fetch aircraft within `bounds` ({north, south, west, east}). `opts[:provider]`
-  is `:airplanes_live` (default) or `:adsb_lol`. Returns `{:ok, [%Aircraft{}]}`.
+  defaults to `:airplanes_live`. Returns `{:ok, [%Aircraft{}]}`.
   """
   @spec positions(bounds(), keyword()) :: {:ok, [Aircraft.t()]} | {:error, term()}
   def positions(bounds, opts \\ []) do
     provider = Keyword.get(opts, :provider, :airplanes_live)
     {clat, clon, radius_nm} = bbox_to_circle(bounds)
-    url = "#{Map.fetch!(@hosts, provider)}/v2/point/#{f(clat, 4)}/#{f(clon, 4)}/#{f(radius_nm, 1)}"
+
+    url =
+      "#{Map.fetch!(@hosts, provider)}/v2/point/#{f(clat, 4)}/#{f(clon, 4)}/#{f(radius_nm, 1)}"
 
     req =
       Req.new(

@@ -30,7 +30,7 @@ time, every time.
 
 ## What it does
 
-- **Tracks live traffic** via a **free ADS-B feed** (airplanes.live / adsb.lol) —
+- **Tracks live traffic** via a **free ADS-B feed** (airplanes.live) —
   no API key, no cost — and predicts, per flight, *when* it will be overhead:
   distance to the noisy zone ÷ ground speed. (FlightRadar24 is an optional
   alternative provider if you prefer it.)
@@ -212,7 +212,7 @@ app is Developer ID-signed, notarized, stapled, and accepted by Gatekeeper.
 
 ## Using it
 
-- **Data source** picker: `airplanes.live` / `adsb.lol` (free, default) or
+- **Data source** picker: `airplanes.live` (free, default) or
   `FlightRadar24`. Pick FR24 and a field appears to paste your API key (stored in
   the Keychain by the backend). Applies to all zones.
 - **Start / Stop** per zone from the menu — each zone runs its own session.
@@ -228,18 +228,18 @@ app is Developer ID-signed, notarized, stapled, and accepted by Gatekeeper.
 
 ## Provider notes
 
-**Default (free):** `airplanes.live` and `adsb.lol` are community ADS-B aggregators
-— no API key, no cost. All US commercial jets broadcast ADS-B, and busy metro areas
-near major airports tend to have dense volunteer-receiver coverage, so traffic over
-the approach/departure paths comes through complete. This is the default and what
-most people should use. Be a good citizen: the small monitor zones keep request
-volume low.
+**Default (free):** `airplanes.live` is a community ADS-B aggregator — no API key, no
+cost. All US commercial jets broadcast ADS-B, and busy metro areas near major
+airports tend to have dense volunteer-receiver coverage, so traffic over the
+approach/departure paths comes through complete. This is the default and what most
+people should use. Be a good citizen: the small monitor zones keep request volume
+low.
 
-**Fallback (FlightRadar24):** the community feeds depend on nearby hobbyist
-receivers, so coverage varies by location. If `airplanes.live` / `adsb.lol` don't
-reliably see the low-altitude traffic over *your* spot — planes you can clearly hear
-that never show up — switch the **Data source** to **FlightRadar24**, a commercial
-feed with broad, consistent coverage. Sign up at
+**Fallback (FlightRadar24):** the community feed depends on nearby hobbyist
+receivers, so coverage varies by location. If `airplanes.live` doesn't reliably see
+the low-altitude traffic over *your* spot — planes you can clearly hear that never
+show up — switch the **Data source** to **FlightRadar24**, a commercial feed with
+broad, consistent coverage. Sign up at
 **[fr24api.flightradar24.com](https://fr24api.flightradar24.com/)** (the **Explorer**
 plan is enough), then paste the API key into the app — it's stored only in your
 macOS Keychain (service `air-defense-fr24`, `FR24_API_KEY` env fallback), **never**

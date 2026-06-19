@@ -480,7 +480,7 @@ final class StatusModel {
     }
   }
 
-  /// Switch the flight-data provider for all zones (airplanes_live | adsb_lol | fr24).
+  /// Switch the flight-data provider for all zones (airplanes_live | fr24).
   func setProvider(_ id: String) {
     provider = id  // optimistic; refresh() reconciles
     guard let url = URL(string: "\(base)/api/config") else { return }
