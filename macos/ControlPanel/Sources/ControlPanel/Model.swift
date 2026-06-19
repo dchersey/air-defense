@@ -179,11 +179,14 @@ final class StatusModel {
 
   private let base = "http://127.0.0.1:4040"
   private var timer: Timer?
-  // Seeded to the assumed starting mode. The actuator is a BLIND toggle
-  // (Ctrl-Shift-A), so we must not fire it on the first poll: we assume the
-  // AirPods begin in Transparency when a session starts. If that assumption is
-  // wrong the state can invert — toggle manually once to resync.
+  // What we've successfully applied to the AirPods: "anc" while engaged, else
+  // "transparency" (the idle/released state). Drives change-only switching with
+  // retry-on-failure (only advances on a successful AX press).
   private var appliedMode: String = "transparency"
+  // The user's own listening mode, captured the moment we engage ANC (Transparency,
+  // Adaptive, or even already-ANC), and restored verbatim on release — so we never
+  // force Transparency on someone who runs Adaptive/ANC normally. nil until first engage.
+  private var restoreMode: AncController.Mode?
   // Guards against a second AX sequence starting before the first finishes
   // (back-to-back desired-mode changes), which left the popover open.
   private var isApplying = false
@@ -435,11 +438,25 @@ final class StatusModel {
     isApplying = true
     defer { isApplying = false }
 
-    let target: AncController.Mode = (desired == "anc") ? .anc : .transparency
-    let ok = AncController.set(target)
-    Log.line("applyMode desired=\(desired) applied=\(appliedMode) -> set(\(target.rawValue)) ok=\(ok)")
-    if ok {
-      appliedMode = desired
+    if desired == "anc" {
+      // Engaging: switch to ANC and capture the mode that was active first, so we can
+      // put it back on release. If the user was already in ANC, `previous` is .anc and
+      // release becomes a no-op — exactly what we want.
+      let (ok, previous) = AncController.set(.anc)
+      if ok {
+        restoreMode = previous ?? .transparency
+        appliedMode = "anc"
+        Log.line("applyMode engage ANC ok; will restore \(restoreMode?.rawValue ?? "transparency")")
+      }
+    } else {
+      // Releasing: restore whatever the user had before we engaged (Transparency,
+      // Adaptive, or ANC). Defaults to Transparency if we never captured one.
+      let target = restoreMode ?? .transparency
+      let (ok, _) = AncController.set(target)
+      if ok {
+        appliedMode = "transparency"
+        Log.line("applyMode release → restored \(target.rawValue)")
+      }
     }
   }
 

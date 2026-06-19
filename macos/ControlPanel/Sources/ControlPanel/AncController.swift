@@ -20,6 +20,8 @@ enum AncController {
   enum Mode: String {
     case anc = "Noise Cancellation"
     case transparency = "Transparency"
+    case adaptive = "Adaptive"
+    case off = "Off"
   }
 
   /// Whether AirPods are the current default audio output. The Control Center
@@ -73,25 +75,31 @@ enum AncController {
     AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
   }
 
-  /// Set the AirPods listening mode. Returns true if the control was pressed.
+  /// Set the AirPods listening mode. Returns whether the control was pressed AND the
+  /// mode that was selected *before* the press — read while the popover is already
+  /// open, so capturing it costs no extra Control Center round-trip. Callers use
+  /// `previous` to restore the user's own mode (Transparency, Adaptive, or even
+  /// already-ANC) after an overflight instead of forcing Transparency.
   @discardableResult
-  static func set(_ mode: Mode) -> Bool {
+  static func set(_ mode: Mode) -> (ok: Bool, previous: Mode?) {
     guard let cc = controlCenterApp(), let soundItem = soundMenuBarItem() else {
       Log.line("set(\(mode.rawValue)) — Control Center / Sound menu item not found")
-      return false
+      return (false, nil)
     }
 
     // Open the Sound popover.
     let pressed = press(soundItem)
     Thread.sleep(forTimeInterval: 0.5)
 
-    let ok: Bool =
-      if let window = (attr(cc, kAXWindowsAttribute as String) as? [AXUIElement])?.first,
-         let target = find(window, { matchesLabel($0, mode.rawValue) }) {
-        press(target) || axPick(target)
-      } else {
-        false
+    var previous: Mode?
+    var ok = false
+    if let window = (attr(cc, kAXWindowsAttribute as String) as? [AXUIElement])?.first {
+      // Read the currently-selected mode before changing it (for restore-on-release).
+      previous = selectedMode(in: window)
+      if let target = find(window, { matchesLabel($0, mode.rawValue) }) {
+        ok = press(target) || axPick(target)
       }
+    }
 
     // Close the popover by toggling the same menu-bar item again. The popover is
     // a Control Center *window* that becomes the key window (it grabs the
@@ -113,8 +121,22 @@ enum AncController {
 
     Log.line(
       "set(\(mode.rawValue)) pressedSound=\(pressed) toggled=\(ok) " +
+        "previous=\(previous?.rawValue ?? "?") " +
         "closeAttempts=\(closeAttempts) ccWindowsAfter=\(ccWindowCount(cc))")
-    return ok
+    return (ok, previous)
+  }
+
+  /// The listening mode currently selected (checked) in the open Sound popover, or
+  /// nil if none reads as selected. Matches modes the same way `set` finds its press
+  /// target, so it stays consistent with what we'd switch.
+  private static func selectedMode(in window: AXUIElement) -> Mode? {
+    for mode in [Mode.anc, .transparency, .adaptive, .off] {
+      guard let el = find(window, { matchesLabel($0, mode.rawValue) }) else { continue }
+      if let n = attr(el, kAXValueAttribute as String) as? NSNumber, n.intValue == 1 {
+        return mode
+      }
+    }
+    return nil
   }
 
   // How many windows Control Center exposes — its Sound popover IS such a window,
