@@ -363,24 +363,34 @@ private struct StatusBanner: View {
         icon: "headphones", tint: Palette.inbound, bg: Palette.inboundSoft,
         strong: "AirPods not connected", rest: " — monitoring paused. Timer still running.")
     case .pending:
-      let route = model.inboundRoute ?? "LGA traffic"
-      let eta =
-        model.inboundAt.map { " Cancellation engages in \(mmss($0))." } ?? " Cancellation arming."
-      banner(
-        icon: "bolt.fill", tint: Palette.inbound, bg: Palette.inboundSoft,
-        strong: "Inbound — \(route) on vector.", rest: eta)
+      // The countdown is wall-clock-driven, so re-render it on a 1 s timeline rather
+      // than relying on model refreshes — while ANC is engaged the zoneset locks on
+      // and stops polling, so the model goes static and a refresh-driven countdown
+      // would freeze (the amber phase only churns because it's fast-polling).
+      TimelineView(.periodic(from: .now, by: 1)) { _ in
+        let route = model.inboundRoute ?? "LGA traffic"
+        let eta =
+          model.inboundAt.map { " Cancellation engages in \(mmss($0))." }
+          ?? " Cancellation arming."
+        banner(
+          icon: "bolt.fill", tint: Palette.inbound, bg: Palette.inboundSoft,
+          strong: "Inbound — \(route) on vector.", rest: eta)
+      }
     case .engaged:
       // Overhead now (ANC on, red). Arrivals show a clear-by countdown; departures
-      // are live-tracked (no reliable exit prediction) → a radar mark instead.
-      let route = model.overheadRoute ?? "LGA traffic"
-      if let at = model.overheadAt {
-        banner(
-          icon: "headphones", tint: Palette.stop, bg: Palette.stopSoft,
-          strong: "Overhead — \(route).", rest: " Clears in \(mmss(at)).")
-      } else {
-        banner(
-          icon: "dot.radiowaves.up.forward", tint: Palette.stop, bg: Palette.stopSoft,
-          strong: "Overhead — \(route).", rest: " Live-tracking until it clears.")
+      // are live-tracked (no reliable exit prediction) → a radar mark instead. Same
+      // 1 s timeline so the clear-by countdown ticks down through the lock-on hold.
+      TimelineView(.periodic(from: .now, by: 1)) { _ in
+        let route = model.overheadRoute ?? "LGA traffic"
+        if let at = model.overheadAt {
+          banner(
+            icon: "headphones", tint: Palette.stop, bg: Palette.stopSoft,
+            strong: "Overhead — \(route).", rest: " Clears in \(mmss(at)).")
+        } else {
+          banner(
+            icon: "dot.radiowaves.up.forward", tint: Palette.stop, bg: Palette.stopSoft,
+            strong: "Overhead — \(route).", rest: " Live-tracking until it clears.")
+        }
       }
     default:
       EmptyView()
