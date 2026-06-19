@@ -222,6 +222,9 @@ app is Developer ID-signed, notarized, stapled, and accepted by Gatekeeper.
 - When the provider is **FR24**, a **credit bar** shows what's left against your
   monthly allotment, with a hashmark at the day-of-cycle. Hit **Sync** to enter the
   *remaining* balance from your FR24 dashboard and your billing **reset day**.
+- **Flight routes** (optional): paste a **FlightAware AeroAPI** key to label the
+  recent-flights list and the inbound banner with `ORIG → DEST`; without one it shows
+  the raw callsign. This is just a display label — separate from the position feed.
 
 ## Provider notes
 
@@ -247,6 +250,21 @@ per flight returned, so small monitor zones keep usage low.
 > credit bar is a **self-tally**: Air Defense counts every credit it spends and you
 > periodically Sync it to the dashboard number. It rolls over on your billing
 > anniversary (the reset day you set).
+
+**Flight routes (optional — separate from the position feed):** the ADS-B and FR24
+feeds give positions and callsigns, not where a flight is *going*. To label the
+recent-flights list and the inbound banner with **`ORIG → DEST`** instead of a bare
+callsign, Air Defense can resolve callsigns through
+**[FlightAware AeroAPI](https://www.flightaware.com/commercial/aeroapi/)** — real-time
+and delay-aware, unlike the static scheduled-route databases that were quietly wrong
+for regional callsigns reused across the day. This is **purely a display label; it
+plays no part in detecting or tracking aircraft** (that's all ADS-B). Paste an AeroAPI
+key into the app's **Flight routes** setting — stored only in your macOS Keychain
+(service `air-defense-aeroapi`, `AEROAPI_KEY` env fallback), never committed. Lookups
+are cached one-per-callsign (a route is fixed once a flight is airborne), run in the
+background so they never block a poll, and are capped to ~1,200/month to stay inside
+the free tier. With no key, over the cap, or on a miss, the list simply falls back to
+the raw callsign — everything else works identically.
 
 ## Layout
 

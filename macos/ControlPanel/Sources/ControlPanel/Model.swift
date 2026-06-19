@@ -9,8 +9,8 @@ struct Flight: Codable, Identifiable {
   let at: Int
   let entersIn: Int
   let dwell: Int
-  // Airport route (origin/dest IATA) from the backend's adsbdb lookup; nil until
-  // resolved. `isPrivate` = fetched but no route (GA/private) → show "private".
+  // Airport route (origin/dest IATA) from the backend's FlightAware AeroAPI lookup;
+  // nil until resolved. `isPrivate` = fetched but no route (GA/private) → show "private".
   let origin: String?
   let destination: String?
   let isPrivate: Bool?
