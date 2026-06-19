@@ -430,12 +430,14 @@ defmodule LgaPredictor.Poller do
     cond do
       entering? ->
         # Engage now (on actual entry); release on the predicted dwell (lock-on until
-        # the plane is predicted to clear — mirrors dispatch/6's release).
-        off_ms =
-          max(round((window.exits_in - latency + release_delta(zoneset, config)) * 1000), 0)
-
+        # the plane is predicted to clear — mirrors dispatch/6's release). ANC releases
+        # `latency` early (+ the per-zone release offset); anchor exits_at on that SAME
+        # moment so the red clear-by countdown reaches 0:00 exactly when ANC disengages,
+        # not ~latency seconds after.
+        release_in = window.exits_in - latency + release_delta(zoneset, config)
+        off_ms = max(round(release_in * 1000), 0)
         Actuator.cover(0, off_ms, key)
-        exits_at = now + round(window.exits_in)
+        exits_at = now + max(round(release_in), 0)
 
         record_history(%{
           at: now,
@@ -753,7 +755,9 @@ defmodule LgaPredictor.Poller do
     # Lock-on: stop polling this zoneset until the plane is predicted to clear the
     # ANC zone (the latest exit if several planes were caught in one poll).
     now = System.os_time(:second)
-    exits_at = now + round(window.exits_in)
+    # Anchor exits_at on the actual ANC release (off_ms), not the geometric exit, so the
+    # clear-by countdown reaches 0:00 when ANC disengages (engage_at already tracks on_ms).
+    exits_at = now + div(off_ms, 1000)
     engage_at = now + div(on_ms, 1000)
 
     # Record the intercept for the UI (armed/intercept/inbound), dropping any of
