@@ -669,7 +669,11 @@ final class StatusModel {
       return
     }
     let field = slot == .monitor ? "monitor_geojson" : "anc_geojson"
-    await mutate("PATCH", "/api/zonesets/\(id)", [field: clip])
+    // Confirm the paste landed — the "Polygon set" chip looks identical when REPLACING
+    // an existing polygon, so without a toast there's no sign the update took.
+    if await mutate("PATCH", "/api/zonesets/\(id)", [field: clip]) {
+      flashToast("\(slot == .monitor ? "Monitor" : "ANC") polygon updated")
+    }
   }
 
   func renameZone(_ id: String, to name: String) async {
