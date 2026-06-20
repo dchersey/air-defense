@@ -711,10 +711,9 @@ private struct ActivityStrip: View {
             .frame(width: 92, alignment: .trailing)
         }
         .contentShape(Rectangle())
-        .onHover { inside in
-          if inside { hoveredFlightID = flight.id }
-          else if hoveredFlightID == flight.id { hoveredFlightID = nil }
-        }
+        // Only SET on enter; clearing is handled once at the list level (below) so
+        // moving between rows never blips through the empty/hint state.
+        .onHover { inside in if inside { hoveredFlightID = flight.id } }
       }
 
       // Hover detail: the full aircraft name for the hovered row — a real .help()
@@ -728,6 +727,10 @@ private struct ActivityStrip: View {
         .padding(.top, 1)
     }
     .padding(.top, 2)
+    // Clear only when the cursor leaves the whole list — debounces the row-to-row
+    // hand-off (per-row exits would otherwise flash back to the hint between rows).
+    .contentShape(Rectangle())
+    .onHover { inside in if !inside { hoveredFlightID = nil } }
   }
 
   // Full name ("Boeing 737-800") for the hovered row's type code, or nil if the row
