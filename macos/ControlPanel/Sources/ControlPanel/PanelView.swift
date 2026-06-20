@@ -699,6 +699,9 @@ private struct ActivityStrip: View {
       ForEach(model.recent.prefix(10)) { flight in
         HStack(spacing: 8) {
           Text(routeLabel(flight)).font(.adMono).foregroundStyle(Palette.ink)
+          if let type = flight.type, !type.isEmpty {
+            Text("· \(type)").font(.adMono).foregroundStyle(Palette.ink2)
+          }
           if let alt = flight.altFt {
             Text("· \(Int(alt)) ft").font(.adMono).foregroundStyle(Palette.ink3)
           }

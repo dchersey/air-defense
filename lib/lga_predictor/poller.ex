@@ -474,6 +474,7 @@ defmodule LgaPredictor.Poller do
           at: now,
           callsign: ac.callsign,
           hex: ac.hex,
+          type: ac.type,
           alt_ft: ac.alt_ft,
           enters_in: 0,
           dwell: round(window.dwell_seconds)
@@ -603,6 +604,7 @@ defmodule LgaPredictor.Poller do
           at: now,
           callsign: ac.callsign,
           hex: ac.hex,
+          type: ac.type,
           alt_ft: ac.alt_ft,
           enters_in: 0,
           dwell: round(dwell)

@@ -9,6 +9,9 @@ struct Flight: Codable, Identifiable {
   let at: Int
   let entersIn: Int
   let dwell: Int
+  // ICAO aircraft type code from the ADS-B feed (e.g. "B39M", "A321"); nil when the
+  // feed didn't carry it (e.g. the FR24 light endpoint omits type).
+  let type: String?
   // Airport route (origin/dest IATA) from the backend's FlightAware AeroAPI lookup;
   // nil until resolved. `isPrivate` = fetched but no route (GA/private) → show "private".
   let origin: String?
