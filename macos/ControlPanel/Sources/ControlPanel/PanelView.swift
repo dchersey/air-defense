@@ -513,6 +513,7 @@ private struct ActivityStrip: View {
   let model: StatusModel
   @State private var showFlights = false
   @State private var hoveredBar: Int?
+  @State private var hoveredFlightID: String?
 
   var body: some View {
     if model.reachable {
@@ -709,9 +710,42 @@ private struct ActivityStrip: View {
           Text(ancTime(flight)).font(.adMono).monospacedDigit().foregroundStyle(Palette.accent)
             .frame(width: 92, alignment: .trailing)
         }
+        .contentShape(Rectangle())
+        .onHover { inside in
+          if inside { hoveredFlightID = flight.id }
+          else if hoveredFlightID == flight.id { hoveredFlightID = nil }
+        }
       }
+
+      // Hover detail: the full aircraft name for the hovered row — a real .help()
+      // tooltip doesn't fire inside MenuBarExtra's window, so we mirror the chart's
+      // hover pattern. Reserved one-line height so the rows above never shift.
+      Text(hoverDetail)
+        .font(.adMono)
+        .foregroundStyle(hoveredAircraftName == nil ? Palette.ink3 : Palette.ink2)
+        .lineLimit(1)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 1)
     }
     .padding(.top, 2)
+  }
+
+  // Full name ("Boeing 737-800") for the hovered row's type code, or nil if the row
+  // has no/unknown type or nothing is hovered.
+  private var hoveredAircraftName: String? {
+    guard let id = hoveredFlightID,
+      let type = model.recent.first(where: { $0.id == id })?.type, !type.isEmpty
+    else { return nil }
+    return AircraftTypes.name(for: type)
+  }
+
+  // The hover line: "B738 — Boeing 737-800" when known, else a faint affordance.
+  private var hoverDetail: String {
+    guard let id = hoveredFlightID,
+      let type = model.recent.first(where: { $0.id == id })?.type, !type.isEmpty,
+      let name = AircraftTypes.name(for: type)
+    else { return "hover a type code for the aircraft model" }
+    return "\(type) — \(name)"
   }
 
   // Clock time ANC engaged for this flight: detection time + predicted lead to the
