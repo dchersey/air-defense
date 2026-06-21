@@ -1,7 +1,7 @@
 # Air Defense
 
 [![CI](https://github.com/dchersey/air-defense/actions/workflows/ci.yml/badge.svg)](https://github.com/dchersey/air-defense/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: Source Available](https://img.shields.io/badge/license-Source%20Available%20(MIT%20%2B%20Commons%20Clause)-blue.svg)](LICENSE)
 
 https://github.com/user-attachments/assets/0748e274-c487-4781-aa19-3b3a418021ef
 
@@ -291,6 +291,17 @@ test/                   ExUnit tests (TDD)
 - ANC is toggled by automating Control Center — it needs the Accessibility grant and
   Sound pinned to the menu bar.
 
+## Why this license?
+
+Air Defense is free to use, modify, and share for any **noncommercial** purpose —
+personal use, hobby projects, tinkering, learning, and contributions back are all
+welcome and always will be. The one thing the license doesn't permit is **selling**
+the software (or charging for hosting/support whose value comes mainly from it).
+
+I built this to solve my own problem and I'm happy to share it freely; I just don't
+want it repackaged and sold out from under the people it's meant to help. If you
+have a commercial use in mind, get in touch and we can sort something out.
+
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Source-available under the **MIT License with the Commons Clause** — free to use, modify, and redistribute for any **noncommercial** purpose; you may not sell the software. See [LICENSE](LICENSE).
