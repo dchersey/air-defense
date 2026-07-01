@@ -22,7 +22,9 @@ defmodule LgaPredictor.Routes do
   @service "air-defense-aeroapi"
   @env "AEROAPI_KEY"
   @host "https://aeroapi.flightaware.com/aeroapi"
-  @default_cap 1200
+  # AeroAPI Personal tier gives $5/month free; GET /flights/{ident} is $0.005/call,
+  # so 1000 calls = exactly $5. Cap here keeps default usage strictly within the free tier.
+  @default_cap 1000
   @counter_path Path.join([
                   System.user_home() || ".",
                   "Library",

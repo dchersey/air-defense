@@ -262,9 +262,10 @@ plays no part in detecting or tracking aircraft** (that's all ADS-B). Paste an A
 key into the app's **Flight routes** setting — stored only in your macOS Keychain
 (service `air-defense-aeroapi`, `AEROAPI_KEY` env fallback), never committed. Lookups
 are cached one-per-callsign (a route is fixed once a flight is airborne), run in the
-background so they never block a poll, and are capped to ~1,200/month to stay inside
-the free tier. With no key, over the cap, or on a miss, the list simply falls back to
-the raw callsign — everything else works identically.
+background so they never block a poll, and are capped to **1,000/month** to stay inside
+the free tier (AeroAPI's Personal tier includes $5/month free and `GET /flights/{ident}`
+is $0.005/call, so 1,000 calls = exactly $5). With no key, over the cap, or on a miss, the
+list simply falls back to the raw callsign — everything else works identically.
 
 ## Layout
 
