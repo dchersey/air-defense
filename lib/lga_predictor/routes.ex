@@ -25,6 +25,11 @@ defmodule LgaPredictor.Routes do
   # AeroAPI Personal tier gives $5/month free; GET /flights/{ident} is $0.005/call,
   # so 1000 calls = exactly $5. Cap here keeps default usage strictly within the free tier.
   @default_cap 1000
+  # A transient lookup failure (missing/invalid key, timeout, FA 5xx) is negative-cached
+  # for this long, then retried — long enough not to hammer the API during an outage,
+  # short enough that routes recover soon after the key/API comes back. Distinct from a
+  # genuine "no route" miss, which caches for the month (a route is fixed once airborne).
+  @error_ttl_ms 300_000
   @counter_path Path.join([
                   System.user_home() || ".",
                   "Library",
@@ -69,6 +74,7 @@ defmodule LgaPredictor.Routes do
        cap: Keyword.get(opts, :cap, Application.get_env(:lga_predictor, :aeroapi_monthly_cap, @default_cap)),
        has_key: Keyword.get(opts, :has_key, Keychain.present?(@service, @env)),
        fetch: Keyword.get(opts, :fetch, &fetch_aeroapi/1),
+       now_ms: Keyword.get(opts, :now_ms, &default_now_ms/0),
        path: Keyword.get(opts, :path, @counter_path)
      }}
   end
@@ -79,23 +85,49 @@ defmodule LgaPredictor.Routes do
 
     case Map.get(state.cache, cs) do
       nil ->
-        cond do
-          not state.has_key -> {:reply, :none, state}
-          state.count >= state.cap -> {:reply, :none, state}
-          true -> {:reply, :pending, trigger(cs, state)}
-        end
+        maybe_fetch(cs, state)
+
+      {:error, retry_at} ->
+        # Transient failure was negative-cached with a TTL: retry once it lapses,
+        # otherwise report :none (raw callsign / "private") for now. This is what stops
+        # a key/API blip from poisoning every callsign to "private" for the whole month.
+        if state.now_ms.() >= retry_at,
+          do: maybe_fetch(cs, %{state | cache: Map.delete(state.cache, cs)}),
+          else: {:reply, :none, state}
 
       cached ->
         {:reply, cached, state}
     end
   end
 
-  @impl true
-  def handle_cast(:reload_key, state) do
-    {:noreply, %{state | has_key: Keychain.present?(@service, @env)}}
+  # Kick off a background lookup when we have a key and headroom under the cap; otherwise
+  # report :none *without caching*, so it recovers the moment the key returns / month rolls.
+  defp maybe_fetch(cs, state) do
+    cond do
+      not state.has_key -> {:reply, :none, state}
+      state.count >= state.cap -> {:reply, :none, state}
+      true -> {:reply, :pending, trigger(cs, state)}
+    end
   end
 
   @impl true
+  def handle_cast(:reload_key, state) do
+    # Re-pasting a key should recover immediately: drop transient negative-cache entries
+    # so callsigns that failed under the old/absent key re-resolve on the next poll.
+    cache = for {cs, v} <- state.cache, not match?({:error, _}, v), into: %{}, do: {cs, v}
+    {:noreply, %{state | has_key: Keychain.present?(@service, @env), cache: cache}}
+  end
+
+  @impl true
+  def handle_info({:route, cs, :error}, state) do
+    # Transient failure — negative-cache with a TTL instead of a permanent :none, so the
+    # route recovers on a later poll rather than reading "private" for the rest of the month.
+    entry = {:error, state.now_ms.() + @error_ttl_ms}
+
+    {:noreply,
+     %{state | cache: Map.put(state.cache, cs, entry), inflight: MapSet.delete(state.inflight, cs)}}
+  end
+
   def handle_info({:route, cs, result}, state) do
     {:noreply,
      %{state | cache: Map.put(state.cache, cs, result), inflight: MapSet.delete(state.inflight, cs)}}
@@ -122,22 +154,27 @@ defmodule LgaPredictor.Routes do
     if now == state.month, do: state, else: persist(%{state | month: now, count: 0})
   end
 
+  # Returns {:ok, o, d} | :none (genuine 200-but-no-route miss) | :error (transient:
+  # missing/invalid key, non-200, timeout, exception). Callers cache :none for the month
+  # but only briefly negative-cache :error, so a blip doesn't stick as "private" all month.
   defp fetch_aeroapi(callsign) do
     key = Keychain.get(@service, @env)
 
     if is_nil(key) do
-      :none
+      :error
     else
       url = "#{@host}/flights/#{URI.encode(callsign)}"
 
       case Req.get(url, headers: [{"x-apikey", key}], retry: false, receive_timeout: 8_000) do
         {:ok, %{status: 200, body: body}} -> select_route(body)
-        _ -> :none
+        _ -> :error
       end
     end
   rescue
-    _ -> :none
+    _ -> :error
   end
+
+  defp default_now_ms, do: System.monotonic_time(:millisecond)
 
   @doc false
   # Pick the leg near the airport: the one airborne now (departed, not yet landed),

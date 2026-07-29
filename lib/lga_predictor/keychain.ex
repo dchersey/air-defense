@@ -15,14 +15,23 @@ defmodule LgaPredictor.Keychain do
   Returns `:ok` or `{:error, output}`.
   """
   def put(service, key) when is_binary(key) do
-    account = System.get_env("USER") || "air-defense"
-    # Delete first so duplicate items don't accumulate under different accounts.
-    System.cmd("security", ["delete-generic-password", "-s", service], stderr_to_stdout: true)
+    case String.trim(key) do
+      "" ->
+        # Refuse a blank key: never risk wiping a working one for an empty write.
+        {:error, "empty key"}
 
-    case System.cmd("security", ["add-generic-password", "-a", account, "-s", service, "-w", key],
-           stderr_to_stdout: true) do
-      {_, 0} -> :ok
-      {out, _} -> {:error, String.trim(out)}
+      trimmed ->
+        account = System.get_env("USER") || "air-defense"
+        # `-U` updates the existing item in place (add-or-replace). Unlike the old
+        # delete-then-add, a failed write can never leave the Keychain with no key.
+        case System.cmd(
+               "security",
+               ["add-generic-password", "-U", "-a", account, "-s", service, "-w", trimmed],
+               stderr_to_stdout: true
+             ) do
+          {_, 0} -> :ok
+          {out, _} -> {:error, String.trim(out)}
+        end
     end
   rescue
     _ -> {:error, "keychain unavailable"}

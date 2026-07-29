@@ -70,6 +70,63 @@ defmodule LgaPredictor.RoutesTest do
       refute_receive {:fetched, "N123AB"}, 200
     end
 
+    test "transient errors retry after the TTL instead of caching :none for the month" do
+      test = self()
+      {:ok, clock} = Agent.start_link(fn -> 0 end)
+      {:ok, mode} = Agent.start_link(fn -> :error end)
+
+      fetch = fn cs ->
+        send(test, {:fetched, cs})
+        if Agent.get(mode, & &1) == :ok, do: {:ok, "SFO", "LGA"}, else: :error
+      end
+
+      pid =
+        start_supervised!(
+          {Routes,
+           name: :r_err,
+           fetch: fetch,
+           has_key: true,
+           cap: 9,
+           counter: {"x", 0},
+           now_ms: fn -> Agent.get(clock, & &1) end}
+        )
+
+      # A transient failure negative-caches (shows :none) but is NOT a permanent miss...
+      assert Routes.get("UAL5", pid) == :pending
+      assert_receive {:fetched, "UAL5"}, 1_000
+      wait_until(fn -> Routes.get("UAL5", pid) == :none end)
+
+      # ...within the TTL it stays :none without refetching...
+      assert Routes.get("UAL5", pid) == :none
+      refute_receive {:fetched, "UAL5"}, 200
+
+      # ...and once the TTL lapses and upstream recovers, it retries and resolves.
+      Agent.update(mode, fn _ -> :ok end)
+      Agent.update(clock, fn _ -> 300_001 end)
+      assert Routes.get("UAL5", pid) == :pending
+      assert_receive {:fetched, "UAL5"}, 1_000
+      wait_until(fn -> Routes.get("UAL5", pid) == {:ok, "SFO", "LGA"} end)
+    end
+
+    test "reload_key clears negative-cached errors so a re-pasted key recovers at once" do
+      System.put_env("AEROAPI_KEY", "test-key")
+      on_exit(fn -> System.delete_env("AEROAPI_KEY") end)
+
+      test = self()
+      fetch = fn cs -> send(test, {:fetched, cs}); :error end
+      pid = start_supervised!({Routes, name: :r_reload, fetch: fetch, has_key: true, cap: 9, counter: {"x", 0}})
+
+      assert Routes.get("DAL9", pid) == :pending
+      assert_receive {:fetched, "DAL9"}, 1_000
+      wait_until(fn -> Routes.get("DAL9", pid) == :none end)
+
+      # Re-pasting the key reloads: the error entry is purged so it refetches immediately
+      # rather than reading "private" until the TTL lapses.
+      GenServer.cast(pid, :reload_key)
+      assert Routes.get("DAL9", pid) == :pending
+      assert_receive {:fetched, "DAL9"}, 1_000
+    end
+
     test "no key -> :none without fetching" do
       pid = start_supervised!({Routes, name: :r_nokey, fetch: fn _ -> flunk("no fetch") end, has_key: false, counter: {"x", 0}})
       assert Routes.get("AAL1", pid) == :none
