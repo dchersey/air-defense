@@ -372,9 +372,22 @@ private struct StatusBanner: View {
   @ViewBuilder private var bannerForPhase: some View {
     switch model.phase {
     case .disconnected:
+      // An iPhone taking the AirPods for a call lands here. Offer to pull them back
+      // rather than making the user reseat the headphones — but only once we've seen
+      // which pair was in use, since that name is what we press in the Sound popover.
       banner(
         icon: "headphones", tint: Palette.inbound, bg: Palette.inboundSoft,
-        strong: "AirPods not connected", rest: " — monitoring paused. Timer still running.")
+        strong: "AirPods not connected", rest: " — monitoring paused. Timer still running."
+      ) {
+        if model.lastAirPodsName != nil {
+          Button { model.reclaimAirPods() } label: {
+            Text(model.reclaiming ? "Reclaiming…" : "Reclaim")
+          }
+          .buttonStyle(ChipButton())
+          .disabled(model.reclaiming)
+          .help("Bring the AirPods back to this Mac")
+        }
+      }
     case .pending:
       // The countdown is wall-clock-driven, so re-render it on a 1 s timeline rather
       // than relying on model refreshes — while ANC is engaged the zoneset locks on
@@ -413,12 +426,20 @@ private struct StatusBanner: View {
   private func banner(icon: String, tint: Color, bg: Color, strong: String, rest: String)
     -> some View
   {
+    banner(icon: icon, tint: tint, bg: bg, strong: strong, rest: rest) { EmptyView() }
+  }
+
+  private func banner<Accessory: View>(
+    icon: String, tint: Color, bg: Color, strong: String, rest: String,
+    @ViewBuilder accessory: () -> Accessory
+  ) -> some View {
     HStack(alignment: .top, spacing: 8) {
       Image(systemName: icon).font(.caption).foregroundStyle(tint)
       (Text(strong).font(.caption.weight(.semibold)) + Text(rest).font(.caption))
         .foregroundStyle(tint)
         .fixedSize(horizontal: false, vertical: true)
       Spacer(minLength: 0)
+      accessory()
     }
     .padding(.horizontal, 11)
     .padding(.vertical, 9)

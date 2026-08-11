@@ -141,6 +141,13 @@ final class StatusModel {
   // disconnect so the disconnected/engaged glyph matches what was just in use;
   // updated whenever AirPods are the active output (e.g. switch Pro → Max).
   var headphonesArePro = false
+  // Full name of the AirPods last seen as output ("AirPods Max"), sticky across a
+  // disconnect — it labels their row in the Sound popover, so it's what `reclaim` aims
+  // at when an iPhone has taken them. Nil until AirPods have been the output once.
+  var lastAirPodsName: String?
+  // True while a reclaim is in flight (the Control Center press runs off the main
+  // thread), so the button can show progress and not be double-fired.
+  var reclaiming = false
 
   // Quiet-period alert: when a session has run 10 min with no detections, play a
   // message through the AirPods (so a busy user knows LGA may have shifted patterns
@@ -411,6 +418,8 @@ final class StatusModel {
     headphonesConnected = connected
     // Remember the kind while connected (sticky across the next disconnect).
     if let pro = AncController.airPodsOutputIsPro() { headphonesArePro = pro }
+    // ...and the exact name, so a later reclaim targets the pair that was in use.
+    if let name = AncController.airPodsOutputName() { lastAirPodsName = name }
 
     guard connected != lastSentHeadphones else { return }
     lastSentHeadphones = connected
@@ -422,6 +431,32 @@ final class StatusModel {
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.httpBody = try? JSONSerialization.data(withJSONObject: ["connected": connected])
     Task { _ = try? await URLSession.shared.data(for: request) }
+  }
+
+  /// Pull the AirPods back to this Mac after an iPhone took them (typically a call).
+  /// The Control Center press is blocking (~1.5 s of AX round-trips and settle time), so
+  /// it runs off the main thread to keep the panel responsive. We don't wait for the
+  /// audio to arrive — it lands asynchronously and the normal CoreAudio poll flips
+  /// `headphonesConnected`, which un-pauses monitoring and clears the banner on its own.
+  ///
+  /// No lock is needed against `applyModeIfChanged` (the other Control Center driver):
+  /// that one returns early unless the AirPods are already the output, which is exactly
+  /// when this button isn't offered.
+  func reclaimAirPods() {
+    guard !reclaiming else { return }
+    reclaiming = true
+    let target = lastAirPodsName
+    Log.line("reclaim requested for \(target ?? "AirPods")")
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      let ok = AncController.reclaim(named: target)
+      DispatchQueue.main.async {
+        self.reclaiming = false
+        // Reflect the new output immediately rather than waiting for the next tick.
+        self.updateHeadphones()
+        Log.line("reclaim rowPressed=\(ok) headphones=\(self.headphonesConnected)")
+      }
+    }
   }
 
   /// Mirror the backend's desired mode onto the headphones. Only acts on a change

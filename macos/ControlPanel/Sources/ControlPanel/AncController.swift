@@ -42,6 +42,74 @@ enum AncController {
     return name.range(of: "pro", options: .caseInsensitive) != nil
   }
 
+  /// Full name of the AirPods currently serving as output (e.g. "AirPods Max"), else
+  /// nil. This exact name labels their row in the Sound popover, so callers remember it
+  /// while connected to know which pair to `reclaim` once they wander off.
+  static func airPodsOutputName() -> String? {
+    guard let name = defaultOutputDeviceName(),
+      name.range(of: "airpods", options: .caseInsensitive) != nil
+    else { return nil }
+    return name
+  }
+
+  /// Pull AirPods that another device has taken (typically an iPhone answering a call)
+  /// back to this Mac, by pressing their row in the Control Center Sound popover.
+  ///
+  /// Driving the UI is the only thing that works, and the alternatives fail in ways that
+  /// look like success (all verified on macOS 26):
+  ///  - CoreAudio can't help: while the phone owns the audio profile the AirPods vanish
+  ///    from the device list entirely, so there is no device to make default.
+  ///  - IOBluetooth can't either: `isConnected()` still reports true (the baseband ACL
+  ///    link stays with the Mac, decoupled from who owns the audio) and
+  ///    `openConnection()` returns success in ~0s without moving any audio.
+  ///
+  /// The Sound popover lists paired AirPods regardless of connection state, and pressing
+  /// the row makes macOS claim the audio profile — exactly what a manual click does.
+  ///
+  /// Pass the full device name; nil falls back to the first row matching "AirPods".
+  /// Returns whether a row was pressed — not whether the audio arrived, which lands
+  /// asynchronously and is observed via `airPodsAreOutput()` on a later poll.
+  @discardableResult
+  static func reclaim(named name: String?) -> Bool {
+    let wanted = name ?? "AirPods"
+    guard let cc = controlCenterApp(), let soundItem = soundMenuBarItem() else {
+      Log.line("reclaim(\(wanted)) — Control Center / Sound menu item not found")
+      return false
+    }
+
+    let pressed = press(soundItem)
+    Thread.sleep(forTimeInterval: 0.5)
+
+    var ok = false
+    if let window = (attr(cc, kAXWindowsAttribute as String) as? [AXUIElement])?.first {
+      // The label can sit on the row itself or on a descendant, and only some of those
+      // elements accept a press — try each match, pressable ones first.
+      let matches = findAll(window) { containsLabel($0, wanted) }
+        .map { (el: $0, canPress: pressable($0)) }
+        .sorted { $0.canPress && !$1.canPress }
+
+      for m in matches where press(m.el) || axPick(m.el) {
+        ok = true
+        break
+      }
+    }
+
+    // Same dismissal dance as `set`: selecting a row doesn't reliably close the popover,
+    // and the close press no-ops mid-animation, so settle then verify with retries.
+    Thread.sleep(forTimeInterval: 0.35)
+    var closeAttempts = 0
+    while ccWindowCount(cc) > 0 && closeAttempts < 5 {
+      _ = press(soundItem)
+      closeAttempts += 1
+      Thread.sleep(forTimeInterval: 0.3)
+    }
+
+    Log.line(
+      "reclaim(\(wanted)) pressedSound=\(pressed) rowPressed=\(ok) "
+        + "closeAttempts=\(closeAttempts) ccWindowsAfter=\(ccWindowCount(cc))")
+    return ok
+  }
+
   private static func defaultOutputDeviceName() -> String? {
     var deviceID = AudioDeviceID(0)
     var size = UInt32(MemoryLayout<AudioDeviceID>.size)
@@ -167,6 +235,32 @@ enum AncController {
       if let v = str(e, key), v.caseInsensitiveCompare(wanted) == .orderedSame { return true }
     }
     return false
+  }
+
+  // Substring match (vs `matchesLabel`'s exact compare): output rows carry extra text
+  // like a battery percentage alongside the device name.
+  private static func containsLabel(_ e: AXUIElement, _ needle: String) -> Bool {
+    for key in [kAXTitleAttribute as String, kAXDescriptionAttribute as String] {
+      if let v = str(e, key), v.range(of: needle, options: .caseInsensitive) != nil { return true }
+    }
+    return false
+  }
+
+  private static func findAll(_ root: AXUIElement, _ pred: (AXUIElement) -> Bool) -> [AXUIElement] {
+    var out: [AXUIElement] = []
+    var queue = [root]
+    while !queue.isEmpty {
+      let e = queue.removeFirst()
+      if pred(e) { out.append(e) }
+      queue.append(contentsOf: children(e))
+    }
+    return out
+  }
+
+  private static func pressable(_ e: AXUIElement) -> Bool {
+    var names: CFArray?
+    guard AXUIElementCopyActionNames(e, &names) == .success else { return false }
+    return ((names as? [String]) ?? []).contains(kAXPressAction as String)
   }
 
   private static func find(_ root: AXUIElement, _ pred: (AXUIElement) -> Bool) -> AXUIElement? {

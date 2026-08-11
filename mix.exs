@@ -4,7 +4,7 @@ defmodule LgaPredictor.MixProject do
   def project do
     [
       app: :lga_predictor,
-      version: "0.8.6",
+      version: "0.8.7",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       deps: deps(),

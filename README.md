@@ -130,6 +130,26 @@ changes the mode on Tahoe — which is why the two one-time setup steps below (g
 Accessibility, pin Sound to the menu bar) are required. If Apple restores a real
 listening-mode API, this disruption goes away.
 
+## Reclaiming AirPods after a phone call
+
+When an iPhone answers a call it takes the AirPods, and macOS often doesn't hand them
+back when the call ends — the usual fix is taking the headphones off and putting them
+back on. Air Defense notices (monitoring pauses, "AirPods not connected") and offers a
+**Reclaim** button right in that banner to pull them back to the Mac.
+
+It works by pressing the AirPods row in the same Control Center Sound popover, so it
+carries the same sub-second keyboard blip described above. The obvious cleaner routes
+don't work, and they fail in ways that *look* like success:
+
+- **CoreAudio** can't select them: while the phone owns the audio profile the AirPods
+  disappear from the Mac's device list entirely, so there is nothing to make default.
+- **IOBluetooth** can't either: `isConnected()` still reports `true` (the baseband link
+  stays with the Mac, decoupled from who owns the audio) and `openConnection()` returns
+  success in ~0 s without moving any audio.
+
+That also makes CoreAudio presence — not the Bluetooth connection state — the only
+reliable signal for "the phone has them".
+
 ## Install
 
 **Apple Silicon, macOS 15+.** One command sets up the backend and installs the
