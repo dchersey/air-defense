@@ -137,9 +137,14 @@ back when the call ends — the usual fix is taking the headphones off and putti
 back on. Air Defense notices (monitoring pauses, "AirPods not connected") and offers a
 **Reclaim** button right in that banner to pull them back to the Mac.
 
-It works by pressing the AirPods row in the same Control Center Sound popover, so it
-carries the same sub-second keyboard blip described above. The obvious cleaner routes
-don't work, and they fail in ways that *look* like success:
+It opens **Control Center**, expands the **Sound** tile, and presses the AirPods row —
+so it carries the same sub-second keyboard blip described above. It deliberately does
+*not* go through the Sound menu-bar item that mode switching uses: that item only exists
+while Sound is pinned "Always Show" or is active, so on the default "Show When Active"
+it vanishes the moment the AirPods leave — exactly when a reclaim is needed. Control
+Center is always present.
+
+The obvious cleaner routes don't work, and they fail in ways that *look* like success:
 
 - **CoreAudio** can't select them: while the phone owns the audio profile the AirPods
   disappear from the Mac's device list entirely, so there is nothing to make default.
@@ -149,6 +154,12 @@ don't work, and they fail in ways that *look* like success:
 
 That also makes CoreAudio presence — not the Bluetooth connection state — the only
 reliable signal for "the phone has them".
+
+One wrinkle worth knowing if you touch this code: in the expanded Sound list each device
+contributes **two** elements sharing one identifier — an `AXCheckBox` that switches
+output and an `AXDisclosureTriangle` that opens the listening-mode submenu. Press the
+checkbox. Match on the identifier (`sound-device-<name>`) rather than the label, which
+carries a battery suffix like `AirPods Pro #2, 95%`.
 
 ## Install
 
