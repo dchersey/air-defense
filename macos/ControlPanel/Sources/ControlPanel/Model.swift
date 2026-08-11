@@ -446,29 +446,31 @@ final class StatusModel {
   ///
   /// The AX work also runs on the main thread, like the mode switch, so the two can't
   /// interleave. That stalls main ~1.5 s, same as a mode switch already does.
-  func reclaimAirPods() {
+  func reclaimAirPods(reason: String = "button") {
     guard !reclaiming else { return }
     reclaiming = true
-    let target = lastAirPodsName
+    let preferred = lastAirPodsName
 
     // The MenuBarExtra panel is the key window whenever it's open; the status item
     // itself is never key, so this can't take the menu-bar icon down with it.
-    let closed = NSApp.keyWindow != nil
     NSApp.keyWindow?.close()
-    Log.line("reclaim requested for \(target ?? "AirPods") (panel closed: \(closed))")
+    Log.line("reclaim (\(reason)) preferring \(preferred ?? "any available")")
 
     // Let the dismissal settle before automating, or Control Center's menu bar is still
     // occluded and we're back to the original failure.
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-      let ok = AncController.reclaim(named: target)
+      let outcome = AncController.reclaimAirPods(preferring: preferred)
       self.reclaiming = false
-      Log.line("reclaim rowPressed=\(ok)")
+      Log.line("reclaim (\(reason)) -> \(outcome.log)")
+      // Remember whatever we actually took, so the next reclaim prefers the same pair.
+      if case .reclaimed(let name) = outcome { self.lastAirPodsName = name }
+
       // The audio profile lands a beat after the press, so checking now would always
       // read "not connected". Re-check shortly after to clear the banner promptly and
       // record the true outcome (pressed-but-audio-didn't-move is the failure to catch).
       DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
         self.updateHeadphones()
-        Log.line("reclaim outcome: headphones=\(self.headphonesConnected)")
+        Log.line("reclaim (\(reason)) settled: headphones=\(self.headphonesConnected)")
       }
     }
   }
@@ -512,7 +514,14 @@ final class StatusModel {
     }
   }
 
-  func start(_ zoneset: String) { post("/api/session/start", body: ["zoneset": zoneset]) }
+  /// Begin a session. If the AirPods are parked on a phone we grab them back at the same
+  /// time, so starting doesn't just land in the paused state — the backend un-pauses by
+  /// itself once `updateHeadphones` reports them. Fired alongside the start rather than
+  /// before it, so the session clock isn't held up by ~3 s of Control Center automation.
+  func start(_ zoneset: String) {
+    post("/api/session/start", body: ["zoneset": zoneset])
+    if !headphonesConnected { reclaimAirPods(reason: "session start") }
+  }
   func stop(_ zoneset: String) { post("/api/session/stop", body: ["zoneset": zoneset]) }
 
   /// Set the global ANC engage/release offsets (seconds). Partial PUT — the

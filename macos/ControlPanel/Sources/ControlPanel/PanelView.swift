@@ -373,20 +373,19 @@ private struct StatusBanner: View {
     switch model.phase {
     case .disconnected:
       // An iPhone taking the AirPods for a call lands here. Offer to pull them back
-      // rather than making the user reseat the headphones — but only once we've seen
-      // which pair was in use, since that name is what we press in the Sound popover.
+      // rather than making the user reseat the headphones. Always shown: the reclaim
+      // discovers which pairs are live from Control Center, so it works even on a cold
+      // start where we've never seen the AirPods as output.
       banner(
         icon: "headphones", tint: Palette.inbound, bg: Palette.inboundSoft,
         strong: "AirPods not connected", rest: " — monitoring paused. Timer still running."
       ) {
-        if model.lastAirPodsName != nil {
-          Button { model.reclaimAirPods() } label: {
-            Text(model.reclaiming ? "Reclaiming…" : "Reclaim")
-          }
-          .buttonStyle(ChipButton())
-          .disabled(model.reclaiming)
-          .help("Bring the AirPods back to this Mac")
+        Button { model.reclaimAirPods() } label: {
+          Text(model.reclaiming ? "Reclaiming…" : "Reclaim")
         }
+        .buttonStyle(ChipButton())
+        .disabled(model.reclaiming)
+        .help("Bring the AirPods back to this Mac")
       }
     case .pending:
       // The countdown is wall-clock-driven, so re-render it on a 1 s timeline rather

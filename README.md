@@ -155,11 +155,28 @@ The obvious cleaner routes don't work, and they fail in ways that *look* like su
 That also makes CoreAudio presence — not the Bluetooth connection state — the only
 reliable signal for "the phone has them".
 
-One wrinkle worth knowing if you touch this code: in the expanded Sound list each device
-contributes **two** elements sharing one identifier — an `AXCheckBox` that switches
-output and an `AXDisclosureTriangle` that opens the listening-mode submenu. Press the
-checkbox. Match on the identifier (`sound-device-<name>`) rather than the label, which
-carries a battery suffix like `AirPods Pro #2, 95%`.
+The same thing happens **automatically when you start a session**, so beginning a watch
+while your AirPods are still on your phone doesn't just drop you straight into the paused
+state. Nothing is grabbed if they're already on the Mac, if they're sitting in their case,
+or if two live pairs make the choice ambiguous — in that last case use the button, which
+prefers whichever pair you used here last.
+
+Detection falls out of the same list: Control Center shows exactly the AirPods that are
+**powered on and reachable**, so a pair in its case is simply absent, and `v=1` marks
+whichever is already selected. Bluetooth state is no substitute — `isConnected()` reads
+`true` for a pair the phone is holding, and can go stale besides.
+
+Two wrinkles if you touch this code, both about `sound-device-<name>` being shared by
+*everything* belonging to a device:
+
+- An `AXDisclosureTriangle` carries it too; pressing that opens the listening-mode
+  submenu instead of switching output. Require `AXCheckBox`.
+- Once a device is selected its submenu renders inline, adding a checkbox per listening
+  mode plus Spatial Audio and Conversation Awareness — all under that same identifier,
+  several reading as checked. Identifier alone would misreport "already connected" and
+  could press *Adaptive* instead of the device. Only the device row's **description**
+  starts with the device name (`AirPods Max, 84%`); submenu rows read `Adaptive`, `Off`,
+  and so on.
 
 ## Install
 

@@ -52,8 +52,27 @@ enum AncController {
     return name
   }
 
+  /// What a reclaim attempt did.
+  enum ReclaimOutcome {
+    case reclaimed(String)        // pressed this pair's row
+    case alreadyConnected(String) // AirPods are already this Mac's output
+    case nothingAvailable         // no powered-on AirPods to take (e.g. all in their case)
+    case ambiguous([String])      // several live pairs, no basis to choose
+    case failed(String)
+
+    var log: String {
+      switch self {
+      case .reclaimed(let n): return "reclaimed \(n)"
+      case .alreadyConnected(let n): return "already connected (\(n))"
+      case .nothingAvailable: return "nothing available"
+      case .ambiguous(let ns): return "ambiguous: \(ns)"
+      case .failed(let why): return "failed: \(why)"
+      }
+    }
+  }
+
   /// Pull AirPods that another device has taken (typically an iPhone answering a call)
-  /// back to this Mac, by pressing their row in the Control Center Sound popover.
+  /// back to this Mac, by pressing their row in Control Center's Sound list.
   ///
   /// Driving the UI is the only thing that works, and the alternatives fail in ways that
   /// look like success (all verified on macOS 26):
@@ -63,15 +82,16 @@ enum AncController {
   ///    link stays with the Mac, decoupled from who owns the audio) and
   ///    `openConnection()` returns success in ~0s without moving any audio.
   ///
-  /// The Sound popover lists paired AirPods regardless of connection state, and pressing
-  /// the row makes macOS claim the audio profile — exactly what a manual click does.
+  /// Control Center's Sound list, by contrast, shows exactly the AirPods that are powered
+  /// on and reachable — a pair in its case is absent — and pressing a row makes macOS
+  /// claim the audio profile, exactly as a manual click does. So it doubles as both the
+  /// detector and the actuator.
   ///
-  /// Pass the full device name; nil falls back to the first row matching "AirPods".
-  /// Returns whether a row was pressed — not whether the audio arrived, which lands
-  /// asynchronously and is observed via `airPodsAreOutput()` on a later poll.
-  @discardableResult
-  static func reclaim(named name: String?) -> Bool {
-    let wanted = name ?? "AirPods"
+  /// `preferred` biases the choice when more than one pair is reclaimable; it's ignored
+  /// if that pair isn't currently available. Returns what happened — a press only means
+  /// the row was clicked, not that audio arrived, which lands asynchronously and is
+  /// observed via `airPodsAreOutput()` a beat later.
+  static func reclaimAirPods(preferring preferred: String?) -> ReclaimOutcome {
     // Enter via the Control Center item, NOT the Sound one that `set` uses. Sound is a
     // separate menu extra only when pinned "Always Show"; on the common "Show When
     // Active" setting it disappears once the AirPods leave and output falls back to
@@ -79,19 +99,17 @@ enum AncController {
     // present, and carries the same device list one level in.
     guard let cc = controlCenterApp(), let ccItem = menuBarItem(idContains: "controlcenter")
     else {
-      Log.line("reclaim(\(wanted)) — Control Center menu item not found; \(menuBarDiagnostic())")
-      return false
+      return .failed("Control Center menu item not found; \(menuBarDiagnostic())")
     }
 
-    let pressed = press(ccItem)
+    _ = press(ccItem)
     Thread.sleep(forTimeInterval: 0.9)
 
     guard let window = (attr(cc, kAXWindowsAttribute as String) as? [AXUIElement])?.first,
       let tile = find(window, { str($0, kAXIdentifierAttribute as String) == "controlcenter-volume" })
     else {
-      Log.line("reclaim(\(wanted)) — Sound tile not found in Control Center")
       dismiss(cc, ccItem)
-      return false
+      return .failed("Sound tile not found in Control Center")
     }
 
     // Expand the Sound tile into its Output list. AXPress on the tile toggles rather
@@ -103,32 +121,54 @@ enum AncController {
     }
     Thread.sleep(forTimeInterval: 1.0)
 
-    var ok = false
-    if let expanded = (attr(cc, kAXWindowsAttribute as String) as? [AXUIElement])?.first {
-      // Match the exact identifier and require AXCheckBox. The row's *description*
-      // carries a battery suffix ("AirPods Pro #2, 95%") so substring matching on labels
-      // is brittle, and a disclosure triangle (the listening-mode chevron) shares the
-      // very same identifier — pressing that expands the submenu instead of switching
-      // output.
-      let wantID = "sound-device-\(wanted)"
-      let rows = findAll(expanded) { str($0, kAXIdentifierAttribute as String) == wantID }
-
-      if let row = rows.first(where: { role($0) == "AXCheckBox" }) {
-        ok = press(row)
-      } else {
-        let available = findAll(expanded) {
-          (str($0, kAXIdentifierAttribute as String) ?? "").hasPrefix("sound-device-")
-            && role($0) == "AXCheckBox"
-        }
-        .compactMap { str($0, kAXIdentifierAttribute as String) }
-        Log.line("reclaim — no output row \"\(wantID)\"; available: \(available)")
-      }
+    guard let expanded = (attr(cc, kAXWindowsAttribute as String) as? [AXUIElement])?.first else {
+      dismiss(cc, ccItem)
+      return .failed("Sound list did not expand")
     }
 
-    dismiss(cc, ccItem)
-    Log.line("reclaim(\(wanted)) pressedCC=\(pressed) rowPressed=\(ok)")
-    return ok
+    // Identifying the device row takes BOTH checks. `sound-device-<name>` is shared by
+    // everything belonging to that device: an AXDisclosureTriangle (pressing it opens the
+    // submenu instead of switching output) and — once the device is selected, when its
+    // submenu renders inline — a checkbox per listening mode, Spatial Audio and
+    // Conversation Awareness setting. Several of those read as checked, so matching on
+    // identifier alone would both misreport "already connected" and risk pressing
+    // "Adaptive" instead of the device.
+    //
+    // Only the device row's description leads with the device name ("AirPods Max, 84%",
+    // battery suffix and all); the submenu rows read "Adaptive", "Off", and so on.
+    let rows: [(el: AXUIElement, name: String, selected: Bool)] =
+      findAll(expanded) { role($0) == "AXCheckBox" }
+      .compactMap { el in
+        guard let id = str(el, kAXIdentifierAttribute as String), id.hasPrefix(devicePrefix)
+        else { return nil }
+        let name = String(id.dropFirst(devicePrefix.count))
+        guard name.range(of: "airpods", options: .caseInsensitive) != nil,
+          (str(el, kAXDescriptionAttribute as String) ?? "").hasPrefix(name)
+        else { return nil }
+        let on = (attr(el, kAXValueAttribute as String) as? NSNumber)?.intValue == 1
+        return (el, name, on)
+      }
+
+    defer { dismiss(cc, ccItem) }
+
+    // Only powered-on, reachable AirPods appear here — a pair sitting in its case is
+    // omitted entirely, which is what makes this list a reliable "what can I take back".
+    if let ours = rows.first(where: { $0.selected }) { return .alreadyConnected(ours.name) }
+    guard !rows.isEmpty else { return .nothingAvailable }
+
+    guard
+      let pick = preferred.flatMap({ p in rows.first { $0.name == p } })
+        ?? (rows.count == 1 ? rows[0] : nil)
+    else {
+      // Several pairs are live and none is the remembered one — picking for the user
+      // would be a coin flip, so leave it to the Reclaim button.
+      return .ambiguous(rows.map(\.name))
+    }
+
+    return press(pick.el) ? .reclaimed(pick.name) : .failed("press failed for \(pick.name)")
   }
+
+  private static let devicePrefix = "sound-device-"
 
   /// Toggle a Control Center popover shut, verifying it actually went away — the close
   /// press no-ops mid-animation, so settle first and retry.
