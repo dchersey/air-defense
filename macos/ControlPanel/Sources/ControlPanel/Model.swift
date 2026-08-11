@@ -438,22 +438,28 @@ final class StatusModel {
   /// CoreAudio poll flips `headphonesConnected`, which un-pauses monitoring and clears
   /// the banner on its own.
   ///
-  /// The AX work MUST run on the main thread. Off a background queue the Control Center
-  /// lookups just fail — `soundMenuBarItem()` returns nil ("Sound menu item not found")
-  /// while the identical lookup from `applyModeIfChanged` succeeds on main. So this
-  /// blocks the main thread for ~1.5 s, same as a mode switch does; the async hop is
-  /// only so SwiftUI can paint the "Reclaiming…" state before the stall.
+  /// Our own panel has to be dismissed first. While a menu-bar window is open, Control
+  /// Center's menu-bar items aren't reachable through the Accessibility API, so the
+  /// lookup returns nil and nothing happens — which is exactly why the poll-driven mode
+  /// switch works (panel closed) while this button's identical lookup failed: it can
+  /// only ever be pressed with the panel open.
   ///
-  /// No lock is needed against `applyModeIfChanged` (the other Control Center driver):
-  /// that one returns early unless the AirPods are already the output, which is exactly
-  /// when this button isn't offered — and both now run on main, so they can't interleave.
+  /// The AX work also runs on the main thread, like the mode switch, so the two can't
+  /// interleave. That stalls main ~1.5 s, same as a mode switch already does.
   func reclaimAirPods() {
     guard !reclaiming else { return }
     reclaiming = true
     let target = lastAirPodsName
-    Log.line("reclaim requested for \(target ?? "AirPods")")
 
-    DispatchQueue.main.async {
+    // The MenuBarExtra panel is the key window whenever it's open; the status item
+    // itself is never key, so this can't take the menu-bar icon down with it.
+    let closed = NSApp.keyWindow != nil
+    NSApp.keyWindow?.close()
+    Log.line("reclaim requested for \(target ?? "AirPods") (panel closed: \(closed))")
+
+    // Let the dismissal settle before automating, or Control Center's menu bar is still
+    // occluded and we're back to the original failure.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
       let ok = AncController.reclaim(named: target)
       self.reclaiming = false
       Log.line("reclaim rowPressed=\(ok)")

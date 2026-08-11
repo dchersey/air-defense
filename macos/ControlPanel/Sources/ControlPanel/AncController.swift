@@ -73,7 +73,7 @@ enum AncController {
   static func reclaim(named name: String?) -> Bool {
     let wanted = name ?? "AirPods"
     guard let cc = controlCenterApp(), let soundItem = soundMenuBarItem() else {
-      Log.line("reclaim(\(wanted)) — Control Center / Sound menu item not found")
+      Log.line("reclaim(\(wanted)) — Sound menu item not found; \(menuBarDiagnostic())")
       return false
     }
 
@@ -293,6 +293,18 @@ enum AncController {
   }
 
   // MARK: - Control Center
+
+  /// Why the Sound menu-bar item wasn't found — distinguishes "Control Center missing",
+  /// "menu bar not enumerable" (what an open menu-bar window causes) and "item renamed
+  /// or unpinned", which otherwise all surface as the same silent nil.
+  private static func menuBarDiagnostic() -> String {
+    guard let cc = controlCenterApp() else { return "controlCenterApp=nil" }
+    guard let menuBar = find(cc, { role($0) == "AXMenuBar" }) else {
+      return "menuBar=nil (not enumerable)"
+    }
+    let ids = children(menuBar).map { str($0, kAXIdentifierAttribute as String) ?? "?" }
+    return "menuBarChildren=\(ids.count) ids=\(ids)"
+  }
 
   private static func controlCenterApp() -> AXUIElement? {
     NSRunningApplication
