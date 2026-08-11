@@ -88,6 +88,14 @@ enum AncController {
         .map { (el: $0, canPress: pressable($0)) }
         .sorted { $0.canPress && !$1.canPress }
 
+      if matches.isEmpty {
+        // Log the AirPods rows that ARE present, so a name mismatch (the popover
+        // labelling them differently than CoreAudio does) is obvious rather than silent.
+        let seen = findAll(window) { containsLabel($0, "AirPods") }
+          .compactMap { str($0, kAXTitleAttribute as String) }
+        Log.line("reclaim — no row matching \"\(wanted)\"; AirPods rows present: \(Set(seen).sorted())")
+      }
+
       for m in matches where press(m.el) || axPick(m.el) {
         ok = true
         break

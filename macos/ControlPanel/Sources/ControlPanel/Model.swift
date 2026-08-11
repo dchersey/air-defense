@@ -434,27 +434,35 @@ final class StatusModel {
   }
 
   /// Pull the AirPods back to this Mac after an iPhone took them (typically a call).
-  /// The Control Center press is blocking (~1.5 s of AX round-trips and settle time), so
-  /// it runs off the main thread to keep the panel responsive. We don't wait for the
-  /// audio to arrive — it lands asynchronously and the normal CoreAudio poll flips
-  /// `headphonesConnected`, which un-pauses monitoring and clears the banner on its own.
+  /// We don't wait for the audio to arrive — it lands asynchronously and the normal
+  /// CoreAudio poll flips `headphonesConnected`, which un-pauses monitoring and clears
+  /// the banner on its own.
+  ///
+  /// The AX work MUST run on the main thread. Off a background queue the Control Center
+  /// lookups just fail — `soundMenuBarItem()` returns nil ("Sound menu item not found")
+  /// while the identical lookup from `applyModeIfChanged` succeeds on main. So this
+  /// blocks the main thread for ~1.5 s, same as a mode switch does; the async hop is
+  /// only so SwiftUI can paint the "Reclaiming…" state before the stall.
   ///
   /// No lock is needed against `applyModeIfChanged` (the other Control Center driver):
   /// that one returns early unless the AirPods are already the output, which is exactly
-  /// when this button isn't offered.
+  /// when this button isn't offered — and both now run on main, so they can't interleave.
   func reclaimAirPods() {
     guard !reclaiming else { return }
     reclaiming = true
     let target = lastAirPodsName
     Log.line("reclaim requested for \(target ?? "AirPods")")
 
-    DispatchQueue.global(qos: .userInitiated).async {
+    DispatchQueue.main.async {
       let ok = AncController.reclaim(named: target)
-      DispatchQueue.main.async {
-        self.reclaiming = false
-        // Reflect the new output immediately rather than waiting for the next tick.
+      self.reclaiming = false
+      Log.line("reclaim rowPressed=\(ok)")
+      // The audio profile lands a beat after the press, so checking now would always
+      // read "not connected". Re-check shortly after to clear the banner promptly and
+      // record the true outcome (pressed-but-audio-didn't-move is the failure to catch).
+      DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
         self.updateHeadphones()
-        Log.line("reclaim rowPressed=\(ok) headphones=\(self.headphonesConnected)")
+        Log.line("reclaim outcome: headphones=\(self.headphonesConnected)")
       }
     }
   }
