@@ -72,50 +72,74 @@ enum AncController {
   @discardableResult
   static func reclaim(named name: String?) -> Bool {
     let wanted = name ?? "AirPods"
-    guard let cc = controlCenterApp(), let soundItem = soundMenuBarItem() else {
-      Log.line("reclaim(\(wanted)) — Sound menu item not found; \(menuBarDiagnostic())")
+    // Enter via the Control Center item, NOT the Sound one that `set` uses. Sound is a
+    // separate menu extra only when pinned "Always Show"; on the common "Show When
+    // Active" setting it disappears once the AirPods leave and output falls back to
+    // built-in — precisely the state every reclaim runs in. Control Center is always
+    // present, and carries the same device list one level in.
+    guard let cc = controlCenterApp(), let ccItem = menuBarItem(idContains: "controlcenter")
+    else {
+      Log.line("reclaim(\(wanted)) — Control Center menu item not found; \(menuBarDiagnostic())")
       return false
     }
 
-    let pressed = press(soundItem)
-    Thread.sleep(forTimeInterval: 0.5)
+    let pressed = press(ccItem)
+    Thread.sleep(forTimeInterval: 0.9)
+
+    guard let window = (attr(cc, kAXWindowsAttribute as String) as? [AXUIElement])?.first,
+      let tile = find(window, { str($0, kAXIdentifierAttribute as String) == "controlcenter-volume" })
+    else {
+      Log.line("reclaim(\(wanted)) — Sound tile not found in Control Center")
+      dismiss(cc, ccItem)
+      return false
+    }
+
+    // Expand the Sound tile into its Output list. AXPress on the tile toggles rather
+    // than expands, so prefer the explicit "show details" action when offered.
+    if let detail = actionNames(tile).first(where: { $0.lowercased().contains("show details") }) {
+      _ = AXUIElementPerformAction(tile, detail as CFString)
+    } else {
+      _ = press(tile)
+    }
+    Thread.sleep(forTimeInterval: 1.0)
 
     var ok = false
-    if let window = (attr(cc, kAXWindowsAttribute as String) as? [AXUIElement])?.first {
-      // The label can sit on the row itself or on a descendant, and only some of those
-      // elements accept a press — try each match, pressable ones first.
-      let matches = findAll(window) { containsLabel($0, wanted) }
-        .map { (el: $0, canPress: pressable($0)) }
-        .sorted { $0.canPress && !$1.canPress }
+    if let expanded = (attr(cc, kAXWindowsAttribute as String) as? [AXUIElement])?.first {
+      // Match the exact identifier and require AXCheckBox. The row's *description*
+      // carries a battery suffix ("AirPods Pro #2, 95%") so substring matching on labels
+      // is brittle, and a disclosure triangle (the listening-mode chevron) shares the
+      // very same identifier — pressing that expands the submenu instead of switching
+      // output.
+      let wantID = "sound-device-\(wanted)"
+      let rows = findAll(expanded) { str($0, kAXIdentifierAttribute as String) == wantID }
 
-      if matches.isEmpty {
-        // Log the AirPods rows that ARE present, so a name mismatch (the popover
-        // labelling them differently than CoreAudio does) is obvious rather than silent.
-        let seen = findAll(window) { containsLabel($0, "AirPods") }
-          .compactMap { str($0, kAXTitleAttribute as String) }
-        Log.line("reclaim — no row matching \"\(wanted)\"; AirPods rows present: \(Set(seen).sorted())")
-      }
-
-      for m in matches where press(m.el) || axPick(m.el) {
-        ok = true
-        break
+      if let row = rows.first(where: { role($0) == "AXCheckBox" }) {
+        ok = press(row)
+      } else {
+        let available = findAll(expanded) {
+          (str($0, kAXIdentifierAttribute as String) ?? "").hasPrefix("sound-device-")
+            && role($0) == "AXCheckBox"
+        }
+        .compactMap { str($0, kAXIdentifierAttribute as String) }
+        Log.line("reclaim — no output row \"\(wantID)\"; available: \(available)")
       }
     }
 
-    // Same dismissal dance as `set`: selecting a row doesn't reliably close the popover,
-    // and the close press no-ops mid-animation, so settle then verify with retries.
+    dismiss(cc, ccItem)
+    Log.line("reclaim(\(wanted)) pressedCC=\(pressed) rowPressed=\(ok)")
+    return ok
+  }
+
+  /// Toggle a Control Center popover shut, verifying it actually went away — the close
+  /// press no-ops mid-animation, so settle first and retry.
+  private static func dismiss(_ cc: AXUIElement, _ item: AXUIElement) {
     Thread.sleep(forTimeInterval: 0.35)
-    var closeAttempts = 0
-    while ccWindowCount(cc) > 0 && closeAttempts < 5 {
-      _ = press(soundItem)
-      closeAttempts += 1
+    var attempts = 0
+    while ccWindowCount(cc) > 0 && attempts < 5 {
+      _ = press(item)
+      attempts += 1
       Thread.sleep(forTimeInterval: 0.3)
     }
-
-    Log.line(
-      "reclaim(\(wanted)) pressedSound=\(pressed) rowPressed=\(ok) "
-        + "closeAttempts=\(closeAttempts) ccWindowsAfter=\(ccWindowCount(cc))")
-    return ok
   }
 
   private static func defaultOutputDeviceName() -> String? {
@@ -245,15 +269,6 @@ enum AncController {
     return false
   }
 
-  // Substring match (vs `matchesLabel`'s exact compare): output rows carry extra text
-  // like a battery percentage alongside the device name.
-  private static func containsLabel(_ e: AXUIElement, _ needle: String) -> Bool {
-    for key in [kAXTitleAttribute as String, kAXDescriptionAttribute as String] {
-      if let v = str(e, key), v.range(of: needle, options: .caseInsensitive) != nil { return true }
-    }
-    return false
-  }
-
   private static func findAll(_ root: AXUIElement, _ pred: (AXUIElement) -> Bool) -> [AXUIElement] {
     var out: [AXUIElement] = []
     var queue = [root]
@@ -265,10 +280,10 @@ enum AncController {
     return out
   }
 
-  private static func pressable(_ e: AXUIElement) -> Bool {
+  private static func actionNames(_ e: AXUIElement) -> [String] {
     var names: CFArray?
-    guard AXUIElementCopyActionNames(e, &names) == .success else { return false }
-    return ((names as? [String]) ?? []).contains(kAXPressAction as String)
+    guard AXUIElementCopyActionNames(e, &names) == .success else { return [] }
+    return (names as? [String]) ?? []
   }
 
   private static func find(_ root: AXUIElement, _ pred: (AXUIElement) -> Bool) -> AXUIElement? {
@@ -313,13 +328,17 @@ enum AncController {
       .map { AXUIElementCreateApplication($0.processIdentifier) }
   }
 
-  /// The pinned Sound menu-bar item (id contains "sound").
-  private static func soundMenuBarItem() -> AXUIElement? {
+  /// The pinned Sound menu-bar item (id contains "sound"). Only present when Sound is
+  /// pinned "Always Show", or while it's active — see `reclaim` for why that matters.
+  private static func soundMenuBarItem() -> AXUIElement? { menuBarItem(idContains: "sound") }
+
+  /// A Control Center menu-bar item whose identifier contains `needle`.
+  private static func menuBarItem(idContains needle: String) -> AXUIElement? {
     guard let cc = controlCenterApp(), let menuBar = find(cc, { role($0) == "AXMenuBar" })
     else { return nil }
 
     return children(menuBar).first {
-      (str($0, kAXIdentifierAttribute as String) ?? "").lowercased().contains("sound")
+      (str($0, kAXIdentifierAttribute as String) ?? "").lowercased().contains(needle)
     }
   }
 }
