@@ -1,6 +1,8 @@
+import ADBluetooth
 import AppKit
 import ApplicationServices
 import CoreAudio
+import IOBluetooth
 
 /// Drives AirPods Max noise control by automating the macOS Control Center Sound
 /// popover via the Accessibility API. This is the ONLY mechanism confirmed to
@@ -22,6 +24,39 @@ enum AncController {
     case transparency = "Transparency"
     case adaptive = "Adaptive"
     case off = "Off"
+
+    /// AAP encoding, as carried in AACP control command 0x0D.
+    var aap: ADMode {
+      switch self {
+      case .off: return ADMode.off
+      case .anc: return ADMode.noiseCancellation
+      case .transparency: return ADMode.transparency
+      case .adaptive: return ADMode.adaptive
+      }
+    }
+
+    init?(aap: ADMode) {
+      switch aap {
+      case .off: self = .off
+      case .noiseCancellation: self = .anc
+      case .transparency: self = .transparency
+      case .adaptive: self = .adaptive
+      default: return nil
+      }
+    }
+  }
+
+  /// Start the private CoreBluetooth path warming up. Call once at launch so the first
+  /// overflight doesn't pay the setup cost.
+  static func warmUpFastPath() { ADListeningMode.shared.warmUp() }
+
+  /// Bluetooth address of the AirPods currently serving as output, matched by name
+  /// against the paired-device list (CoreAudio knows the name, not the address).
+  private static func airPodsAddress() -> String? {
+    guard let name = airPodsOutputName(),
+      let paired = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice]
+    else { return nil }
+    return paired.first { ($0.name ?? "") == name }?.addressString
   }
 
   /// Whether AirPods are the current default audio output. The Control Center
@@ -222,10 +257,22 @@ enum AncController {
   /// already-ANC) after an overflight instead of forcing Transparency.
   @discardableResult
   static func set(_ mode: Mode) -> (ok: Bool, previous: Mode?) {
+    // Fast path: ask bluetoothd directly via private CoreBluetooth. No popover, so no
+    // keyboard blip, and it reads the true previous mode instead of inferring it from
+    // the UI. Private API, so any failure silently falls through to the automation below.
+    if let address = airPodsAddress() {
+      let before = Mode(aap: ADListeningMode.shared.currentMode(forAddress: address))
+      if ADListeningMode.shared.setMode(mode.aap, forAddress: address) {
+        Log.line("set(\(mode.rawValue)) via CoreBluetooth — previous=\(before?.rawValue ?? "?")")
+        return (true, before)
+      }
+    }
+
     guard let cc = controlCenterApp(), let soundItem = soundMenuBarItem() else {
       Log.line("set(\(mode.rawValue)) — Control Center / Sound menu item not found")
       return (false, nil)
     }
+    Log.line("set(\(mode.rawValue)) — falling back to Control Center automation")
 
     // Open the Sound popover.
     let pressed = press(soundItem)

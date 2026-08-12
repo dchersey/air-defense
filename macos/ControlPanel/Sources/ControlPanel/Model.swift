@@ -420,6 +420,9 @@ final class StatusModel {
     if let pro = AncController.airPodsOutputIsPro() { headphonesArePro = pro }
     // ...and the exact name, so a later reclaim targets the pair that was in use.
     if let name = AncController.airPodsOutputName() { lastAirPodsName = name }
+    // Bring the no-UI mode-switch path up in the background the first time AirPods
+    // appear, so the first overflight doesn't pay its setup cost.
+    if connected { AncController.warmUpFastPath() }
 
     guard connected != lastSentHeadphones else { return }
     lastSentHeadphones = connected

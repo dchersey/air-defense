@@ -101,34 +101,42 @@ the zone editor).
 Sessions are manual: hit **Start** on a zone when the planes start, and it runs for
 ~4 hours or until you stop it. Idle — and free — otherwise.
 
-## Switching the AirPods mode (and the brief keyboard tap)
+## Switching the AirPods mode
 
-Heads-up: each time Air Defense flips noise control — once to engage ANC, once to
-release it — it **momentarily grabs the keyboard for under a second**. If you happen
-to be typing at that instant, a keystroke or two may not land in the app you're in.
-It's two short taps per overflight (on, then off), not a continuous thing.
+Air Defense sets noise control **silently** — no windows, no focus stealing, no keyboard
+interruption. It asks `bluetoothd` (which owns the AAP link to your AirPods) through the
+same private CoreBluetooth path Control Center itself uses, so the switch is a direct IPC
+call rather than UI automation. It can also *read* the true current mode, which is how it
+restores exactly what you had after an overflight.
 
-Here's why, because it isn't for lack of trying. The app switches the AirPods
-listening mode by **automating the Control Center Sound popover through the
-Accessibility API** — it opens the popover, clicks *Noise Cancellation* /
-*Transparency*, then immediately closes it again. While that popover is open it
-becomes the *key window* and holds the keyboard; closing it hands the keyboard back.
-That open/close is the sub-second blip.
+The sequence, for anyone maintaining this (`Sources/ADBluetooth/ADListeningMode.m`):
 
-That route is a last resort, not a first choice. On **macOS 26 (Tahoe)** every
-cleaner, invisible pathway turned out to be dead:
+1. Satisfy CoreBluetooth's TCC handshake — a real `CBCentralManager` with a delegate,
+   awaited to `poweredOn`. Until that completes, bluetoothd parks the client at
+   `fAccessLevel 0` and withholds everything.
+2. Create a `CBClassicManager` on its own serial queue; these objects are queue-affine
+   and calls from another thread silently do nothing.
+3. **The gate:** `-[CBClassicManager retrievePairedPeersWithOptions:]` begins with
+   `if (![self tccApproved]) return nil;` — it returns nil *without sending any XPC*,
+   which makes it look like the API is dead. `performTCCCheck` doesn't reliably flip the
+   flag even though bluetoothd has already approved the session, so set it directly.
+4. `retrievePairedPeersWithOptions:` → `CBClassicPeer` objects → `setListeningMode:`
+   (`1`=Off `2`=ANC `3`=Transparency `4`=Adaptive), which becomes AACP control command
+   `0x0D` on the wire.
 
-- The **Shortcuts** "Set Noise Control Mode" action is a **silent no-op**.
-- The **private AVFoundation and IOBluetooth listening-mode APIs** that older menu-bar
-  tools relied on now **report success but no longer reach the hardware** — `set`
-  returns OK and nothing actually changes.
-- **Synthetic hotkeys** posted to third-party helpers (e.g. AirBuddy) are **filtered**
-  and ignored.
+It's private API, so it's treated as a runtime capability, never an assumption: if any
+step fails the app falls back to **automating the Control Center Sound popover via
+Accessibility**, which does briefly grab the keyboard (that's the "sub-second blip" older
+versions had on every switch). Keep the Accessibility grant and the pinned Sound menu
+item for that fallback — and note **Reclaim always uses it**, since a pair the phone has
+taken exposes no CoreBluetooth peer to talk to.
 
-Driving Control Center via Accessibility is the **only** method that still audibly
-changes the mode on Tahoe — which is why the two one-time setup steps below (grant
-Accessibility, pin Sound to the menu bar) are required. If Apple restores a real
-listening-mode API, this disruption goes away.
+Routes that do *not* work on macOS 26, all verified rather than assumed: the **Shortcuts**
+"Set Noise Control Mode" action (silent no-op); **`IOBluetoothDevice.setListeningMode:`**
+(writes a local ivar — reads back correctly and never reaches the hardware); the
+**CoreAudio HAL** (listening mode isn't a device property); and speaking **AAP over
+L2CAP** directly (macOS refuses third-party L2CAP channels on every PSM, signed or not —
+bluetoothd owns that link, which is why you ask it instead of bypassing it).
 
 ## Reclaiming AirPods after a phone call
 

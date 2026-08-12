@@ -5,6 +5,10 @@ let package = Package(
   name: "ControlPanel",
   platforms: [.macOS(.v15)],
   targets: [
-    .executableTarget(name: "ControlPanel", path: "Sources/ControlPanel")
+    // Objective-C on purpose: drives private CoreBluetooth, and only ObjC can catch the
+    // NSExceptions that Apple's implementation raises. See ADListeningMode.h.
+    .target(name: "ADBluetooth", path: "Sources/ADBluetooth"),
+    .executableTarget(
+      name: "ControlPanel", dependencies: ["ADBluetooth"], path: "Sources/ControlPanel")
   ]
 )

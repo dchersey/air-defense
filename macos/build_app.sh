@@ -40,6 +40,9 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>LSUIElement</key><true/>
+  <!-- Required: CoreBluetooth is used to set the AirPods listening mode without
+       puppeting Control Center. macOS terminates apps that touch CB without it. -->
+  <key>NSBluetoothAlwaysUsageDescription</key><string>Air Defense switches your AirPods noise control when a flight passes overhead.</string>
 </dict>
 </plist>
 PLIST
