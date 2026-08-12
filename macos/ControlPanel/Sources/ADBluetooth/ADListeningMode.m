@@ -98,35 +98,48 @@ static NSString *ADNormalizeAddress(NSString *address) {
       return;
     }
 
-    dispatch_sync(_queue, ^{
-      @try {
-        Class cls = NSClassFromString(@"CBClassicManager");
-        if (!cls) { os_log(ADLog(), "warmUp: no CBClassicManager"); return; }
-        self->_classic = [[cls alloc] initWithQueue:self->_queue options:nil];
-        if (!self->_classic) { os_log(ADLog(), "warmUp: classic manager init failed"); return; }
-        [self->_classic sendLocalDeviceStateRequest];
-
-        // 2. The gate. -[CBClassicManager retrievePairedPeersWithOptions:] opens with
-        //    `if (![self tccApproved]) return nil;` and sends no XPC at all when false.
-        //    bluetoothd has already approved the session by this point; the client-side
-        //    flag simply doesn't get set, so nudge it and then set it directly.
-        if ([self->_classic respondsToSelector:@selector(performTCCCheck)]) {
-          [self->_classic performTCCCheck];
-        }
-        if ([self->_classic respondsToSelector:@selector(tccApproved)] &&
-            ![self->_classic tccApproved] &&
-            [self->_classic respondsToSelector:@selector(setTccApproved:)]) {
-          [self->_classic setTccApproved:YES];
-        }
-        self->_available = [self->_classic respondsToSelector:@selector(retrievePairedPeersWithOptions:)];
-        os_log(ADLog(), "warmUp: available=%{public}d", (int)self->_available);
-      } @catch (NSException *e) {
-        os_log_error(ADLog(), "warmUp inner threw %{public}@", e.name);
-      }
-    });
+    dispatch_sync(_queue, ^{ [self rebuildClassicLocked]; });
   } @catch (NSException *e) {
     os_log_error(ADLog(), "warmUp threw %{public}@", e.name);
     _available = NO;
+  }
+
+  // A failed warm-up must not be permanent: the very first launch typically runs before
+  // the user has answered the Bluetooth prompt, so it times out. Clear the latch and the
+  // next poll retries.
+  if (!_available) {
+    @synchronized(self) { _warmUpStarted = NO; }
+    os_log(ADLog(), "warmUp: not available — will retry");
+  }
+}
+
+/// (Re)create the classic manager and re-satisfy the TCC gate. Must run on _queue.
+/// Also used to recover mid-session: bluetoothd drops idle classic sessions, after which
+/// peer lookups silently return nothing.
+- (BOOL)rebuildClassicLocked {
+  @try {
+    Class cls = NSClassFromString(@"CBClassicManager");
+    if (!cls) { os_log(ADLog(), "no CBClassicManager"); _available = NO; return NO; }
+    _classic = [[cls alloc] initWithQueue:_queue options:nil];
+    if (!_classic) { os_log(ADLog(), "classic manager init failed"); _available = NO; return NO; }
+    [_classic sendLocalDeviceStateRequest];
+
+    // The gate. -[CBClassicManager retrievePairedPeersWithOptions:] opens with
+    // `if (![self tccApproved]) return nil;` and sends no XPC at all when false.
+    // bluetoothd has already approved the session by this point; the client-side flag
+    // simply doesn't get set, so nudge it and then set it directly.
+    if ([_classic respondsToSelector:@selector(performTCCCheck)]) [_classic performTCCCheck];
+    if ([_classic respondsToSelector:@selector(tccApproved)] && ![_classic tccApproved] &&
+        [_classic respondsToSelector:@selector(setTccApproved:)]) {
+      [_classic setTccApproved:YES];
+    }
+    _available = [_classic respondsToSelector:@selector(retrievePairedPeersWithOptions:)];
+    os_log(ADLog(), "classic session ready: available=%{public}d", (int)_available);
+    return _available;
+  } @catch (NSException *e) {
+    os_log_error(ADLog(), "rebuild threw %{public}@", e.name);
+    _available = NO;
+    return NO;
   }
 }
 
@@ -155,9 +168,7 @@ static NSString *ADNormalizeAddress(NSString *address) {
   return peers;
 }
 
-- (nullable id)peerForAddressLocked:(NSString *)wanted {
-  NSString *needle = ADNormalizeAddress(wanted);
-  if (needle.length == 0) return nil;
+- (nullable id)lookupPeerLocked:(NSString *)needle {
   for (id peer in [self peersLocked]) {
     @try {
       NSString *addr = [peer addressString];
@@ -167,8 +178,24 @@ static NSString *ADNormalizeAddress(NSString *address) {
   return nil;
 }
 
+- (nullable id)peerForAddressLocked:(NSString *)wanted {
+  NSString *needle = ADNormalizeAddress(wanted);
+  if (needle.length == 0) return nil;
+  id peer = [self lookupPeerLocked:needle];
+  if (peer) return peer;
+
+  // Empty lookup usually means the classic session went stale — bluetoothd tears down
+  // idle ones, and afterwards every retrieve quietly returns nothing. Rebuild once and
+  // retry before giving up and letting the caller fall back to UI automation.
+  os_log(ADLog(), "peer lookup empty — rebuilding classic session");
+  if ([self rebuildClassicLocked]) peer = [self lookupPeerLocked:needle];
+  return peer;
+}
+
 - (ADMode)currentModeForAddress:(NSString *)address {
-  if (!_available || !_classic) return ADModeUnknown;
+  // Only the central is a hard requirement (it carries the TCC approval). A missing or
+  // stale classic manager is recoverable — peerForAddressLocked rebuilds it.
+  if (!_central) return ADModeUnknown;
   __block ADMode mode = ADModeUnknown;
   dispatch_sync(_queue, ^{
     @try {
@@ -185,7 +212,7 @@ static NSString *ADNormalizeAddress(NSString *address) {
 }
 
 - (BOOL)setMode:(ADMode)mode forAddress:(NSString *)address {
-  if (!_available || !_classic) return NO;
+  if (!_central) return NO;
   if (mode < ADModeOff || mode > ADModeAdaptive) return NO;
   __block BOOL ok = NO;
   dispatch_sync(_queue, ^{
