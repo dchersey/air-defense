@@ -357,9 +357,17 @@ private struct StatusBanner: View {
   let model: StatusModel
 
   var body: some View {
-    // A dead data feed takes priority — we're blind, not quiet. Only trust it when the
-    // backend itself is reachable (a down backend is handled by .offline in the switch).
-    if model.active && model.reachable && !model.feedOk {
+    // A missing provider key outranks even the dead-feed banner, because it IS the cause:
+    // every poll fails, so the feed looks unreachable when it's really unconfigured.
+    // Keychain items don't survive a Mac migration, which is exactly how a working setup
+    // silently becomes blind.
+    if model.reachable && model.provider == "fr24" && !model.fr24KeyPresent {
+      banner(
+        icon: "key.slash", tint: Palette.stop, bg: Palette.stopSoft,
+        strong: "FlightRadar24 has no API key.",
+        rest: " No traffic can be fetched. Paste a key in Settings → Data source, "
+          + "or switch the provider.")
+    } else if model.active && model.reachable && !model.feedOk {
       banner(
         icon: "antenna.radiowaves.left.and.right.slash", tint: Palette.inbound,
         bg: Palette.inboundSoft, strong: "Feed unreachable.",
