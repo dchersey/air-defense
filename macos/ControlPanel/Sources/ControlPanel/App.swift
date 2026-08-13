@@ -25,7 +25,13 @@ struct ControlPanelApp: App {
   }
 
   // Session running and nothing inbound/engaged → the steady "monitoring" state.
-  private var isMonitoring: Bool { model.active && model.phase == .idle }
+  // Requires a live feed: with the feed down we are NOT monitoring, we're blind, and the
+  // calm green mark would claim otherwise.
+  private var isMonitoring: Bool { model.active && model.phase == .idle && model.feedOk }
+
+  // Session running but the data feed is unreachable — we can't see traffic at all.
+  // Only trust this when the backend itself is reachable; a dead backend is `.offline`.
+  private var isBlind: Bool { model.active && model.reachable && !model.feedOk }
 
   // Vivid radar-green, brighter than systemGreen so it reads on the menu bar.
   private let monitorGreen = NSColor(srgbRed: 0.30, green: 0.88, blue: 0.44, alpha: 1)
@@ -44,6 +50,11 @@ struct ControlPanelApp: App {
   private var earpieceDisconnected: String { model.headphonesArePro ? "airpodspro" : "headphones" }
 
   private var menuImage: NSImage {
+    // Blind takes priority over every phase below: the session is up and the timer is
+    // running, but no traffic can be seen, so nothing else the icon could say is true.
+    if isBlind {
+      return symbol("antenna.radiowaves.left.and.right.slash", tint: lockedOnAmber, bold: true)
+    }
     switch model.phase {
     case .offline: return symbol("airplane.slash", tint: nil)
     case .disconnected: return symbol(earpieceDisconnected, tint: .systemGray)
