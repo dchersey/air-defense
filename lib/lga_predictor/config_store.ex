@@ -28,14 +28,18 @@ defmodule LgaPredictor.ConfigStore do
     # credit ledger rolls over on this day and the pace bar measures the cycle
     # from it. 1 = calendar month (default until the real billing day is known).
     "billing_reset_day" => 1,
-    # Flight-data source for ALL zones: "airplanes_live" (free ADS-B, no key) or
-    # "fr24" (FlightRadar24, needs an API key, costs credits).
+    # Flight-data source for ALL zones: "local" (your own ADS-B receiver — free,
+    # lowest latency, no third party), "airplanes_live" (their public API) or "fr24"
+    # (FlightRadar24, needs an API key, costs credits).
     "provider" => "airplanes_live",
+    # Where a local receiver serves its readsb JSON. dump1090/readsb expose the whole
+    # picture at one path and we trim to the zone box ourselves.
+    "local_feed_url" => "http://adsb.home.arpa/data/aircraft.json",
     "version" => 0,
     "zonesets" => []
   }
 
-  @providers ~w(airplanes_live fr24)
+  @providers ~w(local airplanes_live fr24)
   @default_min_gspeed_kt 150
 
   ## API
@@ -226,6 +230,7 @@ defmodule LgaPredictor.ConfigStore do
       "release_delta_seconds",
       "billing_reset_day",
       "provider",
+      "local_feed_url",
       "zonesets"
     ])
   end
@@ -254,6 +259,12 @@ defmodule LgaPredictor.ConfigStore do
 
       raw["provider"] not in @providers ->
         {:error, "provider must be one of #{Enum.join(@providers, ", ")}"}
+
+      not (is_binary(raw["local_feed_url"]) and raw["local_feed_url"] != "") ->
+        {:error, "local_feed_url must be a non-empty URL"}
+
+      raw["provider"] == "local" and not String.starts_with?(raw["local_feed_url"], "http") ->
+        {:error, "local_feed_url must be an http(s) URL"}
 
       not is_list(raw["zonesets"]) ->
         {:error, "zonesets must be a list"}
@@ -328,6 +339,7 @@ defmodule LgaPredictor.ConfigStore do
       release_delta_seconds: raw["release_delta_seconds"],
       billing_reset_day: raw["billing_reset_day"],
       provider: provider_atom(raw["provider"]),
+      local_feed_url: raw["local_feed_url"],
       version: raw["version"],
       zonesets: Enum.map(raw["zonesets"], &derive_zoneset/1)
     }
@@ -365,6 +377,7 @@ defmodule LgaPredictor.ConfigStore do
   # the dev `mix run` runtime the provider's defining module may not be loaded yet,
   # so its atom wouldn't exist. These literals live in this (always-loaded) module.
   defp provider_atom("fr24"), do: :fr24
+  defp provider_atom("local"), do: :local
   defp provider_atom(_), do: :airplanes_live
 
   defp reckoning_atom("accelerating"), do: :accelerating

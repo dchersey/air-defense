@@ -77,6 +77,7 @@ struct StatusResponse: Codable {
   let creditsBudgetMonth: Int
   let billingResetDay: Int
   let provider: String
+  let localFeedUrl: String?
   let fr24KeyPresent: Bool
   let aeroapiKeyPresent: Bool?
   let polls: Int
@@ -132,6 +133,8 @@ final class StatusModel {
   var billingResetDay = 1
   // Flight-data source for all zones, + whether an FR24 key is stored.
   var provider = "airplanes_live"
+  // Where a local ADS-B receiver serves its readsb JSON (used when provider == local).
+  var localFeedURL: String?
   var fr24KeyPresent = false
   // What the backend is actually fetching from. Differs from `provider` only while a
   // failover is active (the configured feed is failing), which the panel calls out.
@@ -250,6 +253,7 @@ final class StatusModel {
       provider = status.provider
       fr24KeyPresent = status.fr24KeyPresent
       aeroapiKeyPresent = status.aeroapiKeyPresent ?? false
+      localFeedURL = status.localFeedUrl
       providerActive = status.providerActive
       providerFallbackReason = status.providerFallbackReason
       sessionEndsAt = status.sessionEndsAt
@@ -589,6 +593,17 @@ final class StatusModel {
     request.httpMethod = "PUT"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.httpBody = try? JSONSerialization.data(withJSONObject: ["provider": id])
+    Task { _ = try? await URLSession.shared.data(for: request); await refresh() }
+  }
+
+  /// Point the poller at your own ADS-B receiver's readsb JSON.
+  func setLocalFeedURL(_ value: String) {
+    localFeedURL = value  // optimistic; refresh() reconciles
+    guard let url = URL(string: "\(base)/api/config") else { return }
+    var request = URLRequest(url: url)
+    request.httpMethod = "PUT"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = try? JSONSerialization.data(withJSONObject: ["local_feed_url": value])
     Task { _ = try? await URLSession.shared.data(for: request); await refresh() }
   }
 

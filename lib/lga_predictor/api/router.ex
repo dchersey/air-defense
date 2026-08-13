@@ -226,6 +226,7 @@ defmodule LgaPredictor.API.Router do
       credits_budget_month: Application.get_env(:lga_predictor, :monthly_credit_budget, 60_000),
       billing_reset_day: config.billing_reset_day,
       provider: to_string(config.provider),
+      local_feed_url: config.local_feed_url,
       fr24_key_present: LgaPredictor.FR24.Client.key_present?(),
       aeroapi_key_present: LgaPredictor.Routes.key_present?(),
       session_ends_at: status.session_ends_at,

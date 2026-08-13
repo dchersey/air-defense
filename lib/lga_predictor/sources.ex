@@ -16,6 +16,10 @@ defmodule LgaPredictor.Sources do
 
   def positions(bounds, :fr24, opts), do: FR24.Client.positions(bounds, :light, opts)
 
+  def positions(bounds, :local, opts) do
+    ADSB.Client.positions(bounds, Keyword.put(opts, :provider, :local))
+  end
+
   def positions(bounds, :airplanes_live, opts) do
     ADSB.Client.positions(bounds, Keyword.put(opts, :provider, :airplanes_live))
   end

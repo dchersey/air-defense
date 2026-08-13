@@ -979,8 +979,11 @@ private struct DataSource: View {
   let model: StatusModel
   @State private var keyText = ""
 
+  @State private var urlText = ""
+
   private let providers = [
-    ("airplanes_live", "airplanes.live (free)"),
+    ("local", "Local receiver"),
+    ("airplanes_live", "airplanes.live"),
     ("fr24", "FlightRadar24 (API key)"),
   ]
 
@@ -1008,10 +1011,26 @@ private struct DataSource: View {
           .font(.adMono).disabled(keyText.isEmpty)
         }
         Text("Billed per flight; keep monitor zones small.").font(.adMono).foregroundStyle(Palette.ink2)
+      } else if model.provider == "local" {
+        HStack(spacing: 6) {
+          Image(systemName: "antenna.radiowaves.left.and.right")
+            .font(.adMono).foregroundStyle(Palette.go)
+          TextField("http://adsb.home.arpa/data/aircraft.json", text: $urlText)
+            .textFieldStyle(.roundedBorder).font(.adMono)
+          Button("Save") {
+            let u = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !u.isEmpty { model.setLocalFeedURL(u) }
+          }
+          .font(.adMono).disabled(urlText.isEmpty)
+        }
+        Text("Your own ADS-B receiver — no API, no credits, lowest latency.")
+          .font(.adMono).foregroundStyle(Palette.ink2)
       } else {
-        Text("Free ADS-B — no API key, no credits used.").font(.adMono).foregroundStyle(Palette.ink2)
+        Text("Public API — no key, but subject to their availability.")
+          .font(.adMono).foregroundStyle(Palette.ink2)
       }
     }
+    .onAppear { urlText = model.localFeedURL ?? "" }
   }
 }
 

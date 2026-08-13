@@ -26,10 +26,7 @@ defmodule LgaPredictor.ADSB.Client do
   @spec positions(bounds(), keyword()) :: {:ok, [Aircraft.t()]} | {:error, term()}
   def positions(bounds, opts \\ []) do
     provider = Keyword.get(opts, :provider, :airplanes_live)
-    {clat, clon, radius_nm} = bbox_to_circle(bounds)
-
-    url =
-      "#{Map.fetch!(@hosts, provider)}/v2/point/#{f(clat, 4)}/#{f(clon, 4)}/#{f(radius_nm, 1)}"
+    url = url_for(provider, bounds, opts)
 
     req =
       Req.new(
@@ -46,6 +43,18 @@ defmodule LgaPredictor.ADSB.Client do
     end
   end
 
+  # A local receiver (dump1090/readsb) serves its entire picture at one fixed path —
+  # there is no point/radius query — so we fetch it all and trim to the box, exactly as
+  # we already do for the circle-shaped public queries.
+  defp url_for(:local, _bounds, opts) do
+    Keyword.get(opts, :url) || "http://localhost/data/aircraft.json"
+  end
+
+  defp url_for(provider, bounds, _opts) do
+    {clat, clon, radius_nm} = bbox_to_circle(bounds)
+    "#{Map.fetch!(@hosts, provider)}/v2/point/#{f(clat, 4)}/#{f(clon, 4)}/#{f(radius_nm, 1)}"
+  end
+
   @doc "Center + covering radius (nm) for a {north, south, west, east} box."
   @spec bbox_to_circle(bounds()) :: {float(), float(), float()}
   def bbox_to_circle({north, south, west, east}) do
@@ -57,13 +66,19 @@ defmodule LgaPredictor.ADSB.Client do
 
   @doc "Parse a readsb `%{\"ac\" => [...]}` body into Aircraft, trimmed to `bounds`."
   @spec parse(map(), bounds()) :: [Aircraft.t()]
-  def parse(%{"ac" => records}, bounds) when is_list(records) do
+  def parse(%{"ac" => records}, bounds) when is_list(records), do: trim(records, bounds)
+
+  # A local readsb/dump1090 `aircraft.json` carries the identical record shape under a
+  # different top-level key.
+  def parse(%{"aircraft" => records}, bounds) when is_list(records), do: trim(records, bounds)
+
+  def parse(_, _), do: []
+
+  defp trim(records, bounds) do
     records
     |> Enum.filter(&in_box?(&1, bounds))
     |> Enum.map(&to_aircraft/1)
   end
-
-  def parse(_, _), do: []
 
   defp in_box?(%{"lat" => lat, "lon" => lon}, {north, south, west, east})
        when is_number(lat) and is_number(lon) do

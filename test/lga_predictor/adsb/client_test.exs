@@ -55,6 +55,29 @@ defmodule LgaPredictor.ADSB.ClientTest do
       assert [%Aircraft{alt_ft: 0}] = Client.parse(body, @box)
     end
 
+    test "reads a local readsb aircraft.json (same records, different top-level key)" do
+      # dump1090/readsb on your own Pi serve the whole picture under "aircraft"; the
+      # public API uses "ac". Identical record shape, so both must map the same way.
+      body = %{
+        "now" => 1_786_650_000.0,
+        "messages" => 1234,
+        "aircraft" => [
+          %{"hex" => "a1b2c3", "flight" => "AAL100  ", "lat" => 40.77, "lon" => -73.88,
+            "gs" => 145.0, "alt_baro" => 1700, "track" => 70.0, "t" => "B738", "r" => "N1"},
+          # outside the box — must still be trimmed client-side
+          %{"hex" => "ffffff", "flight" => "FAR9999", "lat" => 41.90, "lon" => -72.10,
+            "gs" => 300.0, "alt_baro" => 30000, "track" => 10.0}
+        ]
+      }
+
+      assert [%Aircraft{} = ac] = Client.parse(body, @box)
+      assert ac.hex == "a1b2c3"
+      assert ac.callsign == "AAL100"
+      assert ac.alt_ft == 1700
+      assert ac.gspeed_kt == 145.0
+      assert ac.type == "B738"
+    end
+
     test "tolerates a missing/garbled body" do
       assert Client.parse(%{}, @box) == []
       assert Client.parse(%{"ac" => nil}, @box) == []

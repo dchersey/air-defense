@@ -1072,6 +1072,9 @@ defmodule LgaPredictor.Poller do
   # `provider` is resolved by the caller (config, or a failover override), so switching
   # it in settings — or failing over — takes effect without restarting a session.
   defp default_fetch(box, provider, sandbox?) do
-    LgaPredictor.Sources.positions(box, provider, sandbox?: sandbox?)
+    LgaPredictor.Sources.positions(box, provider,
+      sandbox?: sandbox?,
+      url: Map.get(ConfigStore.get(), :local_feed_url)
+    )
   end
 end
