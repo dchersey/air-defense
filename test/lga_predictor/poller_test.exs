@@ -275,6 +275,43 @@ defmodule LgaPredictor.PollerTest do
     assert is_integer(status.overhead_at)
   end
 
+  test "a blocked provider fails over to FR24 once, and a new session re-checks it" do
+    # airplanes.live blocks by IP with a 403, which never recovers mid-session — so we
+    # switch to FR24 rather than sit blind, and report which feed is actually in use.
+    # The 2-arity fetcher receives the provider the poller resolved.
+    {:ok, seen} = Agent.start_link(fn -> [] end)
+
+    # Failover requires an FR24 key. Use the env fallback so this doesn't depend on
+    # whatever happens to be in the developer's Keychain (and works on CI).
+    System.put_env("FR24_API_KEY", "test-key")
+    on_exit(fn -> System.delete_env("FR24_API_KEY") end)
+
+    start(
+      config_fun: fn -> config(trigger: :assume) |> Map.put(:provider, :airplanes_live) end,
+      fetcher: fn _box, provider ->
+        Agent.update(seen, &[provider | &1])
+        if provider == :airplanes_live, do: {:error, {:http_error, 403, %{}}}, else: {:ok, []}
+      end,
+      poll_interval_ms: 20
+    )
+
+    assert Poller.status().provider_active == "airplanes_live"
+
+    :ok = Poller.start_session()
+    Process.sleep(120)
+
+    status = Poller.status()
+    assert status.provider_active == "fr24", "failed over to FR24 after repeated 403s"
+    assert status.provider_fallback_reason == "HTTP 403", "reports why it switched"
+    assert :fr24 in Agent.get(seen, & &1), "actually fetched from the fallback"
+
+    # A fresh session re-checks the configured provider (the block may have lifted).
+    :ok = Poller.stop_session()
+    :ok = Poller.start_session()
+    assert Poller.status().provider_active == "airplanes_live",
+           "next session starts back on the configured provider"
+  end
+
   test "feed_ok flips false after consecutive fetch errors and recovers on success" do
     # A test-controlled mode flag (not a poll counter — that races the timing): the
     # feed errors (provider/network down), then the test flips it healthy. feed_ok must

@@ -69,6 +69,8 @@ struct StatusResponse: Codable {
   // False when the data feed (provider) has been erroring — we're blind, not quiet.
   // Optional so an older backend (no field) decodes as healthy.
   let feedOk: Bool?
+  let providerActive: String?
+  let providerFallbackReason: String?
   let engageDeltaSeconds: Double
   let releaseDeltaSeconds: Double
   let creditsUsedMonth: Int?
@@ -131,6 +133,10 @@ final class StatusModel {
   // Flight-data source for all zones, + whether an FR24 key is stored.
   var provider = "airplanes_live"
   var fr24KeyPresent = false
+  // What the backend is actually fetching from. Differs from `provider` only while a
+  // failover is active (the configured feed is failing), which the panel calls out.
+  var providerActive: String?
+  var providerFallbackReason: String?
   // AeroAPI key (real-time flight routes for the recent-flights list).
   var aeroapiKeyPresent = false
 
@@ -244,6 +250,8 @@ final class StatusModel {
       provider = status.provider
       fr24KeyPresent = status.fr24KeyPresent
       aeroapiKeyPresent = status.aeroapiKeyPresent ?? false
+      providerActive = status.providerActive
+      providerFallbackReason = status.providerFallbackReason
       sessionEndsAt = status.sessionEndsAt
       polls = status.polls
       approxCredits = status.approxCredits

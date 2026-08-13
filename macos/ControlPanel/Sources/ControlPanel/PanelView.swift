@@ -367,6 +367,16 @@ private struct StatusBanner: View {
         strong: "FlightRadar24 has no API key.",
         rest: " No traffic can be fetched. Paste a key in Settings → Data source, "
           + "or switch the provider.")
+    } else if model.reachable, let live = model.providerActive, live != model.provider {
+      // Failed over: the configured feed is failing, so we're fetching from another one
+      // rather than sitting blind. Said once, not per-poll — the next session re-checks
+      // the configured provider, so this clears itself when the feed recovers.
+      banner(
+        icon: "arrow.triangle.2.circlepath", tint: Palette.inbound, bg: Palette.inboundSoft,
+        strong: "\(providerLabel(model.provider)) is failing"
+          + (model.providerFallbackReason.map { " (\($0))" } ?? "") + ".",
+        rest: " Using \(providerLabel(live)) for this session; "
+          + "the next session you start re-checks \(providerLabel(model.provider)).")
     } else if model.active && model.reachable && !model.feedOk {
       banner(
         icon: "antenna.radiowaves.left.and.right.slash", tint: Palette.inbound,
@@ -427,6 +437,14 @@ private struct StatusBanner: View {
       }
     default:
       EmptyView()
+    }
+  }
+
+  private func providerLabel(_ id: String) -> String {
+    switch id {
+    case "fr24": return "FlightRadar24"
+    case "airplanes_live": return "airplanes.live"
+    default: return id
     }
   }
 

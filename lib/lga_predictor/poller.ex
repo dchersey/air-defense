@@ -40,6 +40,12 @@ defmodule LgaPredictor.Poller do
   @ramp_poll_interval_ms 3000
   @arrival_ramp_seconds 90
 
+  # While armed we already know roughly WHEN the flight reaches the zone (engage_at), so
+  # polling at the fast cadence the whole way is wasted: sleep until this many seconds
+  # before the predicted engage, then sample fast to catch the ACTUAL entry. Cuts the
+  # armed phase from ~30 polls to a handful without touching engage semantics.
+  @confirm_lead_seconds 12
+
   ## API
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -134,7 +140,17 @@ defmodule LgaPredictor.Poller do
     # Reset stats only when starting from fully idle.
     state =
       if map_size(state.sessions) == 0 do
-        %{state | polls: 0, credits: 0, actioned: MapSet.new(), engaged: MapSet.new()}
+        # Starting fresh also re-checks the configured provider: a failover only lasts
+        # for the session that hit the failure, so a restored feed is picked up again.
+        %{
+          state
+          | polls: 0,
+            credits: 0,
+            actioned: MapSet.new(),
+            engaged: MapSet.new(),
+            provider_override: nil,
+            provider_fallback_reason: nil
+        }
       else
         state
       end
@@ -260,10 +276,10 @@ defmodule LgaPredictor.Poller do
         delay =
           cond do
             suppressed?(state, id) -> suppress_delay_ms(state, id)
-            # An armed (approaching) flight → ramp to the fast cadence to catch its
-            # ACTUAL zone entry (but never slower than the zoneset's own interval).
+            # An armed (approaching) flight → sleep until just before its predicted
+            # engage, then sample fast to catch the ACTUAL zone entry.
             # ETA decides when arming begins (consider_arrival).
-            ramping?(state, id) -> min(@ramp_poll_interval_ms, interval_ms(state, zoneset))
+            ramping?(state, id) -> ramp_delay_ms(state, id, zoneset)
             true -> interval_ms(state, zoneset)
           end
 
@@ -289,6 +305,32 @@ defmodule LgaPredictor.Poller do
   end
 
   defp interval_ms(state, zoneset), do: zoneset.poll_interval_ms || state.poll_interval
+
+  # How long to wait while a flight is armed. Far from the zone the ETA already tells us
+  # when to look, so a constant fast ramp just burns credits (and, on a metered feed,
+  # money and rate limit). Sleep until `@confirm_lead_seconds` before the soonest
+  # predicted engage — that poll re-confirms speed — then fall to the fast cadence for
+  # the actual boundary crossing. Never sleep longer than the zoneset's own interval, so
+  # a go-around, vector change or speed change is still caught within one normal poll.
+  defp ramp_delay_ms(state, id, zoneset) do
+    now = System.os_time(:second)
+    fast = min(@ramp_poll_interval_ms, interval_ms(state, zoneset))
+
+    state.intercepts
+    |> Map.get(id, [])
+    |> Enum.filter(&(Map.get(&1, :approaching, false) and &1.exits_at > now))
+    |> Enum.map(&Map.get(&1, :engage_at, now))
+    |> Enum.min(fn -> nil end)
+    |> case do
+      nil ->
+        fast
+
+      engage_at ->
+        ((engage_at - @confirm_lead_seconds - now) * 1000)
+        |> min(interval_ms(state, zoneset))
+        |> max(fast)
+    end
+  end
 
   # Poll the UNION of the monitor zone + the ANC zone (+ margin): the monitor zone
   # puts the plane "on radar", the union spans any gap between the two so the plane is
@@ -326,7 +368,7 @@ defmodule LgaPredictor.Poller do
   end
 
   defp poll_zoneset(state, zoneset, config) do
-    case state.fetcher.(query_box(zoneset)) do
+    case fetch(state, query_box(zoneset)) do
       {:ok, aircraft} ->
         state = note_fetch_ok(state, zoneset.id)
         spent = length(aircraft) * @credits_per_aircraft
@@ -346,13 +388,56 @@ defmodule LgaPredictor.Poller do
 
       {:error, reason} ->
         Logger.warning("[poller] fetch error (#{zoneset.id}): #{inspect(reason)} (skipping)")
-        note_fetch_error(state, zoneset.id)
+
+        state
+        |> note_fetch_error(zoneset.id)
+        |> maybe_failover(zoneset.id, reason)
+    end
+  end
+
+  # Injected fetchers in tests take just the box; the real one also needs to know which
+  # provider to hit, so a failover can redirect it without rewriting config.
+  defp fetch(state, box) do
+    case Function.info(state.fetcher, :arity) do
+      {:arity, 2} -> state.fetcher.(box, active_provider(state))
+      _ -> state.fetcher.(box)
     end
   end
 
   # Per-zoneset consecutive-fetch-error tally → feeds the status feed_ok flag. A good
   # poll clears it; an errored poll bumps it. (Skipped polls — headphones off — don't
   # fetch, so they neither clear nor bump it.)
+  # The provider actually in use: normally whatever config says, but a failover pins it
+  # to `provider_override` until the next session start re-checks the configured one.
+  defp active_provider(state),
+    do: state.provider_override || Map.get(state.config_fun.(), :provider, :airplanes_live)
+
+  @doc false
+  # airplanes.live blocks by IP with a 403 (not a 429), so a blocked feed never recovers
+  # on its own within a session — every poll fails and we sit blind. Fail over to FR24
+  # once, say so once, and re-check the configured provider at the next session start.
+  defp maybe_failover(state, id, reason) do
+    configured = Map.get(state.config_fun.(), :provider, :airplanes_live)
+
+    cond do
+      state.provider_override != nil -> state
+      configured == :fr24 -> state
+      Map.get(state.fetch_errors, id, 0) < @feed_down_threshold -> state
+      not LgaPredictor.FR24.Client.key_present?() -> state
+      true ->
+        Logger.warning(
+          "[poller] #{configured} is failing (#{inspect(reason)}) — falling back to FR24 " <>
+            "for this session; the configured provider is re-checked when you start the next one."
+        )
+
+        %{state | provider_override: :fr24, provider_fallback_reason: describe(reason)}
+    end
+  end
+
+  defp describe({:http_error, status, _body}), do: "HTTP #{status}"
+  defp describe(%{reason: r}), do: to_string(r)
+  defp describe(other), do: inspect(other) |> String.slice(0, 60)
+
   defp note_fetch_ok(state, id), do: %{state | fetch_errors: Map.put(state.fetch_errors, id, 0)}
 
   defp note_fetch_error(state, id),
@@ -890,6 +975,10 @@ defmodule LgaPredictor.Poller do
       polls: state.polls,
       approx_credits: state.credits,
       feed_ok: feed_ok?(state),
+      # What we're actually fetching from, and why it differs from the configured
+      # provider — so the UI can say so once rather than silently using a different feed.
+      provider_active: to_string(active_provider(state)),
+      provider_fallback_reason: state.provider_fallback_reason,
       headphones_connected: state.headphones_connected,
       session_ends_at: if(ends == [], do: nil, else: Enum.max(ends)),
       zonesets: zonesets,
@@ -942,7 +1031,11 @@ defmodule LgaPredictor.Poller do
       headphones_connected: true,
       keep_alive_held: false,
       actioned: MapSet.new(),
-      fetcher: Keyword.get(opts, :fetcher, &default_fetch(&1, sandbox?)),
+      # Set only while a failover is active; cleared when a session starts so the
+      # configured provider gets another chance.
+      provider_override: nil,
+      provider_fallback_reason: nil,
+      fetcher: Keyword.get(opts, :fetcher, &default_fetch(&1, &2, sandbox?)),
       config_fun: Keyword.get(opts, :config_fun, fn -> ConfigStore.get() end),
       keep_alive_fun: Keyword.get(opts, :keep_alive_fun, &default_keep_alive/1),
       window:
@@ -968,8 +1061,9 @@ defmodule LgaPredictor.Poller do
 
   # Resolve the provider from config at call time, so switching it in the app
   # settings takes effect without restarting a session.
-  defp default_fetch(box, sandbox?) do
-    provider = ConfigStore.get().provider
+  # `provider` is resolved by the caller (config, or a failover override), so switching
+  # it in settings — or failing over — takes effect without restarting a session.
+  defp default_fetch(box, provider, sandbox?) do
     LgaPredictor.Sources.positions(box, provider, sandbox?: sandbox?)
   end
 end

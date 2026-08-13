@@ -217,6 +217,8 @@ defmodule LgaPredictor.API.Router do
       mode: Actuator.mode(),
       anc_phase: menu_phase(status),
       feed_ok: status.feed_ok,
+      provider_active: status.provider_active,
+      provider_fallback_reason: status.provider_fallback_reason,
       headphones_connected: status.headphones_connected,
       engage_delta_seconds: config.engage_delta_seconds,
       release_delta_seconds: config.release_delta_seconds,
