@@ -368,7 +368,14 @@ defmodule LgaPredictor.Poller do
     case fetch(state, query_box(zoneset)) do
       {:ok, aircraft} ->
         state = note_fetch_ok(state, zoneset.id)
-        spent = length(aircraft) * @credits_per_aircraft
+        # Only metered providers cost anything. Counting free-feed polls as credits made
+        # the month-to-date tally read ~10x FR24's actual billing, so the credit bar
+        # cried wolf while the real usage was fine.
+        spent =
+          if metered?(active_provider(state)),
+            do: length(aircraft) * @credits_per_aircraft,
+            else: 0
+
         record_monthly_credits(spent)
         state = %{state | credits: state.credits + spent}
 
@@ -459,6 +466,10 @@ defmodule LgaPredictor.Poller do
 
   # Feed each poll's spend into the month-to-date self-tally (skipped in tests,
   # where the ledger isn't started).
+  # airplanes.live was free; FR24 bills per aircraft returned.
+  defp metered?(:fr24), do: true
+  defp metered?(_), do: false
+
   defp record_monthly_credits(0), do: :ok
 
   defp record_monthly_credits(spent) do

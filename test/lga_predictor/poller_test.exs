@@ -88,7 +88,8 @@ defmodule LgaPredictor.PollerTest do
   end
 
   test "a session queries the monitor box, predicts the ANC zone, engages ANC" do
-    start([])
+    # Credits only accrue on a metered provider, so pick one for the credit assertion.
+    start(config_fun: fn -> config() |> Map.put(:provider, :fr24) end)
     :ok = Poller.start_session()
     Process.sleep(80)
 
@@ -97,6 +98,18 @@ defmodule LgaPredictor.PollerTest do
     assert status.polls >= 1
     assert status.approx_credits >= 6
     assert Actuator.mode() == :anc
+  end
+
+  test "a free provider costs no credits" do
+    # Counting free-feed polls as credits made the month-to-date tally read ~10x FR24's
+    # real billing — the credit bar cried wolf while actual usage was fine.
+    start(config_fun: fn -> config() |> Map.put(:provider, :airplanes_live) end)
+    :ok = Poller.start_session()
+    Process.sleep(80)
+
+    status = Poller.status()
+    assert status.polls >= 1, "it still polls"
+    assert status.approx_credits == 0, "but a free feed spends nothing"
   end
 
   test "departure zone engages ANC when a flight is in the ANC zone" do
