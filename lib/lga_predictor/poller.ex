@@ -38,7 +38,7 @@ defmodule LgaPredictor.Poller do
   # within `@arrival_ramp_seconds` (ETA) of the ANC zone, so we catch its actual entry.
   # ETA decides WHEN to ramp; the fast poll then drives the engage.
   @ramp_poll_interval_ms 3000
-  @arrival_ramp_seconds 90
+  @arrival_ramp_seconds 40
 
   # While armed we already know roughly WHEN the flight reaches the zone (engage_at), so
   # polling at the fast cadence the whole way is wasted: sleep until this many seconds
@@ -142,18 +142,15 @@ defmodule LgaPredictor.Poller do
       if map_size(state.sessions) == 0 do
         # Starting fresh also re-checks the configured provider: a failover only lasts
         # for the session that hit the failure, so a restored feed is picked up again.
-        %{
-          state
-          | polls: 0,
-            credits: 0,
-            actioned: MapSet.new(),
-            engaged: MapSet.new(),
-            provider_override: nil,
-            provider_fallback_reason: nil
-        }
+        %{state | polls: 0, credits: 0, actioned: MapSet.new(), engaged: MapSet.new()}
       else
         state
       end
+
+    # Starting ANY session re-checks the configured provider: a failover lasts only until
+    # you next start something, so a restored feed is picked up without touching settings.
+    # Costs at most a couple of failed polls (which spend no credits) if it's still down.
+    state = %{state | provider_override: nil, provider_fallback_reason: nil}
 
     timer = Process.send_after(self(), {:end_session, id}, state.session_duration)
     ends_at = System.os_time(:second) + div(state.session_duration, 1000)
