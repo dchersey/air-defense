@@ -47,7 +47,7 @@ defmodule LgaPredictor.ADSB.Client do
   # there is no point/radius query — so we fetch it all and trim to the box, exactly as
   # we already do for the circle-shaped public queries.
   defp url_for(:local, _bounds, opts) do
-    Keyword.get(opts, :url) || "http://localhost/data/aircraft.json"
+    Keyword.get(opts, :url) || "http://localhost/tar1090/data/aircraft.json"
   end
 
   defp url_for(provider, bounds, _opts) do

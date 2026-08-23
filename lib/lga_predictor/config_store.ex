@@ -33,8 +33,11 @@ defmodule LgaPredictor.ConfigStore do
     # (FlightRadar24, needs an API key, costs credits).
     "provider" => "airplanes_live",
     # Where a local receiver serves its readsb JSON. dump1090/readsb expose the whole
-    # picture at one path and we trim to the zone box ourselves.
-    "local_feed_url" => "http://adsb.home.arpa/data/aircraft.json",
+    # picture at one path and we trim to the zone box ourselves. The default assumes a
+    # Raspberry Pi named `adsb` running readsb + tar1090 (tar1090 serves the JSON under
+    # /tar1090/, NOT /). `.local` is mDNS, which works on a flat LAN but does not cross
+    # VLANs — put in an IP or a real DNS name if the receiver is on its own segment.
+    "local_feed_url" => "http://adsb.local/tar1090/data/aircraft.json",
     "version" => 0,
     "zonesets" => []
   }
