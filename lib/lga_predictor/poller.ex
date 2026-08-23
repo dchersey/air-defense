@@ -35,10 +35,17 @@ defmodule LgaPredictor.Poller do
   @feed_down_threshold 2
 
   # Arrivals ramp from their slow monitor cadence to this fast cadence once a flight is
-  # within `@arrival_ramp_seconds` (ETA) of the ANC zone, so we catch its actual entry.
+  # within `arrival_ramp_seconds/1` (ETA) of the ANC zone, so we catch its actual entry.
   # ETA decides WHEN to ramp; the fast poll then drives the engage.
   @ramp_poll_interval_ms 3000
-  @arrival_ramp_seconds 40
+
+  # How far out arrivals arm, in ETA seconds. On a metered feed every armed poll costs
+  # credits, so we arm late and lean harder on the ETA estimate. On a free feed (a local
+  # receiver, or a public API) there is nothing to conserve, and arming early is strictly
+  # more accurate: it gives the ramp many more samples to catch a speed or vector change
+  # before the engage. 90s is the value that ran against airplanes.live.
+  @arrival_ramp_seconds 90
+  @arrival_ramp_seconds_metered 40
 
   # While armed we already know roughly WHEN the flight reaches the zone (engage_at), so
   # polling at the fast cadence the whole way is wasted: sleep until this many seconds
@@ -313,6 +320,18 @@ defmodule LgaPredictor.Poller do
     now = System.os_time(:second)
     fast = min(@ramp_poll_interval_ms, interval_ms(state, zoneset))
 
+    # Free feed: just poll fast the whole way. The sleep below exists only to save money,
+    # and it trades accuracy for it — a flight that slows, speeds up or gets re-vectored
+    # during the sleep is not re-estimated until the confirm poll, which is how a late
+    # engage (a "miss") happens. With nothing to conserve, don't make that trade.
+    if not metered?(active_provider(state)) do
+      fast
+    else
+      soonest_engage_delay(state, id, zoneset, now, fast)
+    end
+  end
+
+  defp soonest_engage_delay(state, id, zoneset, now, fast) do
     state.intercepts
     |> Map.get(id, [])
     |> Enum.filter(&(Map.get(&1, :approaching, false) and &1.exits_at > now))
@@ -415,6 +434,12 @@ defmodule LgaPredictor.Poller do
   # to `provider_override` until the next session start re-checks the configured one.
   defp active_provider(state),
     do: state.provider_override || Map.get(state.config_fun.(), :provider, :airplanes_live)
+
+  defp arrival_ramp_seconds(state) do
+    if metered?(active_provider(state)),
+      do: @arrival_ramp_seconds_metered,
+      else: @arrival_ramp_seconds
+  end
 
   @doc false
   # airplanes.live blocks by IP with a 403 (not a 429), so a blocked feed never recovers
@@ -595,7 +620,7 @@ defmodule LgaPredictor.Poller do
         %{state | actioned: MapSet.put(state.actioned, key)} |> drop_leg(zoneset.id, key)
 
       tracking_arrival?(state, zoneset.id, key) or
-          (window.enters_in <= @arrival_ramp_seconds and approaching?(ac, zones, lead)) ->
+          (window.enters_in <= arrival_ramp_seconds(state) and approaching?(ac, zones, lead)) ->
         # Arm (amber) and ramp to the fast cadence to catch the actual entry — and KEEP
         # it armed once tracking has begun, so the indicator doesn't flicker back to
         # green in the gap between the monitor and ANC zones (where the monitor zone no

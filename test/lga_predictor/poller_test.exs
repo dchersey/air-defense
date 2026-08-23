@@ -750,6 +750,39 @@ defmodule LgaPredictor.PollerTest do
     assert hd(Poller.status().zonesets).phase == "monitoring"
   end
 
+  # A flight just inside the monitor box, ~2.6 km south of the ANC zone at 100 kt → ETA
+  # ~50 s. That straddles the two arming horizons: past the metered one (40 s), well
+  # inside the free one (90 s). Arming early costs nothing on a local receiver and gives
+  # the ramp far more samples to catch a speed or vector change before the engage; on a
+  # metered feed each of those polls is money, so we arm late and lean on the ETA.
+  defp fifty_seconds_out, do: %{inbound() | lat: 40.701, lon: -73.864, track_deg: 0.0}
+
+  test "an arrival ~50 s out arms early on a free feed (90 s horizon)" do
+    start(
+      config_fun: fn -> config(trigger: :assume) |> Map.put(:provider, :local) end,
+      fetcher: fn _ -> {:ok, [fifty_seconds_out()]} end
+    )
+
+    :ok = Poller.start_session()
+    Process.sleep(80)
+
+    assert hd(Poller.status().zonesets).phase == "armed"
+    assert Actuator.mode() == :transparency, "armed is not engaged — ANC stays off"
+  end
+
+  test "the same arrival stays monitoring on a metered feed (40 s horizon)" do
+    start(
+      config_fun: fn -> config(trigger: :assume) |> Map.put(:provider, :fr24) end,
+      fetcher: fn _ -> {:ok, [fifty_seconds_out()]} end
+    )
+
+    :ok = Poller.start_session()
+    Process.sleep(80)
+
+    assert hd(Poller.status().zonesets).phase == "monitoring"
+    assert Actuator.mode() == :transparency
+  end
+
   test "after a detection the zoneset stops polling until the plane clears (lock-on)" do
     test_pid = self()
 
