@@ -891,7 +891,12 @@ private struct SettingsScreen: View {
 
       Divider().overlay(Palette.hairline)
       DataSource(model: model)
-      if model.provider == "fr24" {
+      // Show the balance whenever there IS one to report. A monthly allotment only
+      // matters while FR24 is the active provider, but a finite reserve is a FALLBACK:
+      // you want to confirm it is intact precisely when you are running on the local
+      // receiver. Gating it on provider == fr24 meant checking your reserve required
+      // switching to the paid provider first — which, mid-session, would spend it.
+      if model.provider == "fr24" || model.creditMode == "reserve" {
         CreditBar(used: model.creditsUsedMonth, budget: model.creditsBudgetMonth, model: model)
       }
 
