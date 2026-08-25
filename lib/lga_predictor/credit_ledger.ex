@@ -13,6 +13,12 @@ defmodule LgaPredictor.CreditLedger do
   `billing_reset_day` (from `ConfigStore`; 1 = calendar month). The tally rolls
   over to zero each time that anniversary passes. Persisted to a small JSON file
   so a service redeploy mid-cycle keeps the count.
+
+  When `credit_mode` is `:reserve` there is no cycle at all: the balance is a finite
+  pool of already-purchased credits (a cancelled subscription's leftovers, kept as a
+  fallback) that only ever depletes. The period becomes a constant so the rollover can
+  never fire — without that, the tally would silently zero every month and report a
+  budget that no longer exists, which is the worst kind of wrong: quietly optimistic.
   """
 
   use GenServer
@@ -96,12 +102,23 @@ defmodule LgaPredictor.CreditLedger do
   end
 
   defp default_period do
-    {{year, month, day}, _time} = :calendar.local_time()
-    cycle_start(Date.new!(year, month, day), reset_day()) |> Date.to_iso8601()
+    if reserve?() do
+      "reserve"
+    else
+      {{year, month, day}, _time} = :calendar.local_time()
+      cycle_start(Date.new!(year, month, day), reset_day()) |> Date.to_iso8601()
+    end
   end
 
   defp reset_day do
     if Process.whereis(ConfigStore), do: ConfigStore.get().billing_reset_day || 1, else: 1
+  end
+
+  defp reserve? do
+    Process.whereis(ConfigStore) != nil and
+      Map.get(ConfigStore.get(), :credit_mode, :monthly) == :reserve
+  rescue
+    _ -> false
   end
 
   # Returns {period, used}; seeds period to the current cycle on a missing/garbled file.

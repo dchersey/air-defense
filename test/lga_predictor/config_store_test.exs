@@ -21,6 +21,18 @@ defmodule LgaPredictor.ConfigStoreTest do
     assert File.exists?(path)
   end
 
+  test "credit_mode defaults to monthly and rejects anything but monthly/reserve", %{name: name} do
+    assert ConfigStore.get(name).credit_mode == :monthly
+
+    assert {:ok, cfg} = ConfigStore.put(name, %{"credit_mode" => "reserve"})
+    assert cfg.credit_mode == :reserve
+
+    assert {:error, msg} = ConfigStore.put(name, %{"credit_mode" => "quarterly"})
+    assert msg =~ "credit_mode"
+    # rejected write must not disturb the stored value
+    assert ConfigStore.get(name).credit_mode == :reserve
+  end
+
   test "provider defaults to airplanes_live and round-trips a valid choice", %{name: name} do
     assert ConfigStore.get(name).provider == :airplanes_live
 

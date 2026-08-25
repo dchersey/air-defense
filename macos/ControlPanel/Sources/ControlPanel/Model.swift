@@ -75,6 +75,7 @@ struct StatusResponse: Codable {
   let releaseDeltaSeconds: Double
   let creditsUsedMonth: Int?
   let creditsBudgetMonth: Int
+  let creditMode: String?
   let billingResetDay: Int
   let provider: String
   let localFeedUrl: String?
@@ -129,6 +130,9 @@ final class StatusModel {
   // FR24 month-to-date credit usage (nil until first fetched) + plan allotment.
   var creditsUsedMonth: Int?
   var creditsBudgetMonth = 60_000
+  // "monthly" = a subscription allotment that resets on billingResetDay.
+  // "reserve" = a finite pool of already-purchased credits that only depletes.
+  var creditMode = "monthly"
   // Day-of-month the FR24 allotment resets (billing anniversary; 1 = calendar month).
   var billingResetDay = 1
   // Flight-data source for all zones, + whether an FR24 key is stored.
@@ -249,6 +253,7 @@ final class StatusModel {
       releaseDelta = status.releaseDeltaSeconds
       creditsUsedMonth = status.creditsUsedMonth
       creditsBudgetMonth = status.creditsBudgetMonth
+      creditMode = status.creditMode ?? "monthly"
       billingResetDay = status.billingResetDay
       provider = status.provider
       fr24KeyPresent = status.fr24KeyPresent
@@ -579,6 +584,21 @@ final class StatusModel {
     request.httpMethod = "PUT"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.httpBody = try? JSONSerialization.data(withJSONObject: ["billing_reset_day": day])
+    Task {
+      _ = try? await URLSession.shared.data(for: request)
+      await refresh()
+    }
+  }
+
+  /// "monthly" (subscription allotment, resets on billingResetDay) or "reserve"
+  /// (a finite pool of already-purchased credits that only depletes — no rollover).
+  func setCreditMode(_ mode: String) {
+    creditMode = mode  // optimistic; refresh() reconciles
+    guard let url = URL(string: "\(base)/api/config") else { return }
+    var request = URLRequest(url: url)
+    request.httpMethod = "PUT"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = try? JSONSerialization.data(withJSONObject: ["credit_mode": mode])
     Task {
       _ = try? await URLSession.shared.data(for: request)
       await refresh()

@@ -224,6 +224,7 @@ defmodule LgaPredictor.API.Router do
       release_delta_seconds: config.release_delta_seconds,
       credits_used_month: credits_used(),
       credits_budget_month: Application.get_env(:lga_predictor, :monthly_credit_budget, 60_000),
+      credit_mode: to_string(Map.get(config, :credit_mode, :monthly)),
       billing_reset_day: config.billing_reset_day,
       provider: to_string(config.provider),
       local_feed_url: config.local_feed_url,

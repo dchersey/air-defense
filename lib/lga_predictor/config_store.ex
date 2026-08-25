@@ -27,7 +27,15 @@ defmodule LgaPredictor.ConfigStore do
     # Day of month the FR24 credit allotment resets (billing anniversary). The
     # credit ledger rolls over on this day and the pace bar measures the cycle
     # from it. 1 = calendar month (default until the real billing day is known).
+    # Ignored entirely when credit_mode is "reserve".
     "billing_reset_day" => 1,
+    # How the FR24 credit balance behaves. "monthly" — a subscription allotment that
+    # resets on billing_reset_day, shown as a pace bar. "reserve" — a FINITE pool of
+    # already-purchased credits that only ever depletes: no rollover, no pace. Use
+    # "reserve" after cancelling the subscription while keeping leftover credits as a
+    # fallback, otherwise the tally silently zeroes each month and reports a budget
+    # that no longer exists.
+    "credit_mode" => "monthly",
     # Flight-data source for ALL zones: "local" (your own ADS-B receiver — free,
     # lowest latency, no third party), "airplanes_live" (their public API) or "fr24"
     # (FlightRadar24, needs an API key, costs credits).
@@ -43,6 +51,7 @@ defmodule LgaPredictor.ConfigStore do
   }
 
   @providers ~w(local airplanes_live fr24)
+  @credit_modes ~w(monthly reserve)
   @default_min_gspeed_kt 150
 
   ## API
@@ -232,6 +241,7 @@ defmodule LgaPredictor.ConfigStore do
       "engage_delta_seconds",
       "release_delta_seconds",
       "billing_reset_day",
+      "credit_mode",
       "provider",
       "local_feed_url",
       "zonesets"
@@ -259,6 +269,9 @@ defmodule LgaPredictor.ConfigStore do
 
       not (is_integer(raw["billing_reset_day"]) and raw["billing_reset_day"] in 1..31) ->
         {:error, "billing_reset_day must be an integer 1..31"}
+
+      raw["credit_mode"] not in @credit_modes ->
+        {:error, "credit_mode must be one of #{Enum.join(@credit_modes, ", ")}"}
 
       raw["provider"] not in @providers ->
         {:error, "provider must be one of #{Enum.join(@providers, ", ")}"}
@@ -341,6 +354,7 @@ defmodule LgaPredictor.ConfigStore do
       engage_delta_seconds: raw["engage_delta_seconds"],
       release_delta_seconds: raw["release_delta_seconds"],
       billing_reset_day: raw["billing_reset_day"],
+      credit_mode: credit_mode_atom(raw["credit_mode"]),
       provider: provider_atom(raw["provider"]),
       local_feed_url: raw["local_feed_url"],
       version: raw["version"],
@@ -379,6 +393,9 @@ defmodule LgaPredictor.ConfigStore do
   # Explicit (compile-baked) string→atom map. NOT String.to_existing_atom: under
   # the dev `mix run` runtime the provider's defining module may not be loaded yet,
   # so its atom wouldn't exist. These literals live in this (always-loaded) module.
+  defp credit_mode_atom("reserve"), do: :reserve
+  defp credit_mode_atom(_), do: :monthly
+
   defp provider_atom("fr24"), do: :fr24
   defp provider_atom("local"), do: :local
   defp provider_atom(_), do: :airplanes_live

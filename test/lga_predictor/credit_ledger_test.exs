@@ -23,6 +23,43 @@ defmodule LgaPredictor.CreditLedgerTest do
 
   defp set_period(clock, period), do: Agent.update(clock, fn _ -> period end)
 
+  # Reserve mode: a finite pool of already-purchased credits (a cancelled
+  # subscription's leftovers). These tests exercise the REAL default_period/0 — the
+  # injectable period_fun above deliberately bypasses it, and the rollover is exactly
+  # what must not happen here.
+  defp start_config(credit_mode) do
+    path = Path.join(System.tmp_dir!(), "ndcfg_#{System.unique_integer([:positive])}.json")
+    on_exit(fn -> File.rm(path) end)
+    start_supervised!({LgaPredictor.ConfigStore, name: LgaPredictor.ConfigStore, path: path})
+    {:ok, _} = LgaPredictor.ConfigStore.put(%{"credit_mode" => credit_mode})
+    :ok
+  end
+
+  defp start_real_ledger do
+    path = Path.join(System.tmp_dir!(), "credits-#{System.unique_integer([:positive])}.json")
+    on_exit(fn -> File.rm(path) end)
+    {:ok, pid} = CreditLedger.start_link(name: nil, path: path)
+    pid
+  end
+
+  test "reserve mode pins the period so the monthly rollover can never fire" do
+    start_config("reserve")
+    pid = start_real_ledger()
+
+    CreditLedger.seed(pid, 10_000)
+    CreditLedger.add(pid, 42)
+
+    assert %{period: "reserve", used: 10_042} = CreditLedger.month_to_date(pid)
+  end
+
+  test "monthly mode still keys the period on the billing cycle date" do
+    start_config("monthly")
+    pid = start_real_ledger()
+
+    assert %{period: period} = CreditLedger.month_to_date(pid)
+    assert period =~ ~r/^\d{4}-\d{2}-\d{2}$/, "expected an ISO date, got #{inspect(period)}"
+  end
+
   test "add/2 accumulates credits within a billing period" do
     {pid, _clock, _path} = start_ledger("2026-06-15")
 

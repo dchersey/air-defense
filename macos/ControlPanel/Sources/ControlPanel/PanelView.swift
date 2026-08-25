@@ -1091,15 +1091,23 @@ private struct CreditBar: View {
   @State private var remainingText = ""
   @State private var resetDayText = ""
 
+  /// A finite pool of already-purchased credits (cancelled subscription, leftovers kept
+  /// as a fallback). It never refills, so "pace through the month" is meaningless — show
+  /// depletion, and warn as it runs down rather than when it runs ahead of schedule.
+  private var isReserve: Bool { model.creditMode == "reserve" }
+
   var body: some View {
     let usedFrac = min(1, max(0, Double(used ?? 0) / Double(max(budget, 1))))
     let remainFrac = 1 - usedFrac
     let elapsed = cycleElapsed(resetDay: model.billingResetDay)
-    let onPace = usedFrac <= elapsed
+    // Monthly: green while spending no faster than the month elapses. Reserve: green
+    // until the pool is genuinely low, because there is nothing to be "on pace" with.
+    let onPace = isReserve ? remainFrac > 0.20 : usedFrac <= elapsed
 
     VStack(alignment: .leading, spacing: 4) {
       HStack {
-        Text(cycleLabel(resetDay: model.billingResetDay)).font(.adMono).foregroundStyle(Palette.ink2)
+        Text(isReserve ? "Credit reserve" : cycleLabel(resetDay: model.billingResetDay))
+          .font(.adMono).foregroundStyle(Palette.ink2)
         Spacer()
         if let used {
           Text("\(remaining(used).formatted()) left").font(.adMono).monospacedDigit()
@@ -1118,9 +1126,13 @@ private struct CreditBar: View {
           Capsule().fill(onPace ? Palette.go : Palette.inbound)
             .frame(width: w * remainFrac)
             .frame(maxWidth: .infinity, alignment: .trailing)
-          Rectangle().fill(Palette.ink.opacity(0.75))
-            .frame(width: 1.5)
-            .offset(x: w * elapsed)
+          // The hashmark is "how far through the billing cycle you are" — it has no
+          // meaning for a pool that never resets, so a reserve shows none.
+          if !isReserve {
+            Rectangle().fill(Palette.ink.opacity(0.75))
+              .frame(width: 1.5)
+              .offset(x: w * elapsed)
+          }
         }
       }
       .frame(height: 8)
@@ -1131,12 +1143,24 @@ private struct CreditBar: View {
 
   private var syncForm: some View {
     VStack(alignment: .leading, spacing: 4) {
+      Toggle(isOn: Binding(
+        get: { isReserve },
+        set: { model.setCreditMode($0 ? "reserve" : "monthly") }
+      )) {
+        Text("Finite reserve (cancelled plan — does not refill)")
+          .font(.adMono).foregroundStyle(Palette.ink2)
+      }
+      .toggleStyle(.checkbox)
+
+      // A reset day is meaningless for a pool that never refills.
+      if !isReserve {
       HStack(spacing: 6) {
         Text("Resets on day").font(.adMono).foregroundStyle(Palette.ink2)
         TextField("1–31", text: $resetDayText)
           .textFieldStyle(.roundedBorder).font(.adMono).monospacedDigit().frame(width: 44)
           .onSubmit(applyResetDay)
         Text("of each month").font(.adMono).foregroundStyle(Palette.ink2)
+      }
       }
       HStack(spacing: 6) {
         Text("FR24 remaining:").font(.adMono).foregroundStyle(Palette.ink2)
