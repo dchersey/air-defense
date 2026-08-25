@@ -26,12 +26,26 @@ struct ControlPanelApp: App {
 
   // Session running and nothing inbound/engaged → the steady "monitoring" state.
   // Requires a live feed: with the feed down we are NOT monitoring, we're blind, and the
-  // calm green mark would claim otherwise.
-  private var isMonitoring: Bool { model.active && model.phase == .idle && model.feedOk }
+  // calm green mark would claim otherwise. It must also exclude a provider fallback for
+  // the same reason — this branch is checked BEFORE menuImage, so without the guard the
+  // green mark wins and the fallback icon below is unreachable dead code.
+  private var isMonitoring: Bool {
+    model.active && model.phase == .idle && model.feedOk && !isFallenBack
+  }
 
   // Session running but the data feed is unreachable — we can't see traffic at all.
   // Only trust this when the backend itself is reachable; a dead backend is `.offline`.
   private var isBlind: Bool { model.active && model.reachable && !model.feedOk }
+
+  // Running on a provider we did NOT configure, because the configured one failed and
+  // the poller fell back. The feed is healthy again, so every other signal reads normal
+  // and the calm green mark would say "all fine" while a metered fallback quietly spends
+  // credits — and with a cancelled plan those credits are a finite reserve that never
+  // refills. Same failure shape as isBlind: true-looking icon, untrue situation.
+  private var isFallenBack: Bool {
+    guard model.active, let live = model.providerActive else { return false }
+    return live != model.provider
+  }
 
   // Vivid radar-green, brighter than systemGreen so it reads on the menu bar.
   private let monitorGreen = NSColor(srgbRed: 0.30, green: 0.88, blue: 0.44, alpha: 1)
@@ -54,6 +68,15 @@ struct ControlPanelApp: App {
     // running, but no traffic can be seen, so nothing else the icon could say is true.
     if isBlind {
       return symbol("antenna.radiowaves.left.and.right.slash", tint: lockedOnAmber, bold: true)
+    }
+    // Below blind, above the phases. Deliberately NOT the radar mark in amber: that is
+    // exactly what .pending (inbound, locked on) draws, and two meanings sharing one
+    // icon is worse than no indicator. Use the same swap glyph the panel banner uses
+    // for a failover, so the menu bar and the panel speak the same language.
+    // Only replaces the idle/monitoring mark — an actual inbound or engaged flight is
+    // more urgent than which feed it arrived on, so those phases still win.
+    if isFallenBack, model.phase == .idle {
+      return symbol("arrow.triangle.2.circlepath", tint: lockedOnAmber, bold: true)
     }
     switch model.phase {
     case .offline: return symbol("airplane.slash", tint: nil)
