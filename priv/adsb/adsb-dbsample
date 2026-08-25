@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""Sample receiver signal levels on a fixed cadence and write a CSV baseline.
+
+  adsb-dbsample [minutes] [interval_seconds]     default: 60 min @ 60s
+
+Use 60s for a quiet-sky baseline; drop to 1-2s during a close approach, since an
+aircraft crosses overhead in seconds and a per-minute sample would step right over the
+peak. Needs no root: writes to the invoking user's home directory.
+
+Two signal families are recorded and they answer different questions:
+  * per-aircraft `rssi` is a rolling MEAN, so it understates and can hide clipping
+  * stats.json `peak_signal` is the instantaneous ADC maximum — the clipping detector
+A peak at or near 0 dBFS means messages are saturating and failing CRC.
+"""
+import json, os, statistics, sys, time, urllib.request
+
+MINUTES  = float(sys.argv[1]) if len(sys.argv) > 1 else 60.0
+INTERVAL = float(sys.argv[2]) if len(sys.argv) > 2 else 60.0
+OUT = os.path.expanduser(f"~/adsb-baseline-{time.strftime('%Y%m%d-%H%M%S')}.csv")
+
+def get(u):
+    try:
+        with urllib.request.urlopen(u, timeout=5) as r:
+            return json.load(r)
+    except Exception:
+        return None
+
+def temp():
+    try:
+        return int(open("/sys/class/thermal/thermal_zone0/temp").read()) / 1000.0
+    except Exception:
+        return None
+
+cols = ["utc","temp_c","aircraft","with_pos","rssi_max","rssi_med","rssi_min",
+        "adc_peak_dbfs","noise_dbfs","gain_db","closest_nm","closest_rssi",
+        "closest_alt","closest_flight","msgs_total"]
+fh = open(OUT, "w", buffering=1)
+fh.write(",".join(cols) + "\n")
+print(f"writing {OUT}  ({MINUTES:g} min @ {INTERVAL:g}s)", flush=True)
+
+end = time.time() + MINUTES * 60
+n = 0
+while time.time() < end:
+    a = get("http://localhost/tar1090/data/aircraft.json")
+    s = get("http://localhost/tar1090/data/stats.json")
+    if a:
+        acs  = a.get("aircraft", [])
+        pos  = [x for x in acs if "lat" in x]
+        rs   = sorted(x["rssi"] for x in acs if isinstance(x.get("rssi"), (int, float)))
+        near = min((x for x in acs if "r_dst" in x), key=lambda x: x["r_dst"], default=None)
+        loc  = (s or {}).get("last1min", {}).get("local", {})
+        row = [time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               f"{temp():.1f}" if temp() else "",
+               len(acs), len(pos),
+               f"{rs[-1]:.1f}" if rs else "",
+               f"{statistics.median(rs):.1f}" if rs else "",
+               f"{rs[0]:.1f}" if rs else "",
+               loc.get("peak_signal", ""), loc.get("noise", ""),
+               (s or {}).get("gain_db", ""),
+               f"{near['r_dst']:.2f}" if near else "",
+               f"{near.get('rssi'):.1f}" if near and near.get("rssi") is not None else "",
+               near.get("alt_baro", "") if near else "",
+               (near.get("flight") or "").strip() if near else "",
+               a.get("messages", "")]
+        fh.write(",".join(str(c) for c in row) + "\n")
+        n += 1
+    time.sleep(INTERVAL)
+
+fh.close()
+print(f"done: {n} samples -> {OUT}", flush=True)
