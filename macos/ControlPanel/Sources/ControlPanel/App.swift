@@ -84,7 +84,10 @@ struct ControlPanelApp: App {
     case .engaged: return symbol(earpieceEngaged, tint: .systemRed)
     // Inbound = "locked on": the radar mark in bold amber, static (no pulse).
     case .pending: return symbol("dot.radiowaves.up.forward", tint: lockedOnAmber, bold: true)
-    case .idle: return symbol("airplane", tint: nil)  // no session (monitoring handled above)
+    // No session. Amber when low traffic has crossed the zone in the last 10 minutes:
+    // ANC is off and the sky says you would want it on. Plain template glyph otherwise.
+    case .idle:
+      return symbol("airplane", tint: model.ambient ? lockedOnAmber : nil, bold: model.ambient)
     }
   }
 

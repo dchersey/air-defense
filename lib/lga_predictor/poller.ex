@@ -34,6 +34,21 @@ defmodule LgaPredictor.Poller do
   # a dead feed must never read as a quiet sky.
   @feed_down_threshold 2
 
+  # --- Ambient tracking -------------------------------------------------------------
+  # With a local receiver the feed is free, so the activity graph need not go blank
+  # whenever a session is off. Ambient polling records what crosses the ANC zone even
+  # when ANC is not running, so the hourly trend reflects the sky rather than the
+  # session. Only ever runs on an UNMETERED provider — doing this on FR24 would spend
+  # credits continuously for a graph.
+  @ambient_interval_ms 60_000
+  # Aircraft this low overhead are the ones worth reacting to; a detection under it
+  # lights the idle menu-bar icon amber ("you would want ANC now").
+  @ambient_alert_ft 3000
+  # How long that amber persists after the last low overflight.
+  @ambient_clear_seconds 600
+  # One aircraft crossing the zone spans several 60s polls; record it once per pass.
+  @ambient_dedupe_seconds 300
+
   # Arrivals ramp from their slow monitor cadence to this fast cadence once a flight is
   # within `arrival_ramp_seconds/1` (ETA) of the ANC zone, so we catch its actual entry.
   # ETA decides WHEN to ramp; the fast poll then drives the engage.
@@ -85,7 +100,7 @@ defmodule LgaPredictor.Poller do
   ## Server
 
   @impl true
-  def init(opts), do: {:ok, build_state(opts)}
+  def init(opts), do: {:ok, schedule_ambient(build_state(opts))}
 
   @impl true
   def handle_call({:start_session, id}, _from, state) do
@@ -129,6 +144,10 @@ defmodule LgaPredictor.Poller do
   end
 
   @impl true
+  def handle_info(:ambient, state) do
+    {:noreply, state |> ambient_tick() |> schedule_ambient()}
+  end
+
   def handle_info({:poll, id}, state) do
     # Ignore stale timers for a zoneset whose session has ended.
     if Map.has_key?(state.sessions, id),
@@ -249,6 +268,102 @@ defmodule LgaPredictor.Poller do
         :on -> KeepAlive.on()
         :off -> KeepAlive.off()
       end
+    end
+  end
+
+  ## Ambient tracking (graph continues while ANC is off)
+
+  defp schedule_ambient(state) do
+    if state.ambient_timer, do: Process.cancel_timer(state.ambient_timer)
+    %{state | ambient_timer: Process.send_after(self(), :ambient, @ambient_interval_ms)}
+  end
+
+  # Record what crosses the ANC zones while ANC is not running, so the activity graph
+  # shows the sky rather than the session. Deliberately touches NOTHING the session path
+  # owns — no actuator, intercept legs, suppression, `actioned` or credits — so a bug
+  # here can never fire ANC or disturb a live session. Skipped on a metered provider:
+  # polling continuously for a graph is exactly what the credit cap exists to prevent.
+  defp ambient_tick(state) do
+    config = state.config_fun.()
+
+    if metered?(active_provider(state)) do
+      state
+    else
+      config.zonesets
+      |> Enum.filter(&(&1.enabled and ambient_wanted?(state, &1.id)))
+      |> Enum.reduce(state, &ambient_zoneset(&2, &1, config))
+      |> prune_ambient_seen()
+    end
+  end
+
+  # Ambient fills the gaps the session path leaves: no session at all, or a session
+  # whose polling is paused because the headphones are off.
+  defp ambient_wanted?(state, id) do
+    not Map.has_key?(state.sessions, id) or not state.headphones_connected
+  end
+
+  defp ambient_zoneset(state, zoneset, config) do
+    case fetch(state, query_box(zoneset)) do
+      {:ok, aircraft} ->
+        ceiling = zoneset.altitude_ceiling_ft || config.global_ceiling_ft
+        now = System.os_time(:second)
+
+        aircraft
+        |> Enum.reject(&ramp?/1)
+        |> Enum.filter(fn ac ->
+          is_number(ac.lat) and is_number(ac.lon) and
+            (ac.alt_ft || 0) < ceiling and
+            in_any_zone?(zoneset.anc_zones, {ac.lat, ac.lon})
+        end)
+        |> Enum.reduce(state, &record_ambient(&2, &1, now))
+
+      {:error, _reason} ->
+        # Ambient is best-effort: a failed poll must not mark the feed down or trip the
+        # provider failover, both of which belong to the session path.
+        state
+    end
+  end
+
+  defp record_ambient(state, ac, now) do
+    key = ac.hex || ac.callsign
+
+    if is_nil(key) or now - Map.get(state.ambient_seen, key, 0) < @ambient_dedupe_seconds do
+      state
+    else
+      record_history(%{
+        at: now,
+        callsign: ac.callsign,
+        hex: ac.hex,
+        type: ac.type,
+        alt_ft: ac.alt_ft,
+        enters_in: 0,
+        dwell: 0,
+        # Observed, not acted on. The UI dims these and skips the AeroAPI lookup.
+        engaged: false
+      })
+
+      %{
+        state
+        | ambient_seen: Map.put(state.ambient_seen, key, now),
+          ambient_low_at:
+            if((ac.alt_ft || @ambient_alert_ft) < @ambient_alert_ft,
+              do: now,
+              else: state.ambient_low_at
+            )
+      }
+    end
+  end
+
+  defp prune_ambient_seen(state) do
+    cutoff = System.os_time(:second) - @ambient_dedupe_seconds
+    %{state | ambient_seen: Map.filter(state.ambient_seen, fn {_k, t} -> t > cutoff end)}
+  end
+
+  # Low traffic overhead recently enough to still matter — drives the amber idle icon.
+  defp ambient_active?(state) do
+    case state.ambient_low_at do
+      nil -> false
+      at -> System.os_time(:second) - at < @ambient_clear_seconds
     end
   end
 
@@ -595,7 +710,8 @@ defmodule LgaPredictor.Poller do
           type: ac.type,
           alt_ft: ac.alt_ft,
           enters_in: 0,
-          dwell: round(window.dwell_seconds)
+          dwell: round(window.dwell_seconds),
+          engaged: true
         })
 
         Logger.info(
@@ -725,7 +841,8 @@ defmodule LgaPredictor.Poller do
           type: ac.type,
           alt_ft: ac.alt_ft,
           enters_in: 0,
-          dwell: round(dwell)
+          dwell: round(dwell),
+          engaged: true
         })
 
         Logger.info(
@@ -1006,6 +1123,8 @@ defmodule LgaPredictor.Poller do
     %{
       active?: map_size(state.sessions) > 0,
       polls: state.polls,
+      # Low traffic seen over the ANC zone recently while ANC was NOT running.
+      ambient: ambient_active?(state),
       approx_credits: state.credits,
       feed_ok: feed_ok?(state),
       # What we're actually fetching from, and why it differs from the configured
@@ -1061,6 +1180,12 @@ defmodule LgaPredictor.Poller do
       fetch_errors: %{},
       polls: 0,
       credits: 0,
+      # Ambient (session-off) tracking. `ambient_seen` is hex/callsign -> last recorded
+      # unix seconds, for dedupe; `ambient_low_at` is when a sub-@ambient_alert_ft
+      # aircraft was last seen in zone, which drives the amber idle icon.
+      ambient_timer: nil,
+      ambient_seen: %{},
+      ambient_low_at: nil,
       headphones_connected: true,
       keep_alive_held: false,
       actioned: MapSet.new(),

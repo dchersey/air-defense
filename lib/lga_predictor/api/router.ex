@@ -232,6 +232,9 @@ defmodule LgaPredictor.API.Router do
       aeroapi_key_present: LgaPredictor.Routes.key_present?(),
       session_ends_at: status.session_ends_at,
       polls: status.polls,
+      # Low traffic crossed the ANC zone recently while ANC was off — lights the idle
+      # menu-bar icon amber.
+      ambient: Map.get(status, :ambient, false),
       approx_credits: status.approx_credits,
       zonesets: status.zonesets,
       inbound_at: status.inbound_at,
@@ -239,7 +242,9 @@ defmodule LgaPredictor.API.Router do
       overhead_at: status.overhead_at,
       overhead_route: route_label(status.overhead_callsign),
       recent: History.recent(50) |> Enum.map(&with_route/1),
-      # 12 buckets x 5 min = last hour of trigger counts, oldest -> newest
+      # 12 buckets x 5 min = last hour of ACTIVITY counts, oldest -> newest. Includes
+      # ambient (observed-not-engaged) overflights, so the trend does not go flat
+      # whenever a session is off.
       history: History.counts_per_bucket(300, buckets: 12)
     }
   end
@@ -288,9 +293,20 @@ defmodule LgaPredictor.API.Router do
   # callsign until the async lookup resolves on a later poll).
   defp with_route(event) do
     cs = event[:callsign]
+    # Events recorded before ambient tracking existed have no flag and were all real
+    # engagements, so absent == engaged.
+    engaged = event[:engaged] != false
 
     {origin, destination, private} =
       cond do
+        # Ambient overflights are recorded continuously while ANC is off. Resolving them
+        # would spend the AeroAPI budget on flights nobody acted on — the very thing the
+        # 1000/month cap exists to prevent. They stay unidentified, and is_private stays
+        # FALSE: "private" means looked-up-and-unknown, and showing it here would be
+        # indistinguishable from the lost-key bug. The UI dims these instead.
+        not engaged ->
+          {nil, nil, false}
+
         not (is_binary(cs) and cs != "") ->
           {nil, nil, true}
 
@@ -309,6 +325,7 @@ defmodule LgaPredictor.API.Router do
     |> Map.put(:origin, origin)
     |> Map.put(:destination, destination)
     |> Map.put(:is_private, private)
+    |> Map.put(:engaged, engaged)
   end
 
   # Echo the persisted config back as plain JSON (the raw form, so the UI

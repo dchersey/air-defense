@@ -17,6 +17,10 @@ struct Flight: Codable, Identifiable {
   let origin: String?
   let destination: String?
   let isPrivate: Bool?
+  // false = seen crossing the zone while ANC was off (ambient tracking). Recorded for
+  // the activity graph, never acted on, and deliberately never route-resolved — so the
+  // UI dims it rather than showing it as a flight Air Defense handled.
+  let engaged: Bool?
 
   var id: String { "\(callsign ?? "?")-\(at)" }
 }
@@ -76,6 +80,8 @@ struct StatusResponse: Codable {
   let creditsUsedMonth: Int?
   let creditsBudgetMonth: Int
   let creditMode: String?
+  // Low traffic crossed the zone recently while no session was running.
+  let ambient: Bool?
   let billingResetDay: Int
   let provider: String
   let localFeedUrl: String?
@@ -133,6 +139,8 @@ final class StatusModel {
   // "monthly" = a subscription allotment that resets on billingResetDay.
   // "reserve" = a finite pool of already-purchased credits that only depletes.
   var creditMode = "monthly"
+  // Recent low overflights with ANC off — lights the idle menu-bar icon amber.
+  var ambient = false
   // Day-of-month the FR24 allotment resets (billing anniversary; 1 = calendar month).
   var billingResetDay = 1
   // Flight-data source for all zones, + whether an FR24 key is stored.
@@ -254,6 +262,7 @@ final class StatusModel {
       creditsUsedMonth = status.creditsUsedMonth
       creditsBudgetMonth = status.creditsBudgetMonth
       creditMode = status.creditMode ?? "monthly"
+      ambient = status.ambient ?? false
       billingResetDay = status.billingResetDay
       provider = status.provider
       fr24KeyPresent = status.fr24KeyPresent

@@ -81,6 +81,79 @@ defmodule LgaPredictor.PollerTest do
     start_supervised!({Poller, Keyword.merge(defaults, opts)})
   end
 
+  # --- Ambient tracking (graph continues while ANC is off) --------------------------
+  # The 60s timer is far too slow for a test, so drive the tick directly — that also
+  # exercises the real handle_info clause rather than a test-only path.
+  defp ambient_tick! do
+    send(Poller, :ambient)
+    Process.sleep(60)
+  end
+
+  defp low_overflight(alt) do
+    %{inbound() | callsign: "AMB123", hex: "ABCDEF", alt_ft: alt}
+  end
+
+  defp start_with_history(opts) do
+    start_supervised!(LgaPredictor.History)
+    start(opts)
+  end
+
+  test "ambient tracking records in-zone traffic while no session is running" do
+    start_with_history(fetcher: fn _ -> {:ok, [low_overflight(2000.0)]} end)
+    ambient_tick!()
+
+    assert [%{callsign: "AMB123", engaged: false}] = LgaPredictor.History.all()
+    assert Actuator.mode() == :transparency, "ambient must never fire ANC"
+    refute Poller.status().active?
+  end
+
+  test "ambient tracking is skipped on a metered provider" do
+    start_with_history(
+      config_fun: fn -> config() |> Map.put(:provider, :fr24) end,
+      fetcher: fn _ -> {:ok, [low_overflight(2000.0)]} end
+    )
+
+    ambient_tick!()
+    assert LgaPredictor.History.all() == [], "must not poll a paid feed to draw a graph"
+  end
+
+  test "an aircraft crossing the zone is recorded once, not once per ambient poll" do
+    start_with_history(fetcher: fn _ -> {:ok, [low_overflight(2000.0)]} end)
+
+    ambient_tick!()
+    ambient_tick!()
+    ambient_tick!()
+
+    assert length(LgaPredictor.History.all()) == 1
+  end
+
+  test "traffic under 3000 ft raises the ambient flag" do
+    start_with_history(fetcher: fn _ -> {:ok, [low_overflight(2000.0)]} end)
+    ambient_tick!()
+    assert Poller.status().ambient, "under 3000 ft should light the idle icon"
+  end
+
+  test "traffic above 3000 ft is tracked but does not raise the ambient flag" do
+    start_with_history(fetcher: fn _ -> {:ok, [low_overflight(4500.0)]} end)
+    ambient_tick!()
+
+    assert [%{engaged: false}] = LgaPredictor.History.all(), "still counted in the graph"
+    refute Poller.status().ambient, "but not low enough to call for ANC"
+  end
+
+  test "ambient keeps tracking while a session is active but the headphones are off" do
+    start_with_history(fetcher: fn _ -> {:ok, [low_overflight(2000.0)]} end)
+    # Headphones off BEFORE the session starts, so the session path never polls and the
+    # only recorded event can be the ambient one.
+    Poller.set_headphones(false)
+    :ok = Poller.start_session()
+
+    ambient_tick!()
+
+    assert [%{engaged: false}] = LgaPredictor.History.all()
+    assert Poller.status().active?, "the session is still running, just paused"
+  end
+
   test "is idle until a session starts" do
     start([])
     assert %{active?: false} = Poller.status()

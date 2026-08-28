@@ -744,16 +744,27 @@ private struct ActivityStrip: View {
   private var flightList: some View {
     VStack(alignment: .leading, spacing: 5) {
       ForEach(model.recent.prefix(10)) { flight in
+        // Observed-only: crossed the zone while ANC was off. Dimmed throughout, and the
+        // timestamp is not in the accent colour because nothing was engaged at it.
+        let observed = flight.engaged == false
         HStack(spacing: 8) {
-          Text(routeLabel(flight)).font(.adMono).foregroundStyle(Palette.ink)
+          Text(routeLabel(flight))
+            .font(.adMono).foregroundStyle(observed ? Palette.ink3 : Palette.ink)
           if let type = flight.type, !type.isEmpty {
-            Text("· \(type)").font(.adMono).foregroundStyle(Palette.ink2)
+            Text("· \(type)").font(.adMono).foregroundStyle(observed ? Palette.ink3 : Palette.ink2)
           }
           if let alt = flight.altFt {
             Text("· \(Int(alt)) ft").font(.adMono).foregroundStyle(Palette.ink3)
           }
+          // Say WHY there is no route. A dimmed row showing a bare callsign is otherwise
+          // indistinguishable from a route lookup that failed — which is exactly what a
+          // lost AeroAPI key looks like, and that cost real debugging time once already.
+          if observed {
+            Text("· observed").font(.adMono).foregroundStyle(Palette.ink3)
+          }
           Spacer(minLength: 8)
-          Text(ancTime(flight)).font(.adMono).monospacedDigit().foregroundStyle(Palette.accent)
+          Text(ancTime(flight)).font(.adMono).monospacedDigit()
+            .foregroundStyle(observed ? Palette.ink3 : Palette.accent)
             .frame(width: 92, alignment: .trailing)
         }
         .contentShape(Rectangle())
