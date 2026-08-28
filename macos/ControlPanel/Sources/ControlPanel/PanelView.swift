@@ -752,14 +752,19 @@ private struct ActivityStrip: View {
         // no matter how wide the identifier is. Observed rows are told apart by colour
         // alone — an inline label made the row overflow and truncate the altitude.
         HStack(spacing: 8) {
+          // Fixed cell: identifiers vary in width ("DAL557" vs "MIA → LGA", and the
+          // arrow is not a monospaced advance), so without this the type column starts
+          // at a different x on every row. 72pt fits the widest form (XXX → YYY) at
+          // .caption2 with margin.
           Text(routeLabel(flight))
             .font(.adMono).foregroundStyle(observed ? Palette.ink3 : Palette.ink)
             .lineLimit(1)
-          if let type = flight.type, !type.isEmpty {
-            Text("· \(type)").font(.adMono).foregroundStyle(observed ? Palette.ink3 : Palette.ink2)
-              .lineLimit(1)
-          }
-          Spacer(minLength: 6)
+            .frame(width: 72, alignment: .leading)
+          Text(typeLabel(flight))
+            .font(.adMono).foregroundStyle(observed ? Palette.ink3 : Palette.ink2)
+            .lineLimit(1)
+            .frame(width: 44, alignment: .leading)
+          Spacer(minLength: 4)
           Group {
             if let alt = flight.altFt {
               Text("\(Int(alt)) ft")
@@ -825,6 +830,12 @@ private struct ActivityStrip: View {
 
   // Airport route when known (e.g. "YYZ → LGA"); "private" for GA/no-route flights;
   // the raw callsign while the lookup is still pending.
+  // Empty rather than absent when unknown, so the cell still reserves its column.
+  private func typeLabel(_ flight: Flight) -> String {
+    guard let t = flight.type, !t.isEmpty else { return "" }
+    return "· \(t)"
+  }
+
   private func routeLabel(_ flight: Flight) -> String {
     if let o = flight.origin, let d = flight.destination { return "\(o) → \(d)" }
     if flight.isPrivate == true { return "private" }
