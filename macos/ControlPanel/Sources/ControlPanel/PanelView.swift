@@ -747,24 +747,32 @@ private struct ActivityStrip: View {
         // Observed-only: crossed the zone while ANC was off. Dimmed throughout, and the
         // timestamp is not in the accent colour because nothing was engaged at it.
         let observed = flight.engaged == false
+        // Route/type flow from the left and may ellipsize; altitude and time sit in
+        // fixed right-aligned cells after a Spacer, so those two columns stay straight
+        // no matter how wide the identifier is. Observed rows are told apart by colour
+        // alone — an inline label made the row overflow and truncate the altitude.
         HStack(spacing: 8) {
           Text(routeLabel(flight))
             .font(.adMono).foregroundStyle(observed ? Palette.ink3 : Palette.ink)
+            .lineLimit(1)
           if let type = flight.type, !type.isEmpty {
             Text("· \(type)").font(.adMono).foregroundStyle(observed ? Palette.ink3 : Palette.ink2)
+              .lineLimit(1)
           }
-          if let alt = flight.altFt {
-            Text("· \(Int(alt)) ft").font(.adMono).foregroundStyle(Palette.ink3)
+          Spacer(minLength: 6)
+          Group {
+            if let alt = flight.altFt {
+              Text("\(Int(alt)) ft")
+            } else {
+              Text("")
+            }
           }
-          // Say WHY there is no route. A dimmed row showing a bare callsign is otherwise
-          // indistinguishable from a route lookup that failed — which is exactly what a
-          // lost AeroAPI key looks like, and that cost real debugging time once already.
-          if observed {
-            Text("· observed").font(.adMono).foregroundStyle(Palette.ink3)
-          }
-          Spacer(minLength: 8)
+          .font(.adMono).monospacedDigit().foregroundStyle(Palette.ink3)
+          .lineLimit(1)
+          .frame(width: 62, alignment: .trailing)
           Text(ancTime(flight)).font(.adMono).monospacedDigit()
             .foregroundStyle(observed ? Palette.ink3 : Palette.accent)
+            .lineLimit(1)
             .frame(width: 92, alignment: .trailing)
         }
         .contentShape(Rectangle())
