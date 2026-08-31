@@ -41,9 +41,22 @@ defmodule LgaPredictor.Poller do
   # session. Only ever runs on an UNMETERED provider — doing this on FR24 would spend
   # credits continuously for a graph.
   @ambient_interval_ms 60_000
-  # Aircraft this low overhead are the ones worth reacting to; a detection under it
-  # lights the idle menu-bar icon amber ("you would want ANC now").
+  # Overhead traffic sorts into four altitude bands here, and only one of them is what
+  # ANC exists for. All of them under the global ceiling are recorded for the activity
+  # graph; only the noisy band lights the idle menu-bar icon amber.
+  #
+  #   < 1000 ft   rotorcraft and light GA. Measured over this zone, every sub-1000ft
+  #               crossing was a Bell 206/429 or a Cessna Caravan. A police helicopter
+  #               lighting the icon is a false alarm.
+  #   1000-3000   near-arrivals on final, GEAR DOWN — the loud ones. This is the band
+  #               worth reacting to; flights that actually engaged ANC crossed at
+  #               1475-1800 ft.
+  #   3000-6000   arrivals taking the longer loop overhead toward the NE/SW runway,
+  #               inbound from the north-east. Gear still up; audible only with the
+  #               windows open. Real traffic, worth counting, not worth an alert.
+  #   > 6000      not LGA-bound at all (excluded by the global ceiling).
   @ambient_alert_ft 3000
+  @ambient_alert_min_ft 1000
   # How long that amber persists after the last low overflight.
   @ambient_clear_seconds 600
   # One aircraft crossing the zone spans several 60s polls; record it once per pass.
@@ -345,14 +358,16 @@ defmodule LgaPredictor.Poller do
       %{
         state
         | ambient_seen: Map.put(state.ambient_seen, key, now),
-          ambient_low_at:
-            if((ac.alt_ft || @ambient_alert_ft) < @ambient_alert_ft,
-              do: now,
-              else: state.ambient_low_at
-            )
+          ambient_low_at: if(alert_altitude?(ac.alt_ft), do: now, else: state.ambient_low_at)
       }
     end
   end
+
+  # Unknown altitude never raises the flag — an absent reading is not evidence.
+  defp alert_altitude?(alt) when is_number(alt),
+    do: alt >= @ambient_alert_min_ft and alt < @ambient_alert_ft
+
+  defp alert_altitude?(_), do: false
 
   defp prune_ambient_seen(state) do
     cutoff = System.os_time(:second) - @ambient_dedupe_seconds

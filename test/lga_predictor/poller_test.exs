@@ -133,6 +133,17 @@ defmodule LgaPredictor.PollerTest do
     assert Poller.status().ambient, "under 3000 ft should light the idle icon"
   end
 
+  test "a helicopter below 1000 ft is tracked but does not raise the ambient flag" do
+    # Measured over this zone, everything under 1000 ft was rotorcraft or light GA,
+    # while real LGA arrivals crossed at 1475-1800 ft. A police helicopter must not
+    # make the icon claim you need ANC.
+    start_with_history(fetcher: fn _ -> {:ok, [low_overflight(400.0)]} end)
+    ambient_tick!()
+
+    assert [%{engaged: false}] = LgaPredictor.History.all(), "still counted in the graph"
+    refute Poller.status().ambient, "too low to be an airliner"
+  end
+
   test "traffic above 3000 ft is tracked but does not raise the ambient flag" do
     start_with_history(fetcher: fn _ -> {:ok, [low_overflight(4500.0)]} end)
     ambient_tick!()
