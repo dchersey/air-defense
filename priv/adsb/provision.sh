@@ -183,10 +183,29 @@ else edge volt ok "ADS-B: UNDER-VOLTAGE"; fi
 MSG=$(curl -s -m 8 http://localhost/tar1090/data/aircraft.json 2>/dev/null | jq -r '.messages // empty')
 PREV=$(cat "$STATE/messages" 2>/dev/null || echo "")
 [ -n "$MSG" ] && printf '%s' "$MSG" > "$STATE/messages"
+
+# A knock on the USB connector aborts the bulk transfer while the dongle keeps
+# answering control requests: it stays visible in lsusb, readsb keeps running at ~14%
+# CPU processing an empty stream, and never exits — so Restart=always cannot help. The
+# cure is a restart, so try that ONCE before paging a human. Counting MSG==0 as frozen
+# matters here: readsb zeroes its counter on restart, so a plain "changed since last
+# time" test would read a still-deaf receiver as healthy on the very next check.
 if [ -z "$MSG" ]; then
   edge deaf bad "ADS-B: decoder unreachable" "readsb/tar1090 not answering on localhost. Service state: $(systemctl is-active readsb)." 1
-elif [ -n "$PREV" ] && [ "$MSG" = "$PREV" ]; then
-  edge deaf bad "ADS-B: receiver is DEAF" "readsb is running but decoded 0 new messages since the last check. Check the SDR dongle and antenna." 1
+elif [ "$MSG" = "0" ] || { [ -n "$PREV" ] && [ "$MSG" = "$PREV" ]; }; then
+  LAST=$(cat "$STATE/deaf-restart" 2>/dev/null || echo 0)
+  NOW=$(date +%s)
+  if [ $((NOW - LAST)) -gt 1800 ]; then
+    # First stall in 30 min: bounce readsb and say so at low priority. The notification
+    # is the audit trail — repeated "self-healed" messages mean a failing connector,
+    # which silent restarts would otherwise hide.
+    printf '%s' "$NOW" > "$STATE/deaf-restart"
+    systemctl restart readsb
+    notify "ADS-B: decoder stalled — restarted" \
+      "readsb was running but decoding nothing (stalled USB transfer). Restarted it; you will be paged if that did not fix it. Repeats here mean a failing cable or connector." -1
+  else
+    edge deaf bad "ADS-B: receiver is DEAF" "readsb decoded 0 new messages AND a restart in the last 30 min did not fix it. Check the SDR dongle, its USB cable, and the antenna." 1
+  fi
 else edge deaf ok "ADS-B: receiver is DEAF"; fi
 
 ## Automatic patching silently stopped.
