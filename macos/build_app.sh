@@ -4,6 +4,15 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
+
+# Single source of truth for the version: mix.exs. The bundle used to hardcode 1.0, so
+# every release reported the same version to Finder and to `defaults read` — meaning you
+# could not tell from the installed app which build you were actually running, which is
+# exactly what you want to check after an install.
+version="$(sed -n 's/^[[:space:]]*version: "\([^"]*\)".*/\1/p' "$here/../mix.exs" | head -1)"
+version="${version:-0.0.0}"
+echo "Version: $version"
+
 cd "$here/ControlPanel"
 
 echo "Building (release)…"
@@ -37,7 +46,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>AirDefense</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+  <key>CFBundleVersion</key><string>__VERSION__</string>
   <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>LSUIElement</key><true/>
   <!-- Required: CoreBluetooth is used to set the AirPods listening mode without
@@ -46,6 +56,10 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+
+# The plist heredoc is quoted on purpose (no shell expansion inside the XML); fill the
+# version in afterwards.
+/usr/bin/sed -i '' "s/__VERSION__/$version/g" "$app/Contents/Info.plist"
 
 # Code-sign with a stable identity so macOS keeps the Accessibility grant across
 # rebuilds (unsigned/ad-hoc rebuilds silently lose TCC trust — see SIGN_IDENTITY).
