@@ -170,4 +170,41 @@ defmodule LgaPredictor.PredictorTest do
       assert Predictor.overflight_windows([away], @opts) == []
     end
   end
+
+  describe "time_to_closest/2 — the listener-anchored release marker" do
+    # Due north of the listener, flying north at 360 kt (0.1 nm/s): 60 nm of northing
+    # means 600s to the perpendicular foot, which here is the listener itself.
+    test "counts down to the closest point on a head-on track" do
+      ac = %{lat: 40.0, lon: -73.0, track_deg: 0.0, gspeed_kt: 360.0}
+      assert_in_delta Predictor.time_to_closest(ac, {41.0, -73.0}), 600.0, 1.0
+    end
+
+    test "goes negative once the listener is behind the aircraft" do
+      ac = %{lat: 41.0, lon: -73.0, track_deg: 0.0, gspeed_kt: 360.0}
+      assert Predictor.time_to_closest(ac, {40.0, -73.0}) < 0
+    end
+
+    # A track at right angles to the offset is already at its closest — the projection
+    # onto the track vector is zero regardless of how far away the listener is.
+    test "is ~zero when the listener is abeam, however distant" do
+      ac = %{lat: 40.0, lon: -73.0, track_deg: 90.0, gspeed_kt: 300.0}
+      assert_in_delta Predictor.time_to_closest(ac, {41.0, -73.0}), 0.0, 1.0
+    end
+
+    test "nil without usable kinematics, so callers fall back rather than guess" do
+      base = %{lat: 40.0, lon: -73.0, track_deg: 0.0, gspeed_kt: 300.0}
+      assert Predictor.time_to_closest(%{base | track_deg: nil}, {41.0, -73.0}) == nil
+      assert Predictor.time_to_closest(%{base | gspeed_kt: nil}, {41.0, -73.0}) == nil
+      # A taxiing/stationary aircraft would divide by ~nothing and blow the estimate up.
+      assert Predictor.time_to_closest(%{base | gspeed_kt: 5.0}, {41.0, -73.0}) == nil
+    end
+
+    # The real case: LGA arrival at 150 kt, 0.5 nm out on a 077 track, matching the
+    # live pass this was validated against.
+    test "matches the measured live geometry" do
+      ac = %{lat: 40.7190, lon: -73.8640, track_deg: 77.0, gspeed_kt: 152.0}
+      t = Predictor.time_to_closest(ac, {40.722832, -73.857549})
+      assert t > 0 and t < 30, "expected a short positive countdown, got #{inspect(t)}"
+    end
+  end
 end

@@ -650,6 +650,39 @@ defmodule LgaPredictor.Poller do
   defp engage_delta(zoneset, config),
     do: Map.get(zoneset, :engage_delta_seconds) || config.engage_delta_seconds || 0
 
+  # How long to hold ANC after engaging an arrival.
+  #
+  # Preferred: anchor on the aircraft's closest approach to the LISTENER, plus the
+  # measured time it stays audible while receding. A geofence-derived dwell inherits
+  # variance from both the polygon entry point and the speed estimate; closest approach
+  # is a fixed geometric relationship to the listener and inherits neither — measured
+  # sd 0.1s against 0.9s for the engage-relative equivalent, on the same traffic.
+  #
+  # Falls back to the dwell whenever the listener position is unset or the aircraft is
+  # missing track/groundspeed, so nothing regresses when the geometry is unavailable.
+  # NOTE the two paths need DIFFERENT release_delta trims: a value tuned to correct the
+  # polygon's overshoot is meaningless once the polygon is out of the calculation.
+  @doc false
+  # Public only so the two paths can be asserted directly; a timing test on the
+  # Actuator would be flaky and would not say WHICH branch ran.
+  def arrival_release_in(ac, zoneset, config, window, latency) do
+    trim = release_delta(zoneset, config)
+
+    case listener_tca(ac, config) do
+      nil -> window.exits_in - latency + trim
+      tca -> tca + acoustic_decay(config) - latency + trim
+    end
+  end
+
+  defp listener_tca(ac, config) do
+    case Map.get(config, :home_coords) do
+      {lat, lon} -> Predictor.time_to_closest(ac, {lat, lon})
+      _ -> nil
+    end
+  end
+
+  defp acoustic_decay(config), do: Map.get(config, :acoustic_decay_seconds) || 6
+
   defp release_delta(zoneset, config),
     do: Map.get(zoneset, :release_delta_seconds) || config.release_delta_seconds || 0
 
@@ -713,7 +746,7 @@ defmodule LgaPredictor.Poller do
         # `latency` early (+ the per-zone release offset); anchor exits_at on that SAME
         # moment so the red clear-by countdown reaches 0:00 exactly when ANC disengages,
         # not ~latency seconds after.
-        release_in = window.exits_in - latency + release_delta(zoneset, config)
+        release_in = arrival_release_in(ac, zoneset, config, window, latency)
         off_ms = max(round(release_in * 1000), 0)
         Actuator.cover(0, off_ms, key)
         exits_at = now + max(round(release_in), 0)

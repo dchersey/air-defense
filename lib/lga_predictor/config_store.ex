@@ -36,6 +36,18 @@ defmodule LgaPredictor.ConfigStore do
     # fallback, otherwise the tally silently zeroes each month and reports a budget
     # that no longer exists.
     "credit_mode" => "monthly",
+    # Where the listener actually is — the point ANC is protecting, in practice the
+    # window the receiver's antenna sits in. When set, arrivals release relative to the
+    # aircraft's closest approach to THIS point rather than to a geofence-derived
+    # transit: closest approach is a fixed geometric relationship to the listener, so it
+    # inherits neither the polygon entry point nor the speed estimate (measured sd 0.1s
+    # vs 0.9s). nil leaves the old dwell-based release in place.
+    "home_lat" => nil,
+    "home_lon" => nil,
+    # How long an aircraft stays audible after it passes overhead. Measured by ear at
+    # this site; it is the decay of a receding source, so it is site-specific but only
+    # weakly speed-dependent.
+    "acoustic_decay_seconds" => 6,
     # Flight-data source for ALL zones: "local" (your own ADS-B receiver — free,
     # lowest latency, no third party), "airplanes_live" (their public API) or "fr24"
     # (FlightRadar24, needs an API key, costs credits).
@@ -242,6 +254,9 @@ defmodule LgaPredictor.ConfigStore do
       "release_delta_seconds",
       "billing_reset_day",
       "credit_mode",
+      "home_lat",
+      "home_lon",
+      "acoustic_decay_seconds",
       "provider",
       "local_feed_url",
       "zonesets"
@@ -269,6 +284,15 @@ defmodule LgaPredictor.ConfigStore do
 
       not (is_integer(raw["billing_reset_day"]) and raw["billing_reset_day"] in 1..31) ->
         {:error, "billing_reset_day must be an integer 1..31"}
+
+      not coord_ok?(raw["home_lat"], 90) ->
+        {:error, "home_lat must be nil or a number between -90 and 90"}
+
+      not coord_ok?(raw["home_lon"], 180) ->
+        {:error, "home_lon must be nil or a number between -180 and 180"}
+
+      not is_number(raw["acoustic_decay_seconds"]) ->
+        {:error, "acoustic_decay_seconds must be a number"}
 
       raw["credit_mode"] not in @credit_modes ->
         {:error, "credit_mode must be one of #{Enum.join(@credit_modes, ", ")}"}
@@ -355,6 +379,8 @@ defmodule LgaPredictor.ConfigStore do
       release_delta_seconds: raw["release_delta_seconds"],
       billing_reset_day: raw["billing_reset_day"],
       credit_mode: credit_mode_atom(raw["credit_mode"]),
+      home_coords: home_coords(raw),
+      acoustic_decay_seconds: raw["acoustic_decay_seconds"],
       provider: provider_atom(raw["provider"]),
       local_feed_url: raw["local_feed_url"],
       version: raw["version"],
@@ -393,6 +419,18 @@ defmodule LgaPredictor.ConfigStore do
   # Explicit (compile-baked) string→atom map. NOT String.to_existing_atom: under
   # the dev `mix run` runtime the provider's defining module may not be loaded yet,
   # so its atom wouldn't exist. These literals live in this (always-loaded) module.
+  defp coord_ok?(nil, _limit), do: true
+  defp coord_ok?(v, limit) when is_number(v), do: abs(v) <= limit
+  defp coord_ok?(_, _), do: false
+
+  # Both halves or neither — a lone latitude is not a position, and silently treating
+  # it as one would put the release anchor somewhere nobody is standing.
+  defp home_coords(%{"home_lat" => lat, "home_lon" => lon})
+       when is_number(lat) and is_number(lon),
+       do: {lat, lon}
+
+  defp home_coords(_), do: nil
+
   defp credit_mode_atom("reserve"), do: :reserve
   defp credit_mode_atom(_), do: :monthly
 

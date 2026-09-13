@@ -165,6 +165,52 @@ defmodule LgaPredictor.PollerTest do
     assert Poller.status().active?, "the session is still running, just paused"
   end
 
+  describe "arrival release anchor" do
+    # 0.24 nm due north of the aircraft at 100 kt (0.02778 nm/s) -> ~8.6s to closest.
+    defp listener_cfg(opts \\ []) do
+      config()
+      |> Map.put(:home_coords, Keyword.get(opts, :coords, {40.732, -73.864}))
+      |> Map.put(:acoustic_decay_seconds, Keyword.get(opts, :decay, 6))
+    end
+
+    defp window(exits_in), do: %{enters_in: 0, exits_in: exits_in, dwell_seconds: exits_in}
+
+    test "anchors on closest approach to the listener plus the acoustic decay" do
+      cfg = listener_cfg()
+      [zs] = cfg.zonesets
+      r = Poller.arrival_release_in(inbound(), zs, cfg, window(99.0), 0.0)
+      # ~8.6s to closest + 6s decay; nothing to do with the 99s dwell it was handed.
+      assert_in_delta r, 14.6, 1.0
+    end
+
+    test "falls back to the geofence dwell when no listener position is set" do
+      cfg = config()
+      [zs] = cfg.zonesets
+      assert Poller.arrival_release_in(inbound(), zs, cfg, window(99.0), 0.0) == 99.0
+    end
+
+    test "falls back when the aircraft has no usable track or groundspeed" do
+      cfg = listener_cfg()
+      [zs] = cfg.zonesets
+      blind = %{inbound() | track_deg: nil}
+      assert Poller.arrival_release_in(blind, zs, cfg, window(42.0), 0.0) == 42.0
+    end
+
+    test "latency and the manual trim still apply to the anchored path" do
+      cfg = listener_cfg() |> Map.put(:release_delta_seconds, -3)
+      [zs] = cfg.zonesets
+      r = Poller.arrival_release_in(inbound(), zs, cfg, window(99.0), 2.0)
+      assert_in_delta r, 14.6 - 2.0 - 3.0, 1.0
+    end
+
+    test "a listener already behind the aircraft releases promptly, not never" do
+      # Closest approach is in the past -> negative tca; the decay is all that is left.
+      cfg = listener_cfg(coords: {40.700, -73.864})
+      [zs] = cfg.zonesets
+      assert Poller.arrival_release_in(inbound(), zs, cfg, window(99.0), 0.0) < 6.0
+    end
+  end
+
   test "is idle until a session starts" do
     start([])
     assert %{active?: false} = Poller.status()
