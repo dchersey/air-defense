@@ -126,6 +126,28 @@ systemctl daemon-reload; systemctl restart apt-daily-upgrade.timer
 systemctl enable unattended-upgrades.service >/dev/null 2>&1
 ok "Debian security at 01:00, reboot 02:00; Pi kernel/firmware stay manual"
 
+step "needrestart (report which services need restarting after an upgrade)"
+apt-get install -y -qq needrestart >/dev/null 2>&1 && ok "installed"
+mkdir -p /etc/needrestart/conf.d
+cat > /etc/needrestart/conf.d/50-local.conf <<'CONF'
+# Report, never act.
+#
+# Debian's default is interactive ('i'), which pauses an upgrade to ask which services
+# to restart — that hangs an unattended or over-ssh `apt full-upgrade` waiting for input.
+# List-only keeps the useful half (it still names the services running on replaced
+# libraries, and still prints the kernel/reboot hint) without prompting or restarting
+# anything behind your back.
+#
+# On this box a glibc or OpenSSL change is best applied with a deliberate reboot anyway:
+# readsb holds the USB SDR, and restarting it mid-flight is not a decision a package hook
+# should be making.
+$nrconf{restart} = 'l';
+CONF
+ok "set to list-only"
+echo "    Note: a MANUAL 'apt full-upgrade' never triggers the 02:00 auto-reboot window."
+echo "    That fires only when a kernel package writes /var/run/reboot-required, and Pi"
+echo "    kernels are deliberately excluded from unattended upgrades. Reboot by hand."
+
 step "Health monitor (Pushover)"
 cat > /usr/local/bin/adsb-health <<'HEALTH'
 #!/bin/bash
