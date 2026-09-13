@@ -142,8 +142,14 @@ cat > /etc/needrestart/conf.d/50-local.conf <<'CONF'
 # readsb holds the USB SDR, and restarting it mid-flight is not a decision a package hook
 # should be making.
 $nrconf{restart} = 'l';
+
+# Microcode updates are an x86 concept; there is nothing to check on aarch64, so the
+# probe fails every run and prints "Failed to check for processor microcode upgrades".
+# A permanent false error is how you teach yourself to stop reading the output of a
+# tool whose whole job is to tell you something.
+$nrconf{ucodehints} = 0;
 CONF
-ok "set to list-only"
+ok "set to list-only, microcode hints off (x86-only concept)"
 echo "    Note: a MANUAL 'apt full-upgrade' never triggers the 02:00 auto-reboot window."
 echo "    That fires only when a kernel package writes /var/run/reboot-required, and Pi"
 echo "    kernels are deliberately excluded from unattended upgrades. Reboot by hand."
