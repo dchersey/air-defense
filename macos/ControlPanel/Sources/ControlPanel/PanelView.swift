@@ -837,6 +837,12 @@ private struct ActivityStrip: View {
   }
 
   private func routeLabel(_ flight: Flight) -> String {
+    // Observed-only rows say what the SYSTEM was doing, not which aircraft it was.
+    // A run of identical "passive" labels reads as a period rather than a list, which
+    // makes a gap in monitoring obvious at a glance — and the callsign of a flight
+    // nothing acted on is not information worth a column. Deliberately not "private",
+    // which means looked-up-and-unknown.
+    if flight.engaged == false { return "passive" }
     if let o = flight.origin, let d = flight.destination { return "\(o) → \(d)" }
     if flight.isPrivate == true { return "private" }
     return flight.callsign ?? "—"
