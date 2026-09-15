@@ -235,6 +235,7 @@ defmodule LgaPredictor.API.Router do
       # Low traffic crossed the ANC zone recently while ANC was off — lights the idle
       # menu-bar icon amber.
       ambient: Map.get(status, :ambient, false),
+      receiver_ok: Map.get(status, :receiver_ok),
       approx_credits: status.approx_credits,
       zonesets: status.zonesets,
       inbound_at: status.inbound_at,

@@ -107,6 +107,46 @@ defmodule LgaPredictor.PollerTest do
     refute Poller.status().active?
   end
 
+  # receiver_ok is reported only for the local provider — the other feeds have no
+  # receiver of ours to be down, and their outages are feed_ok's business. The test
+  # config must therefore say :local, or the flag reads nil and `refute` passes for the
+  # wrong reason.
+  defp local_config, do: fn -> config() |> Map.put(:provider, :local) end
+
+  test "a receiver that stops answering is flagged even with no session running" do
+    # The case that matters: nothing else is watching. The Pi's own health monitor dies
+    # with the Pi, and feed_ok only means anything while a session polls.
+    start_with_history(config_fun: local_config(), fetcher: fn _ -> {:error, :timeout} end)
+    ambient_tick!()
+
+    assert Poller.status().receiver_ok == false
+    refute Poller.status().active?, "and with no session, so nothing else would notice"
+  end
+
+  test "the receiver flag clears once it answers again" do
+    alive = fn _ -> {:ok, [low_overflight(2000.0)]} end
+    dead = fn _ -> {:error, :timeout} end
+    agent = start_supervised!({Agent, fn -> dead end})
+
+    start_with_history(
+      config_fun: local_config(),
+      fetcher: fn box -> Agent.get(agent, & &1).(box) end
+    )
+
+    ambient_tick!()
+    assert Poller.status().receiver_ok == false
+
+    Agent.update(agent, fn _ -> alive end)
+    ambient_tick!()
+    assert Poller.status().receiver_ok == true
+  end
+
+  test "providers with no receiver of ours report nil, not a false alarm" do
+    start_with_history(fetcher: fn _ -> {:error, :timeout} end)
+    ambient_tick!()
+    assert Poller.status().receiver_ok == nil
+  end
+
   test "ambient tracking is skipped on a metered provider" do
     start_with_history(
       config_fun: fn -> config() |> Map.put(:provider, :fr24) end,

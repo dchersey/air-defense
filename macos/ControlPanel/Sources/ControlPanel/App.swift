@@ -30,12 +30,18 @@ struct ControlPanelApp: App {
   // the same reason — this branch is checked BEFORE menuImage, so without the guard the
   // green mark wins and the fallback icon below is unreachable dead code.
   private var isMonitoring: Bool {
-    model.active && model.phase == .idle && model.feedOk && !isFallenBack
+    model.active && model.phase == .idle && model.feedOk && !isFallenBack && !isReceiverDown
   }
 
   // Session running but the data feed is unreachable — we can't see traffic at all.
   // Only trust this when the backend itself is reachable; a dead backend is `.offline`.
   private var isBlind: Bool { model.active && model.reachable && !model.feedOk }
+
+  // The local receiver has stopped answering. Deliberately NOT gated on a session:
+  // a receiver that dies while idle is invisible from every other angle — its own
+  // health monitor cannot report its own death, and feed_ok only means anything while
+  // a session is polling. This is the one vantage point that survives the Pi dying.
+  private var isReceiverDown: Bool { model.reachable && model.receiverOk == false }
 
   // Running on a provider we did NOT configure, because the configured one failed and
   // the poller fell back. The feed is healthy again, so every other signal reads normal
@@ -66,6 +72,13 @@ struct ControlPanelApp: App {
   private var menuImage: NSImage {
     // Blind takes priority over every phase below: the session is up and the timer is
     // running, but no traffic can be seen, so nothing else the icon could say is true.
+    // Highest priority: with no receiver there is no ground truth at all, so nothing
+    // else the icon could say is trustworthy. Red rather than the amber used for a
+    // session-time feed outage — this one needs a human, and it persists with no
+    // session running.
+    if isReceiverDown {
+      return symbol("antenna.radiowaves.left.and.right.slash", tint: .systemRed, bold: true)
+    }
     if isBlind {
       return symbol("antenna.radiowaves.left.and.right.slash", tint: lockedOnAmber, bold: true)
     }

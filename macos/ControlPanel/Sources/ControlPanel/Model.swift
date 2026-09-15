@@ -86,6 +86,8 @@ struct StatusResponse: Codable {
   let creditMode: String?
   // Low traffic crossed the zone recently while no session was running.
   let ambient: Bool?
+  // false = the local receiver is not answering. nil for providers with no receiver.
+  let receiverOk: Bool?
   let billingResetDay: Int
   let provider: String
   let localFeedUrl: String?
@@ -145,6 +147,8 @@ final class StatusModel {
   var creditMode = "monthly"
   // Recent low overflights with ANC off — lights the idle menu-bar icon amber.
   var ambient = false
+  // nil until known; false means the receiver has stopped answering.
+  var receiverOk: Bool?
   // Day-of-month the FR24 allotment resets (billing anniversary; 1 = calendar month).
   var billingResetDay = 1
   // Flight-data source for all zones, + whether an FR24 key is stored.
@@ -267,6 +271,7 @@ final class StatusModel {
       creditsBudgetMonth = status.creditsBudgetMonth
       creditMode = status.creditMode ?? "monthly"
       ambient = status.ambient ?? false
+      receiverOk = status.receiverOk
       billingResetDay = status.billingResetDay
       provider = status.provider
       fr24KeyPresent = status.fr24KeyPresent

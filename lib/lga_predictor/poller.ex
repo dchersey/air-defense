@@ -319,6 +319,7 @@ defmodule LgaPredictor.Poller do
   defp ambient_zoneset(state, zoneset, config) do
     case fetch(state, query_box(zoneset)) do
       {:ok, aircraft} ->
+        state = mark_receiver(state, true)
         ceiling = zoneset.altitude_ceiling_ft || config.global_ceiling_ft
         now = System.os_time(:second)
 
@@ -332,10 +333,19 @@ defmodule LgaPredictor.Poller do
         |> Enum.reduce(state, &record_ambient(&2, &1, now))
 
       {:error, _reason} ->
-        # Ambient is best-effort: a failed poll must not mark the feed down or trip the
-        # provider failover, both of which belong to the session path.
-        state
+        # Ambient stays best-effort — it must not mark the feed down or trip the provider
+        # failover, both of which belong to the session path. But it IS the only thing
+        # watching the receiver when no session is running, so record that separately.
+        mark_receiver(state, false)
     end
+  end
+
+  defp mark_receiver(state, ok?) do
+    if state.receiver_ok != ok? do
+      Logger.info("[poller] receiver #{if ok?, do: "reachable again", else: "UNREACHABLE"}")
+    end
+
+    %{state | receiver_ok: ok?}
   end
 
   defp record_ambient(state, ac, now) do
@@ -1249,6 +1259,8 @@ defmodule LgaPredictor.Poller do
       polls: state.polls,
       # Low traffic seen over the ANC zone recently while ANC was NOT running.
       ambient: ambient_active?(state),
+      # nil for providers that have no local receiver to be down.
+      receiver_ok: if(active_provider(state) == :local, do: state.receiver_ok, else: nil),
       approx_credits: state.credits,
       feed_ok: feed_ok?(state),
       # What we're actually fetching from, and why it differs from the configured
@@ -1316,6 +1328,11 @@ defmodule LgaPredictor.Poller do
       # Pooled final-approach tracks as {unix_seconds, track}. One 60s snapshot rarely
       # holds enough arrivals inside 6 nm to decide, so observations accumulate.
       approach_samples: [],
+      # Whether the local receiver answered its last ambient poll. Distinct from
+      # feed_ok, which only means anything while a session is polling — a receiver that
+      # dies with no session running is otherwise invisible from both ends: its own
+      # health monitor cannot report its own death, and nothing here was watching.
+      receiver_ok: true,
       headphones_connected: true,
       keep_alive_held: false,
       actioned: MapSet.new(),
