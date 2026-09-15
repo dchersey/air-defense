@@ -744,6 +744,23 @@ private struct ActivityStrip: View {
   private var flightList: some View {
     VStack(alignment: .leading, spacing: 5) {
       ForEach(model.recent.prefix(10)) { flight in
+        // An approach change is a fact about the airport, not an overflight, so it gets
+        // a full-width line instead of being forced into the flight columns. It is the
+        // answer to "why did the list go quiet" — without it, a configuration swing and
+        // a dead receiver look identical from here.
+        if let rwy = flight.approach {
+          HStack(spacing: 6) {
+            Image(systemName: "arrow.triangle.turn.up.right.diamond")
+              .font(.adMono).foregroundStyle(Palette.inbound)
+            Text(flight.approachFrom.map { "LGA \($0) → \(rwy)" } ?? "LGA landing \(rwy)")
+              .font(.adMono).foregroundStyle(Palette.ink2)
+            Spacer(minLength: 8)
+            Text(ancTime(flight)).font(.adMono).monospacedDigit()
+              .foregroundStyle(Palette.ink3)
+              .frame(width: 92, alignment: .trailing)
+          }
+          .contentShape(Rectangle())
+        } else {
         // Observed-only: crossed the zone while ANC was off. Dimmed throughout, and the
         // timestamp is not in the accent colour because nothing was engaged at it.
         let observed = flight.engaged == false
@@ -784,6 +801,7 @@ private struct ActivityStrip: View {
         // Only SET on enter; clearing is handled once at the list level (below) so
         // moving between rows never blips through the empty/hint state.
         .onHover { inside in if inside { hoveredFlightID = flight.id } }
+        }
       }
 
       // Hover detail: the full aircraft name for the hovered row — a real .help()

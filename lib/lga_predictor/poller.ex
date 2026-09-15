@@ -25,7 +25,7 @@ defmodule LgaPredictor.Poller do
   use GenServer
   require Logger
 
-  alias LgaPredictor.{Actuator, ConfigStore, Geo, History, KeepAlive, Predictor}
+  alias LgaPredictor.{Actuator, Approach, ConfigStore, Geo, History, KeepAlive, Predictor}
 
   @credits_per_aircraft 6
 
@@ -306,6 +306,7 @@ defmodule LgaPredictor.Poller do
       |> Enum.filter(&(&1.enabled and ambient_wanted?(state, &1.id)))
       |> Enum.reduce(state, &ambient_zoneset(&2, &1, config))
       |> prune_ambient_seen()
+      |> check_approach(config)
     end
   end
 
@@ -368,6 +369,81 @@ defmodule LgaPredictor.Poller do
     do: alt >= @ambient_alert_min_ft and alt < @ambient_alert_ft
 
   defp alert_altitude?(_), do: false
+
+  # Which runway the airport is landing on, recorded only when it CHANGES.
+  #
+  # A configuration swing stops arrivals crossing the zone entirely, and from inside the
+  # zone that is indistinguishable from a dead receiver or an empty sky — the failure
+  # mode is silence, which looks the same whatever caused it. Naming the change in the
+  # flight list turns twelve hours of nothing into a fact.
+  #
+  # Needs a wider view than the zone box, so it queries around the field rather than
+  # reusing the zoneset's bounds. Free on a local receiver (the whole picture arrives in
+  # one fetch and is trimmed client-side); skipped entirely on a metered provider, like
+  # everything else in the ambient path.
+  # Samples older than this stop counting, so a genuine configuration change is reflected
+  # within roughly this long rather than being outvoted by stale observations forever.
+  @approach_window_seconds 900
+
+  defp check_approach(state, config) do
+    with {alat, alon} <- Map.get(config, :airport_coords),
+         runways when runways != [] <- Map.get(config, :runways, []),
+         {:ok, aircraft} <- fetch(state, airport_box(alat, alon)) do
+      now = System.os_time(:second)
+      cutoff = now - @approach_window_seconds
+
+      fresh =
+        aircraft
+        |> Approach.arrival_tracks({alat, alon})
+        |> Enum.map(&{now, &1})
+
+      pool =
+        (fresh ++ state.approach_samples)
+        |> Enum.filter(fn {t, _} -> t > cutoff end)
+        |> Enum.take(60)
+
+      state = %{state | approach_samples: pool}
+      decide_approach(state, Enum.map(pool, &elem(&1, 1)), runways)
+    else
+      _ -> state
+    end
+  end
+
+  defp decide_approach(state, tracks, runways) do
+    case Approach.runway_from_tracks(tracks, runways) do
+      {name, track, n} ->
+        if name != state.active_runway do
+          Logger.info(
+            "[poller] approach: #{state.active_runway || "(unknown)"} -> #{name} " <>
+              "(median final #{round(track)}deg, #{n} samples)"
+          )
+
+          record_history(%{
+            at: System.os_time(:second),
+            callsign: nil,
+            hex: nil,
+            type: nil,
+            alt_ft: nil,
+            enters_in: 0,
+            dwell: 0,
+            engaged: false,
+            approach: name,
+            approach_from: state.active_runway
+          })
+
+          %{state | active_runway: name}
+        else
+          state
+        end
+
+      nil ->
+        state
+    end
+  end
+
+  # A box around the field wide enough to hold aircraft on final. @arrival_radius_nm in
+  # Approach is 6 nm; 0.2 degrees is ~12 nm of latitude, so this comfortably contains it.
+  defp airport_box(lat, lon), do: {lat + 0.2, lat - 0.2, lon - 0.25, lon + 0.25}
 
   defp prune_ambient_seen(state) do
     cutoff = System.os_time(:second) - @ambient_dedupe_seconds
@@ -1234,6 +1310,12 @@ defmodule LgaPredictor.Poller do
       ambient_timer: nil,
       ambient_seen: %{},
       ambient_low_at: nil,
+      # Last inferred landing runway, so a CHANGE can be recorded rather than the
+      # current state re-announced every minute.
+      active_runway: nil,
+      # Pooled final-approach tracks as {unix_seconds, track}. One 60s snapshot rarely
+      # holds enough arrivals inside 6 nm to decide, so observations accumulate.
+      approach_samples: [],
       headphones_connected: true,
       keep_alive_held: false,
       actioned: MapSet.new(),

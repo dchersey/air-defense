@@ -328,6 +328,9 @@ defmodule LgaPredictor.API.Router do
     |> Map.put(:engaged, engaged)
   end
 
+  # Approach-change events carry no callsign and must not be route-resolved; they are
+  # rendered as a timeline marker rather than a flight.
+
   # Echo the persisted config back as plain JSON (the raw form, so the UI
   # round-trips the GeoJSON it sent rather than the derived polygons/tuples).
   defp config_payload, do: ConfigStore.raw()

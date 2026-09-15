@@ -48,6 +48,15 @@ defmodule LgaPredictor.ConfigStore do
     # this site; it is the decay of a receding source, so it is site-specific but only
     # weakly speed-dependent.
     "acoustic_decay_seconds" => 6,
+    # The airport whose arrivals matter, and its runways. When both are set, the active
+    # landing runway is inferred from descending traffic near the field, and a change is
+    # recorded in the flight list — so "no flights for twelve hours" can be told apart
+    # from "they are landing the other way", which look identical from inside the zone.
+    # Empty disables it.
+    "airport_lat" => nil,
+    "airport_lon" => nil,
+    # [%{"name" => "4", "heading" => 40}, ...]
+    "runways" => [],
     # Flight-data source for ALL zones: "local" (your own ADS-B receiver — free,
     # lowest latency, no third party), "airplanes_live" (their public API) or "fr24"
     # (FlightRadar24, needs an API key, costs credits).
@@ -257,6 +266,9 @@ defmodule LgaPredictor.ConfigStore do
       "home_lat",
       "home_lon",
       "acoustic_decay_seconds",
+      "airport_lat",
+      "airport_lon",
+      "runways",
       "provider",
       "local_feed_url",
       "zonesets"
@@ -290,6 +302,15 @@ defmodule LgaPredictor.ConfigStore do
 
       not coord_ok?(raw["home_lon"], 180) ->
         {:error, "home_lon must be nil or a number between -180 and 180"}
+
+      not coord_ok?(raw["airport_lat"], 90) ->
+        {:error, "airport_lat must be nil or a number between -90 and 90"}
+
+      not coord_ok?(raw["airport_lon"], 180) ->
+        {:error, "airport_lon must be nil or a number between -180 and 180"}
+
+      not runways_ok?(raw["runways"]) ->
+        {:error, ~s(runways must be a list of %{"name" => string, "heading" => number}) }
 
       not is_number(raw["acoustic_decay_seconds"]) ->
         {:error, "acoustic_decay_seconds must be a number"}
@@ -381,6 +402,8 @@ defmodule LgaPredictor.ConfigStore do
       credit_mode: credit_mode_atom(raw["credit_mode"]),
       home_coords: home_coords(raw),
       acoustic_decay_seconds: raw["acoustic_decay_seconds"],
+      airport_coords: airport_coords(raw),
+      runways: derive_runways(raw["runways"]),
       provider: provider_atom(raw["provider"]),
       local_feed_url: raw["local_feed_url"],
       version: raw["version"],
@@ -419,6 +442,26 @@ defmodule LgaPredictor.ConfigStore do
   # Explicit (compile-baked) string→atom map. NOT String.to_existing_atom: under
   # the dev `mix run` runtime the provider's defining module may not be loaded yet,
   # so its atom wouldn't exist. These literals live in this (always-loaded) module.
+  defp runways_ok?(list) when is_list(list) do
+    Enum.all?(list, fn
+      %{"name" => n, "heading" => h} -> is_binary(n) and is_number(h)
+      _ -> false
+    end)
+  end
+
+  defp runways_ok?(_), do: false
+
+  defp airport_coords(%{"airport_lat" => lat, "airport_lon" => lon})
+       when is_number(lat) and is_number(lon),
+       do: {lat, lon}
+
+  defp airport_coords(_), do: nil
+
+  defp derive_runways(list) when is_list(list),
+    do: Enum.map(list, &%{name: &1["name"], heading: &1["heading"]})
+
+  defp derive_runways(_), do: []
+
   defp coord_ok?(nil, _limit), do: true
   defp coord_ok?(v, limit) when is_number(v), do: abs(v) <= limit
   defp coord_ok?(_, _), do: false
