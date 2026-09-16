@@ -749,9 +749,12 @@ private struct ActivityStrip: View {
         // answer to "why did the list go quiet" — without it, a configuration swing and
         // a dead receiver look identical from here.
         //
-        // The label names what happens OVERHEAD ("low final", "high downwind", "not
-        // overhead"), not a runway: the same runway is fed by routes that differ
-        // entirely underfoot, so the runway alone would not say whether to expect noise.
+        // The label names what happens OVERHEAD, not a runway: the same runway is fed
+        // by routes that differ entirely underfoot, so the runway alone would not say
+        // whether to expect noise.
+        //   "low approach"    gear down, under 3000 ft — the loud one (amber icon)
+        //   "high approach"   the long north-east loop, a steady ~3600 ft, gear up
+        //   "river approach"  the field is busy and none of it comes over you
         if let path = flight.approach {
           HStack(spacing: 6) {
             Image(systemName: "arrow.triangle.turn.up.right.diamond")

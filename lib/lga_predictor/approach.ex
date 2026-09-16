@@ -15,13 +15,14 @@ defmodule LgaPredictor.Approach do
   supporting detail only, and the reported state is the path, measured where it is
   actually felt — overhead, by altitude band:
 
-    `:low_final`      overhead on final, gear down. The loud one.
-    `:high_downwind`  overhead on the longer loop, gear still up. Audible only with
-                      the windows open.
-    `:not_overhead`   the field is demonstrably landing, and none of it comes over
-                      the zone. Quiet — and the reason the flight list is empty.
+    `:low_approach`   overhead on final, gear down. The loud one.
+    `:high_approach`  overhead on the long loop that runs out to the north-east before
+                      turning back in — gear still up, a steady ~3600 ft. Audible only
+                      with the windows open.
+    `:river_approach` the field is demonstrably landing, and none of it comes over the
+                      zone. Quiet — and the reason the flight list is empty.
 
-  `:not_overhead` is only meaningful against evidence that the airport is busy, which is
+  `:river_approach` is only meaningful against evidence that the airport is busy, which is
   why arrivals near the field are counted at all: with no traffic anywhere, an empty zone
   says nothing. Both halves come from one fetch of the airspace around the field, so the
   classification costs nothing beyond what the runway inference already spends.
@@ -33,21 +34,23 @@ defmodule LgaPredictor.Approach do
   #
   #   < 1000 ft   rotorcraft and light GA — every sub-1000ft crossing measured over the
   #               zone was a Bell 206/429 or a Cessna Caravan. Never an airport arrival.
-  #   1000-3000   near-arrivals on final, GEAR DOWN. Flights that actually engaged ANC
-  #               crossed at 1475-1800 ft.
-  #   3000-6000   the longer loop overhead, inbound from the north-east, gear still up.
+  #   1000-3000   LOW APPROACH — near-arrivals on final, GEAR DOWN. Flights that
+  #               actually engaged ANC crossed at 1475-1800 ft. The loud one.
+  #   3000-6000   HIGH APPROACH — the long loop that runs out over the borough to the
+  #               north-east before turning back in. Gear still up; observed at a
+  #               steady 3575-3600 ft. Audible only with the windows open.
   #   > 6000      overflying traffic, not bound for this field at all.
   @rotor_ceiling_ft 1000
   @final_ceiling_ft 3000
   @arrival_ceiling_ft 6000
 
   @doc "Which overhead altitude band `alt` falls in, or nil when the altitude is unknown."
-  @spec overhead_band(number() | nil) :: :rotor | :low_final | :high_downwind | :transit | nil
+  @spec overhead_band(number() | nil) :: :rotor | :low_approach | :high_approach | :transit | nil
   def overhead_band(alt) when is_number(alt) do
     cond do
       alt < @rotor_ceiling_ft -> :rotor
-      alt < @final_ceiling_ft -> :low_final
-      alt < @arrival_ceiling_ft -> :high_downwind
+      alt < @final_ceiling_ft -> :low_approach
+      alt < @arrival_ceiling_ft -> :high_approach
       true -> :transit
     end
   end
@@ -92,36 +95,79 @@ defmodule LgaPredictor.Approach do
   # One crossing is a stray (a go-around, a single odd vector). Two is a pattern.
   @min_overhead 2
 
+  # TWO windows, because presence and absence need different amounts of evidence.
+  #
+  # `@band_window_seconds` decides WHICH approach is running, from crossings recent
+  # enough to still describe it.
+  #
+  # `@absence_seconds` is how long the zone must stay completely empty before claiming
+  # the arrivals have gone somewhere else. It has to comfortably exceed the gap between
+  # consecutive overflights or the marker flaps: measured on a steady high approach,
+  # crossings came at 7:48, 7:56, 8:01, 8:16, 8:34, 8:42, 8:59 — gaps of up to 18
+  # minutes. A single 15-minute window emptied during those gaps and reported the
+  # arrivals gone, then reported them back on the next aircraft, four times in seventy
+  # minutes while the altitudes never moved off 3600 ft.
+  #
+  # So a gap is not evidence: between crossings this reports nil and the state stands.
+  # Only a sustained absence, well past any normal gap, is allowed to assert a change.
+  # The retention window is therefore the load-bearing part — the caller must keep
+  # crossings for `absence_seconds/0`, or an ordinary gap empties the pool and the
+  # absence branch fires on it.
+  @band_window_seconds 1200
+  @absence_seconds 2700
+
+  @doc "How long a crossing stays relevant — the caller must retain at least this long."
+  @spec absence_seconds() :: pos_integer()
+  def absence_seconds, do: @absence_seconds
+
   @doc """
   The arrival path in use, from `traffic` (distinct descending aircraft near the field,
-  per `landing_traffic/2`) and `overhead` (altitudes of distinct aircraft that crossed
-  the zone), both over the same recent window.
+  per `landing_traffic/2`) and `overhead` — `{age_seconds, altitude}` for each distinct
+  aircraft that crossed the zone, retained for `@absence_seconds`.
 
-  Returns nil rather than guessing: too little traffic to interpret an empty zone, too
-  few crossings to call a band, or a genuinely mixed picture.
+  Returns nil rather than guessing: too little traffic to interpret an empty zone, a
+  mere gap between overflights, too few recent crossings to call a band, or a genuinely
+  mixed picture.
   """
-  @spec overhead_path(non_neg_integer(), [number() | nil]) ::
-          :low_final | :high_downwind | :not_overhead | nil
+  @spec overhead_path(non_neg_integer(), [{number(), number() | nil}]) ::
+          :low_approach | :high_approach | :river_approach | nil
   def overhead_path(traffic, overhead) when is_integer(traffic) and is_list(overhead) do
-    seen = Enum.map(overhead, &overhead_band/1)
-    bands = Enum.filter(seen, &(&1 in [:low_final, :high_downwind]))
+    # Only arrival-band crossings count. Rotorcraft underneath and transits above say
+    # nothing about which approach the airport is using.
+    arrivals_overhead =
+      for {age, alt} <- overhead,
+          band = overhead_band(alt),
+          band in [:low_approach, :high_approach],
+          do: {age, band}
+
+    recent = for {age, band} <- arrivals_overhead, age <= @band_window_seconds, do: band
+
+    # An aircraft whose altitude the feed omitted still crossed the zone, so it blocks
+    # the absence claim without contributing to a band.
+    unread_recent? =
+      Enum.any?(overhead, fn {age, alt} ->
+        age <= @band_window_seconds and overhead_band(alt) == nil
+      end)
 
     cond do
       traffic < @min_arrivals ->
         nil
 
-      # Nothing crossed at an arrival altitude — but only call that "not overhead" if
-      # every crossing was actually READ. An aircraft whose altitude the feed omitted
-      # crossed the zone; reporting the route as avoiding us would be a claim the data
-      # does not support.
-      bands == [] and not Enum.member?(seen, nil) ->
-        :not_overhead
+      # Nothing has crossed at an arrival altitude for the whole absence window while
+      # the field is demonstrably busy. At this airport that means the river routing:
+      # the arrivals are flying, and they are not coming over you.
+      arrivals_overhead == [] and not unread_recent? ->
+        :river_approach
 
-      length(bands) < @min_overhead ->
+      # Too few recent crossings to call a band — including none at all, which just
+      # means we are between arrivals. Holding the previous state here is what stops
+      # the marker flapping; the absence claim above is deliberately checked against
+      # the FULL retention window, never this recent subset.
+      length(recent) < @min_overhead ->
         nil
 
       true ->
-        dominant_band(bands)
+        dominant_band(recent)
     end
   end
 
@@ -130,11 +176,11 @@ defmodule LgaPredictor.Approach do
   # about noise. An unclear picture is reported as unclear (nil = leave the state alone).
   defp dominant_band(bands) do
     n = length(bands)
-    low = Enum.count(bands, &(&1 == :low_final))
+    low = Enum.count(bands, &(&1 == :low_approach))
 
     cond do
-      low * 3 >= n * 2 -> :low_final
-      (n - low) * 3 >= n * 2 -> :high_downwind
+      low * 3 >= n * 2 -> :low_approach
+      (n - low) * 3 >= n * 2 -> :high_approach
       true -> nil
     end
   end

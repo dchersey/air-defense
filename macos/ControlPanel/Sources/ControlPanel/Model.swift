@@ -22,8 +22,8 @@ struct Flight: Codable, Identifiable {
   // UI dims it rather than showing it as a flight Air Defense handled.
   let engaged: Bool?
   // Set only on approach-change markers: the arrival path now in use, and the one
-  // before it ("low final" / "high downwind" / "not overhead" — what the traffic does
-  // overhead, which is what decides whether it is audible). Events, not flights.
+  // before it ("low approach" / "high approach" / "river approach" — what the traffic
+  // does overhead, which is what decides whether it is audible). Events, not flights.
   let approach: String?
   let approachFrom: String?
 

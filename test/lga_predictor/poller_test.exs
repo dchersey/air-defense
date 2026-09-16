@@ -206,7 +206,7 @@ defmodule LgaPredictor.PollerTest do
     )
 
     ambient_tick!()
-    assert %{approach: "not overhead", approach_from: nil, engaged: false} = marker()
+    assert %{approach: "river approach", approach_from: nil, engaged: false} = marker()
   end
 
   test "crossings under 3000 ft are recorded as a low final" do
@@ -218,12 +218,12 @@ defmodule LgaPredictor.PollerTest do
     )
 
     ambient_tick!()
-    assert %{approach: "low final"} = marker()
+    assert %{approach: "low approach"} = marker()
   end
 
-  test "crossings above 3000 ft are the higher loop, not a final" do
-    # Same runway, different route underfoot: gear up, audible only with the windows
-    # open. Reporting this as a low final would cry wolf.
+  test "crossings above 3000 ft are the high approach, not the low one" do
+    # Same runway, different route underfoot: the long loop out to the north-east,
+    # gear up, audible only with the windows open. Calling it low would cry wolf.
     start_with_history(
       config_fun: with_airport(),
       fetcher: fn _ ->
@@ -233,7 +233,7 @@ defmodule LgaPredictor.PollerTest do
     )
 
     ambient_tick!()
-    assert %{approach: "high downwind"} = marker()
+    assert %{approach: "high approach"} = marker()
   end
 
   test "the field counts as busy on traffic the final-approach filter rejects" do
@@ -250,7 +250,7 @@ defmodule LgaPredictor.PollerTest do
     )
 
     ambient_tick!()
-    assert %{approach: "not overhead"} = marker()
+    assert %{approach: "river approach"} = marker()
   end
 
   test "an unchanged approach is not re-announced every minute" do
@@ -276,17 +276,17 @@ defmodule LgaPredictor.PollerTest do
     )
 
     ambient_tick!()
-    assert %{approach: "not overhead"} = marker()
+    assert %{approach: "river approach"} = marker()
 
     # They start coming over the top, gear down.
     Agent.update(feed, fn fleet -> fleet ++ [crossing("c1", 1500.0), crossing("c2", 1600.0)] end)
     ambient_tick!()
 
-    assert %{approach: "low final", approach_from: "not overhead"} = marker()
+    assert %{approach: "low approach", approach_from: "river approach"} = marker()
   end
 
   test "a quiet field is not reported as a change of approach" do
-    # Three arrivals is an ordinary overnight lull. Calling that "not overhead" would
+    # Three arrivals is an ordinary overnight lull. Calling that "river approach" would
     # announce a configuration swing every single night.
     start_with_history(
       config_fun: with_airport(),
@@ -306,7 +306,7 @@ defmodule LgaPredictor.PollerTest do
     )
 
     ambient_tick!()
-    assert %{approach: "not overhead"} = marker()
+    assert %{approach: "river approach"} = marker()
   end
 
   test "traffic under 3000 ft raises the ambient flag" do

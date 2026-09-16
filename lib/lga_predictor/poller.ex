@@ -43,7 +43,7 @@ defmodule LgaPredictor.Poller do
   @ambient_interval_ms 60_000
   # Overhead traffic sorts into altitude bands (`Approach.overhead_band/1`), and only
   # one of them is what ANC exists for. All of them under the global ceiling are
-  # recorded for the activity graph; only `:low_final` — gear down, the loud ones —
+  # recorded for the activity graph; only `:low_approach` — gear down, the loud ones —
   # lights the idle menu-bar icon amber. The bands live in `Approach` because the same
   # thresholds decide which arrival path is in use, and the two must not drift apart.
   # How long that amber persists after the last low overflight.
@@ -365,7 +365,7 @@ defmodule LgaPredictor.Poller do
 
   # Unknown altitude never raises the flag — an absent reading is not evidence, and
   # `overhead_band/1` returns nil for it rather than guessing a band.
-  defp alert_altitude?(alt), do: Approach.overhead_band(alt) == :low_final
+  defp alert_altitude?(alt), do: Approach.overhead_band(alt) == :low_approach
 
   # Which arrival path the airport is using, recorded only when it CHANGES.
   #
@@ -419,11 +419,14 @@ defmodule LgaPredictor.Poller do
         |> Approach.landing_traffic({alat, alon})
         |> pool(state.approach_traffic, now, cutoff)
 
+      # Retained far longer than the other pools: claiming the arrivals have stopped
+      # coming overhead requires outlasting the gap between them, not just an empty
+      # recent window. Approach.overhead_path/2 picks the recent subset itself.
       seen_overhead =
         flying
         |> Enum.filter(&(is_number(&1.lat) and is_number(&1.lon)))
         |> Enum.filter(&in_any_zone?(zones, {&1.lat, &1.lon}))
-        |> pool(state.approach_overhead, now, cutoff, & &1.alt_ft)
+        |> pool(state.approach_overhead, now, now - Approach.absence_seconds(), & &1.alt_ft)
 
       tracks =
         (Enum.map(arrivals, &{now, &1.track_deg}) ++ state.approach_samples)
@@ -441,7 +444,7 @@ defmodule LgaPredictor.Poller do
 
       Approach.overhead_path(
         map_size(seen_traffic),
-        seen_overhead |> Map.values() |> Enum.map(&elem(&1, 1))
+        seen_overhead |> Map.values() |> Enum.map(fn {t, alt} -> {now - t, alt} end)
       )
       |> decide_path(state, runway)
     else
@@ -496,11 +499,10 @@ defmodule LgaPredictor.Poller do
     end
   end
 
-  # Named for what the listener experiences, not for the airport's own vocabulary —
-  # these are the three states that differ underfoot.
-  defp path_label(:low_final), do: "low final"
-  defp path_label(:high_downwind), do: "high downwind"
-  defp path_label(:not_overhead), do: "not overhead"
+  # The three routings as they are actually experienced from under them.
+  defp path_label(:low_approach), do: "low approach"
+  defp path_label(:high_approach), do: "high approach"
+  defp path_label(:river_approach), do: "river approach"
   defp path_label(nil), do: nil
 
   # One box wide enough for both halves of the measurement: aircraft on final near the
@@ -1377,7 +1379,7 @@ defmodule LgaPredictor.Poller do
       polls: 0,
       credits: 0,
       # Ambient (session-off) tracking. `ambient_seen` is hex/callsign -> last recorded
-      # unix seconds, for dedupe; `ambient_low_at` is when a :low_final aircraft was
+      # unix seconds, for dedupe; `ambient_low_at` is when a :low_approach aircraft was
       # last seen in zone, which drives the amber idle icon.
       ambient_timer: nil,
       ambient_seen: %{},

@@ -105,70 +105,105 @@ defmodule LgaPredictor.ApproachTest do
   # which an empty zone means nothing.
 
   describe "overhead_path/2" do
-    test "a busy field with nothing crossing the zone is a route that avoids us" do
-      assert Approach.overhead_path(6, []) == :not_overhead
+    # `overhead` is {age_seconds, altitude} per distinct aircraft that crossed the zone.
+    # NOW = just observed; a large age = seen a while ago but still within retention.
+    defp fresh(alts), do: Enum.map(alts, &{60, &1})
+
+    test "a busy field with nothing crossing the zone is the river routing" do
+      assert Approach.overhead_path(6, []) == :river_approach
     end
 
-    # The whole point of counting arrivals at the field: at 3am the zone is empty
-    # because nobody is flying, not because the route changed. Claiming :not_overhead
-    # there would announce a configuration swing every single night.
+    # The whole point of counting traffic at the field: at 3am the zone is empty because
+    # nobody is flying, not because the routing changed. Claiming river_approach there
+    # would announce a configuration swing every single night.
     test "a quiet field with nothing crossing the zone says nothing" do
       assert Approach.overhead_path(3, []) == nil
       assert Approach.overhead_path(0, []) == nil
     end
 
     test "crossings on final, gear down" do
-      assert Approach.overhead_path(6, [1475.0, 1800.0, 1520.0]) == :low_final
+      assert Approach.overhead_path(6, fresh([1475.0, 1800.0, 1520.0])) == :low_approach
     end
 
-    test "crossings on the longer loop, gear still up" do
-      assert Approach.overhead_path(6, [3500.0, 4200.0, 3900.0]) == :high_downwind
+    test "crossings on the long north-east loop, gear still up" do
+      assert Approach.overhead_path(6, fresh([3575.0, 3600.0, 3600.0])) == :high_approach
+    end
+
+    # THE FLAPPING BUG. Overflights on a steady high approach arrived up to 18 minutes
+    # apart; a single short window emptied in the gaps and reported the arrivals gone,
+    # then back on the next aircraft — four times in seventy minutes while every
+    # altitude sat on 3600 ft.
+    #
+    # The fix is that the absence branch tests the FULL retained list, not the recent
+    # subset. A crossing too old to vote on the band must still veto the claim that
+    # nothing is coming over.
+    test "a crossing still in retention vetoes the absence claim" do
+      stale = [{2000, 3600.0}, {2100, 3575.0}]
+      refute Approach.overhead_path(6, stale) == :river_approach
+      assert Approach.overhead_path(6, stale) == nil, "hold the state, do not guess"
+    end
+
+    test "but a sustained absence is evidence" do
+      # Nothing at all: the previous crossings have aged out of retention entirely.
+      assert Approach.overhead_path(6, []) == :river_approach
+    end
+
+    # The retention window is the load-bearing part: the caller must hold crossings
+    # longer than the real gap between them, or the absence branch fires on a gap.
+    # Measured gaps on a steady high approach reached 18 minutes.
+    test "retention outlasts the observed gap between overflights" do
+      assert Approach.absence_seconds() > 18 * 60
     end
 
     # A police helicopter over the zone is not an arrival path. Without the floor it
-    # would read as :low_final — the loudest classification — on no airport traffic.
+    # would read as a low approach — the loudest classification — on no airport traffic.
     test "rotorcraft below the arrival floor are not a path" do
-      assert Approach.overhead_path(6, [700.0, 450.0, 800.0]) == :not_overhead
+      assert Approach.overhead_path(6, fresh([700.0, 450.0, 800.0])) == :river_approach
     end
 
-    # Likewise above: traffic at 12000 ft is crossing the city, not landing here.
     test "high transiting traffic is not a path" do
-      assert Approach.overhead_path(6, [11_000.0, 12_500.0]) == :not_overhead
+      assert Approach.overhead_path(6, fresh([11_000.0, 12_500.0])) == :river_approach
     end
 
-    # An aircraft with no altitude reading DID cross the zone. Calling that
-    # :not_overhead would assert the route avoids us on the strength of missing data.
+    # An aircraft with no altitude reading DID cross the zone. Calling that the river
+    # routing would assert the arrivals moved on the strength of missing data.
     test "an unknown altitude is not evidence either way" do
-      assert Approach.overhead_path(6, [nil, nil, nil]) == nil
-      assert Approach.overhead_path(6, [700.0, nil]) == nil
+      assert Approach.overhead_path(6, fresh([nil, nil, nil])) == nil
+      assert Approach.overhead_path(6, fresh([700.0, nil])) == nil
       # ...but it does not veto a picture the rest of the crossings already make clear.
-      assert Approach.overhead_path(6, [1500.0, 1600.0, nil]) == :low_final
+      assert Approach.overhead_path(6, fresh([1500.0, 1600.0, nil])) == :low_approach
     end
 
     # One crossing is a go-around or an odd vector, not a pattern.
     test "a single crossing does not decide" do
-      assert Approach.overhead_path(6, [1500.0]) == nil
+      assert Approach.overhead_path(6, fresh([1500.0])) == nil
     end
 
     # Without the majority rule a genuinely mixed picture would flip the reported path
     # on alternate polls and fill the timeline with noise about noise.
     test "an evenly split picture says nothing rather than flapping" do
-      assert Approach.overhead_path(8, [1500.0, 1600.0, 3800.0, 4100.0]) == nil
+      assert Approach.overhead_path(8, fresh([1500.0, 1600.0, 3800.0, 4100.0])) == nil
     end
 
     test "a two-thirds majority is enough to call it" do
-      assert Approach.overhead_path(8, [1500.0, 1600.0, 4100.0]) == :low_final
-      assert Approach.overhead_path(8, [1500.0, 3900.0, 4100.0]) == :high_downwind
+      assert Approach.overhead_path(8, fresh([1500.0, 1600.0, 4100.0])) == :low_approach
+      assert Approach.overhead_path(8, fresh([1500.0, 3900.0, 4100.0])) == :high_approach
+    end
+
+    # Only crossings recent enough to still describe the routing get a vote.
+    test "stale crossings do not vote on the current band" do
+      mixed = [{60, 3600.0}, {60, 3575.0}, {2000, 1500.0}, {2000, 1600.0}]
+      assert Approach.overhead_path(8, mixed) == :high_approach
     end
   end
 
   describe "overhead_band/1" do
     test "band edges" do
       assert Approach.overhead_band(999) == :rotor
-      assert Approach.overhead_band(1000) == :low_final
-      assert Approach.overhead_band(2999) == :low_final
-      assert Approach.overhead_band(3000) == :high_downwind
-      assert Approach.overhead_band(5999) == :high_downwind
+      assert Approach.overhead_band(1000) == :low_approach
+      assert Approach.overhead_band(2999) == :low_approach
+      assert Approach.overhead_band(3000) == :high_approach
+      assert Approach.overhead_band(5999) == :high_approach
       assert Approach.overhead_band(6000) == :transit
     end
 
