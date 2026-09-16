@@ -89,6 +89,12 @@ defmodule LgaPredictor.PollerTest do
     Process.sleep(60)
   end
 
+  # Route classification has its own, slower timer; drive it the same way.
+  defp approach_tick! do
+    send(Poller, :approach)
+    Process.sleep(60)
+  end
+
   defp low_overflight(alt) do
     %{inbound() | callsign: "AMB123", hex: "ABCDEF", alt_ft: alt}
   end
@@ -147,6 +153,17 @@ defmodule LgaPredictor.PollerTest do
     assert Poller.status().receiver_ok == nil
   end
 
+  # The high approach crosses the ANC polygon at 260+ kt in ~20 s. A 60 s tick caught
+  # about one pass in three and the overflight counter read 0 under a running loop.
+  test "ambient polls fast on a free feed and slowly on a metered one" do
+    assert Poller.ambient_interval_ms(:local) <= 10_000
+    assert Poller.ambient_interval_ms(:airplanes_live) <= 10_000
+    assert Poller.ambient_interval_ms(:fr24) >= 60_000
+    # And route classification is a separate, slower timer: it looks outside the zone.
+    assert Poller.approach_interval_ms() >= 30_000
+    assert Poller.approach_interval_ms() > Poller.ambient_interval_ms(:local)
+  end
+
   test "ambient tracking is skipped on a metered provider" do
     start_with_history(
       config_fun: fn -> config() |> Map.put(:provider, :fr24) end,
@@ -180,7 +197,7 @@ defmodule LgaPredictor.PollerTest do
   # 150 kt: a jet on final. The landing gate is a speed gate, so fixtures that are
   # supposed to land must fly like something landing.
   defp plane(hex, {lat, lon}, alt, vs \\ -700) do
-    %Aircraft{callsign: hex, hex: hex, lat: lat, lon: lon, track_deg: 40.0, gspeed_kt: 150.0, vspeed_fpm: vs, alt_ft: alt * 1.0}
+    %Aircraft{callsign: hex, hex: hex, lat: lat, lon: lon, track_deg: 40.0, gspeed_kt: 150.0, vspeed_fpm: vs, alt_ft: alt * 1.0, type: "E75L"}
   end
 
   defp with_home(opts \\ []) do
@@ -196,19 +213,19 @@ defmodule LgaPredictor.PollerTest do
 
   defp fly_and_land(feed, hexes, where, alt, vs \\ 0) do
     Agent.update(feed, fn _ -> Enum.map(hexes, &plane(&1, where, alt, vs)) end)
-    ambient_tick!()
+    approach_tick!()
     Agent.update(feed, fn _ -> Enum.map(hexes, &plane(&1, @far_final, 1200)) end)
-    ambient_tick!()
+    approach_tick!()
     Agent.update(feed, fn _ -> Enum.map(hexes, &plane(&1, @gone_away, 800)) end)
-    ambient_tick!()
+    approach_tick!()
   end
 
   # Only ever seen on the straight-in, then moving away: never came near, pass complete.
   defp straight_in(feed, hexes) do
     Agent.update(feed, fn _ -> Enum.map(hexes, &plane(&1, @far_final, 1200)) end)
-    ambient_tick!()
+    approach_tick!()
     Agent.update(feed, fn _ -> Enum.map(hexes, &plane(&1, @gone_away, 800)) end)
-    ambient_tick!()
+    approach_tick!()
   end
 
   defp start_route_test do
@@ -257,8 +274,8 @@ defmodule LgaPredictor.PollerTest do
   test "an unchanged route is not re-announced every minute" do
     feed = start_route_test()
     fly_and_land(feed, ~w(a b c), @home, 3600)
-    ambient_tick!()
-    ambient_tick!()
+    approach_tick!()
+    approach_tick!()
     assert length(Enum.filter(LgaPredictor.History.all(), &Map.has_key?(&1, :approach))) == 1
   end
 

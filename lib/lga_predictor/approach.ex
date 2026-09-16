@@ -78,6 +78,14 @@ defmodule LgaPredictor.Approach do
   @terminal_ceiling_ft 6000
   @climbing_fpm 500
 
+  # Only airliners vote. The East River VFR corridor runs within 4 nm of the field at
+  # 500-1600 ft, so sightseeing helicopters and light aircraft satisfy every geometric
+  # test for "this field's traffic" while never being an arrival; three of them staying
+  # 4+ nm from home outvoted two airliners overhead and announced the river. The feed
+  # carries an ICAO type on every record (readsb --db-file), and the type separates the
+  # two populations exactly where speed and altitude cannot. No type, no vote.
+  @airliner_type_prefixes ~w(A2 A3 B3 B7 BCS E1 E2 E7 CRJ MD DH8 AT7)
+
   # A position older than this is not where the aircraft is. Measured: readsb re-emitted
   # a frozen lat/lon for 60+ s after losing an aircraft at 3 nm, with the altitude still
   # updating — a low, "descending", stationary target that the gates below would
@@ -152,7 +160,7 @@ defmodule LgaPredictor.Approach do
   def track_passes(passes, aircraft, airport, {hlat, hlon} = _home, now)
       when is_map(passes) and is_list(aircraft) do
     aircraft
-    |> Enum.filter(&terminal?(&1, airport))
+    |> Enum.filter(&(airliner?(&1) and terminal?(&1, airport)))
     |> Enum.reduce(passes, fn ac, acc ->
       case ac.hex || ac.callsign do
         nil ->
@@ -224,6 +232,12 @@ defmodule LgaPredictor.Approach do
       _ -> nil
     end
   end
+
+  @doc false
+  def airliner?(%{type: t}) when is_binary(t),
+    do: Enum.any?(@airliner_type_prefixes, &String.starts_with?(t, &1))
+
+  def airliner?(_ac), do: false
 
   defp terminal?(ac, {alat, alon}) do
     is_number(ac.lat) and is_number(ac.lon) and is_number(ac.alt_ft) and

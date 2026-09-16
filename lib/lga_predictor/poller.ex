@@ -40,7 +40,22 @@ defmodule LgaPredictor.Poller do
   # when ANC is not running, so the hourly trend reflects the sky rather than the
   # session. Only ever runs on an UNMETERED provider — doing this on FR24 would spend
   # credits continuously for a graph.
-  @ambient_interval_ms 60_000
+  #
+  # The cadence is what decides whether an overflight is SEEN at all. Ambient records
+  # a crossing only if a sample lands inside the ANC polygon, and the high approach
+  # crosses it at 260+ kt: measured at 5 s resolution, a pass is inside the polygon for
+  # 5-10 SECONDS. At the old fixed 60 s tick that is one pass in six to ten recorded,
+  # and the overflight counter read 0 while the loop ran overhead. A local fetch costs
+  # nothing, so on an unmetered provider the tick is fast enough to catch every pass;
+  # the slow value is kept for anything metered (where ambient is skipped anyway, so
+  # the timer only decides how often that is re-checked).
+  @ambient_interval_ms 5_000
+  @ambient_interval_ms_metered 60_000
+
+  # Route classification is a SEPARATE, slower timer. It looks at aircraft across the
+  # whole terminal area, not the zone, and a route does not change in seconds — while
+  # the zone tick above must be fast. Coupling them made each pay for the other.
+  @approach_interval_ms 30_000
   # Overhead traffic sorts into altitude bands (`Approach.overhead_band/1`), and only
   # one of them is what ANC exists for. All of them under the global ceiling are
   # recorded for the activity graph; only `:low_approach` — gear down, the loud ones —
@@ -102,7 +117,7 @@ defmodule LgaPredictor.Poller do
   ## Server
 
   @impl true
-  def init(opts), do: {:ok, schedule_ambient(build_state(opts))}
+  def init(opts), do: {:ok, opts |> build_state() |> schedule_ambient() |> schedule_approach()}
 
   @impl true
   def handle_call({:start_session, id}, _from, state) do
@@ -148,6 +163,10 @@ defmodule LgaPredictor.Poller do
   @impl true
   def handle_info(:ambient, state) do
     {:noreply, state |> ambient_tick() |> schedule_ambient()}
+  end
+
+  def handle_info(:approach, state) do
+    {:noreply, state |> approach_tick() |> schedule_approach()}
   end
 
   def handle_info({:poll, id}, state) do
@@ -277,8 +296,22 @@ defmodule LgaPredictor.Poller do
 
   defp schedule_ambient(state) do
     if state.ambient_timer, do: Process.cancel_timer(state.ambient_timer)
-    %{state | ambient_timer: Process.send_after(self(), :ambient, @ambient_interval_ms)}
+    interval = ambient_interval_ms(active_provider(state))
+    %{state | ambient_timer: Process.send_after(self(), :ambient, interval)}
   end
+
+  @doc false
+  def ambient_interval_ms(provider) do
+    if metered?(provider), do: @ambient_interval_ms_metered, else: @ambient_interval_ms
+  end
+
+  defp schedule_approach(state) do
+    if state.approach_timer, do: Process.cancel_timer(state.approach_timer)
+    %{state | approach_timer: Process.send_after(self(), :approach, @approach_interval_ms)}
+  end
+
+  @doc false
+  def approach_interval_ms, do: @approach_interval_ms
 
   # Record what crosses the ANC zones while ANC is not running, so the activity graph
   # shows the sky rather than the session. Deliberately touches NOTHING the session path
@@ -295,8 +328,14 @@ defmodule LgaPredictor.Poller do
       |> Enum.filter(&(&1.enabled and ambient_wanted?(state, &1.id)))
       |> Enum.reduce(state, &ambient_zoneset(&2, &1, config))
       |> prune_ambient_seen()
-      |> check_approach(config)
     end
+  end
+
+  # Route classification, on its own timer. Same metering rule as ambient: it fetches
+  # the whole terminal area, which would be a credit sink on a paid feed.
+  defp approach_tick(state) do
+    config = state.config_fun.()
+    if metered?(active_provider(state)), do: state, else: check_approach(state, config)
   end
 
   # Ambient fills the gaps the session path leaves: no session at all, or a session
@@ -1328,6 +1367,7 @@ defmodule LgaPredictor.Poller do
       # unix seconds, for dedupe; `ambient_low_at` is when a :low_approach aircraft was
       # last seen in zone, which drives the amber idle icon.
       ambient_timer: nil,
+      approach_timer: nil,
       ambient_seen: %{},
       ambient_low_at: nil,
       # Last classified arrival path and the runway behind it, so a CHANGE can be

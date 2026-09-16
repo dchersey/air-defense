@@ -128,7 +128,8 @@ defmodule LgaPredictor.ApproachTest do
   # Default speed 150 kt: a jet on final. Loop-leg and transit fixtures pass their own.
   defp plane(hex, {lat, lon}, alt, vs \\ -700, opts \\ []) do
     %{hex: hex, callsign: hex, lat: lat, lon: lon, alt_ft: alt * 1.0, vspeed_fpm: vs,
-      track_deg: 40.0, gspeed_kt: Keyword.get(opts, :gs, 150.0), pos_age_s: Keyword.get(opts, :pos_age, nil)}
+      track_deg: 40.0, gspeed_kt: Keyword.get(opts, :gs, 150.0), pos_age_s: Keyword.get(opts, :pos_age, nil),
+      type: Keyword.get(opts, :type, "E75L")}
   end
 
   defp seen(fleet, passes \\ %{}, at \\ @now),
@@ -196,6 +197,28 @@ defmodule LgaPredictor.ApproachTest do
     # Short-final aircraft often carry no vertical rate; in the core that must not matter.
     test "no vertical rate in the core still counts" do
       assert seen([plane("nr", @far_final, 1300, 0, gs: 145.0)])["nr"].bound
+    end
+
+    # The East River VFR corridor: a Bell 206 and an SR22 at 600-1200 ft within 4 nm of
+    # the field, 4+ nm from home. Geometrically indistinguishable from an arrival that
+    # avoids you; three of them announced the river while airliners crossed home.
+    test "general aviation is never this field's traffic" do
+      assert seen([plane("heli", @far_final, 1200, -300, type: "B06")]) == %{}
+      assert seen([plane("sr22", @far_final, 1200, -300, type: "SR22")]) == %{}
+      assert seen([plane("c172", @over_home, 1500, -300, type: "C172")]) == %{}
+    end
+
+    test "no type, no vote" do
+      assert seen([plane("anon", @far_final, 1200, -700, type: nil)]) == %{}
+    end
+
+    test "the airliner list covers what actually lands here" do
+      for t <- ~w(E75L E170 E190 CRJ9 CRJ7 B738 B38M B39M A320 A321 A21N A319 BCS3 BCS1 B752 B763 MD88 DH8D AT76) do
+        assert Approach.airliner?(%{type: t}), t
+      end
+      for t <- ~w(B06 R44 EC35 H60 SR22 C172 PA28 BE20 C25A GLF4 AS50) do
+        refute Approach.airliner?(%{type: t}), t
+      end
     end
 
     test "forgets aircraft not seen within retention" do
