@@ -167,144 +167,110 @@ defmodule LgaPredictor.PollerTest do
     assert length(LgaPredictor.History.all()) == 1
   end
 
-  # --- Arrival path marker ----------------------------------------------------------
-  # LGA sits ~3 nm north of the test zone, so in-zone traffic also counts as arrivals
-  # near the field — which is exactly the real geometry.
+  # --- Arrival route marker ---------------------------------------------------------
+  # Real geometry: home sits ~3 nm south of the field, inside the zone. An aircraft over
+  # home on final is therefore also on short final to the field — which is exactly what
+  # makes the low approach both loud and "landed here" in the same breath.
   @lga {40.7772, -73.8726}
+  @home {40.728, -73.864}
+  # ~1.4 nm north of the field, ~4.3 nm from home: a straight-in final that never
+  # comes near the listener. Landing signature (low, descending, close to the field).
+  @far_final {40.790, -73.870}
 
-  # On final near the field but NOT over the zone (north of it).
-  defp near_field(hex, opts \\ []) do
-    %Aircraft{
-      callsign: "ARR" <> hex,
-      hex: hex,
-      lat: Keyword.get(opts, :lat, 40.790),
-      lon: Keyword.get(opts, :lon, -73.870),
-      track_deg: 40.0,
-      gspeed_kt: 150.0,
-      vspeed_fpm: -700.0,
-      alt_ft: Keyword.get(opts, :alt, 2000.0)
-    }
+  # 150 kt: a jet on final. The landing gate is a speed gate, so fixtures that are
+  # supposed to land must fly like something landing.
+  defp plane(hex, {lat, lon}, alt, vs \\ -700) do
+    %Aircraft{callsign: hex, hex: hex, lat: lat, lon: lon, track_deg: 40.0, gspeed_kt: 150.0, vspeed_fpm: vs, alt_ft: alt * 1.0}
   end
 
-  # Crossing the zone, at whatever altitude the band under test needs.
-  defp crossing(hex, alt), do: near_field(hex, lat: 40.728, alt: alt)
-
-  defp with_airport(opts \\ []) do
-    fn -> config(opts) |> Map.put(:airport_coords, @lga) end
+  defp with_home(opts \\ []) do
+    fn -> config(opts) |> Map.put(:airport_coords, @lga) |> Map.put(:home_coords, @home) end
   end
 
-  defp marker do
-    Enum.find(LgaPredictor.History.all(), &Map.has_key?(&1, :approach))
-  end
+  defp marker, do: Enum.find(LgaPredictor.History.all(), &Map.has_key?(&1, :approach))
 
-  test "a busy field with nothing crossing the zone is recorded as an approach change" do
-    # Four arrivals landing, none of them overhead — the answer to "why is the list
-    # empty". Without this the silence is indistinguishable from a dead receiver.
-    start_with_history(
-      config_fun: with_airport(),
-      fetcher: fn _ -> {:ok, Enum.map(~w(a1 a2 a3 a4), &near_field/1)} end
-    )
-
+  # A fleet observed across two ticks: first at `where`/`alt`, then on short final.
+  defp fly_and_land(feed, hexes, where, alt, vs \\ 0) do
+    Agent.update(feed, fn _ -> Enum.map(hexes, &plane(&1, where, alt, vs)) end)
     ambient_tick!()
-    assert %{approach: "river approach", approach_from: nil, engaged: false} = marker()
+    Agent.update(feed, fn _ -> Enum.map(hexes, &plane(&1, @far_final, 1200)) end)
+    ambient_tick!()
   end
 
-  test "crossings under 3000 ft are recorded as a low final" do
-    start_with_history(
-      config_fun: with_airport(),
-      fetcher: fn _ ->
-        {:ok, [near_field("a1"), near_field("a2"), crossing("c1", 1500.0), crossing("c2", 1600.0)]}
-      end
-    )
-
-    ambient_tick!()
-    assert %{approach: "low approach"} = marker()
+  defp start_route_test do
+    {:ok, feed} = Agent.start_link(fn -> [] end)
+    start_with_history(config_fun: with_home(), fetcher: fn _ -> {:ok, Agent.get(feed, & &1)} end)
+    feed
   end
 
-  test "crossings above 3000 ft are the high approach, not the low one" do
-    # Same runway, different route underfoot: the long loop out to the north-east,
-    # gear up, audible only with the windows open. Calling it low would cry wolf.
-    start_with_history(
-      config_fun: with_airport(),
-      fetcher: fn _ ->
-        {:ok,
-         Enum.map(~w(a1 a2 a3 a4), &near_field/1) ++ [crossing("c1", 4000.0), crossing("c2", 4200.0)]}
-      end
-    )
+  test "arrivals that passed over home low are recorded as the low approach" do
+    feed = start_route_test()
+    fly_and_land(feed, ~w(a b c), @home, 1500, -700)
+    assert %{approach: "low approach", approach_from: nil, engaged: false} = marker()
+  end
 
-    ambient_tick!()
+  test "arrivals that passed over home high are the high approach" do
+    feed = start_route_test()
+    fly_and_land(feed, ~w(a b c), @home, 3600)
     assert %{approach: "high approach"} = marker()
   end
 
-  test "the field counts as busy on traffic the final-approach filter rejects" do
-    # The live failure this guards: 16 minutes of real LGA traffic produced ZERO
-    # final-approach matches, because aircraft sit inside 6 nm and under 3000 ft for
-    # barely a minute. If "is the field landing" reused the runway filter, the path
-    # would never be reported at all and the whole feature would be dead code that
-    # still passes every other test here.
-    high_and_far = fn hex -> near_field(hex, lat: 40.910, alt: 4500.0) end
-
-    start_with_history(
-      config_fun: with_airport(),
-      fetcher: fn _ -> {:ok, Enum.map(~w(a1 a2 a3 a4), high_and_far)} end
-    )
-
+  test "arrivals that never came near home are the river approach" do
+    # Only ever seen on the straight-in final, well clear of home.
+    feed = start_route_test()
+    Agent.update(feed, fn _ -> Enum.map(~w(a b c), &plane(&1, @far_final, 1200)) end)
     ambient_tick!()
     assert %{approach: "river approach"} = marker()
   end
 
-  test "an unchanged approach is not re-announced every minute" do
-    start_with_history(
-      config_fun: with_airport(),
-      fetcher: fn _ -> {:ok, Enum.map(~w(a1 a2 a3 a4), &near_field/1)} end
-    )
-
-    ambient_tick!()
-    ambient_tick!()
-    ambient_tick!()
-
-    markers = Enum.filter(LgaPredictor.History.all(), &Map.has_key?(&1, :approach))
-    assert length(markers) == 1, "the marker records a CHANGE, not the current state"
+  # The live failure this guards: the high approach drifted a mile sideways, stopped
+  # crossing the ANC polygon, and the marker announced the river while aircraft went
+  # over the listener at 3600 ft. Route is measured against HOME, not the zone.
+  test "an aircraft passing 2 nm from home is still over you" do
+    feed = start_route_test()
+    two_nm_off = {elem(@home, 0) + 2 / 60, elem(@home, 1)}
+    fly_and_land(feed, ~w(a b c), two_nm_off, 3600)
+    assert %{approach: "high approach"} = marker()
   end
 
-  test "a change of approach records where it changed FROM" do
-    {:ok, feed} = Agent.start_link(fn -> Enum.map(~w(a1 a2 a3 a4), &near_field/1) end)
+  test "the noisiest route in use wins even when most arrivals avoid home" do
+    feed = start_route_test()
+    # Six straight-in, three around the loop over home.
+    Agent.update(feed, fn _ -> Enum.map(~w(d e f g h i), &plane(&1, @far_final, 1200)) end)
+    ambient_tick!()
+    fly_and_land(feed, ~w(a b c), @home, 3600)
+    assert %{approach: "high approach"} = marker()
+  end
 
-    start_with_history(
-      config_fun: with_airport(),
-      fetcher: fn _ -> {:ok, Agent.get(feed, & &1)} end
-    )
+  test "an unchanged route is not re-announced every minute" do
+    feed = start_route_test()
+    fly_and_land(feed, ~w(a b c), @home, 3600)
+    ambient_tick!()
+    ambient_tick!()
+    assert length(Enum.filter(LgaPredictor.History.all(), &Map.has_key?(&1, :approach))) == 1
+  end
 
+  test "a change of route records where it changed FROM" do
+    feed = start_route_test()
+    Agent.update(feed, fn _ -> Enum.map(~w(a b c), &plane(&1, @far_final, 1200)) end)
     ambient_tick!()
     assert %{approach: "river approach"} = marker()
 
-    # They start coming over the top, gear down.
-    Agent.update(feed, fn fleet -> fleet ++ [crossing("c1", 1500.0), crossing("c2", 1600.0)] end)
-    ambient_tick!()
-
+    # Lower 3000 ft: only ever seen on the straight-in.
+    fly_and_land(feed, ~w(x y z), @home, 1500, -700)
     assert %{approach: "low approach", approach_from: "river approach"} = marker()
   end
 
-  test "a quiet field is not reported as a change of approach" do
-    # Three arrivals is an ordinary overnight lull. Calling that "river approach" would
-    # announce a configuration swing every single night.
-    start_with_history(
-      config_fun: with_airport(),
-      fetcher: fn _ -> {:ok, Enum.map(~w(a1 a2 a3), &near_field/1)} end
-    )
-
-    ambient_tick!()
+  test "a lull is not reported as a route" do
+    feed = start_route_test()
+    fly_and_land(feed, ~w(a b), @home, 3600)
     assert marker() == nil
   end
 
-  test "the approach marker does not need runways configured" do
-    # Runways only sharpen the log line; the path is measured overhead. An unconfigured
-    # field must not silence the one row that explains an empty list.
-    start_with_history(
-      config_fun: fn -> config() |> Map.put(:airport_coords, @lga) |> Map.put(:runways, []) end,
-      fetcher: fn _ -> {:ok, Enum.map(~w(a1 a2 a3 a4), &near_field/1)} end
-    )
-
+  test "the route needs home configured, but not runways" do
+    feed = start_route_test()
+    Agent.update(feed, fn _ -> Enum.map(~w(a b c), &plane(&1, @far_final, 1200)) end)
+    # runways: [] must not silence it.
     ambient_tick!()
     assert %{approach: "river approach"} = marker()
   end

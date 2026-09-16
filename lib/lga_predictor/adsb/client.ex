@@ -101,6 +101,7 @@ defmodule LgaPredictor.ADSB.Client do
       # Reading just `baro_rate` silently reported those as level flight, which the
       # arrival filter then rejected as "not descending".
       vspeed_fpm: numeric(a["baro_rate"]) || numeric(a["geom_rate"]) || 0,
+      pos_age_s: numeric(a["seen_pos"]),
       type: a["t"],
       reg: a["r"]
     }

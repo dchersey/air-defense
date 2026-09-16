@@ -1,6 +1,6 @@
 defmodule LgaPredictor.Approach do
   @moduledoc """
-  Infers which arrival path the airport is using, from the traffic itself.
+  Infers which arrival route the airport is using, from the traffic itself.
 
   When the airport swings configuration, arrivals stop crossing the monitored zone and
   the app simply goes quiet — indistinguishable from a broken receiver, a dead feed, or
@@ -12,20 +12,25 @@ defmodule LgaPredictor.Approach do
   The same runway is fed by routes that differ enormously underfoot: a river approach
   that never crosses the neighbourhood is silent here, while a loop over it at 1500 ft
   with the gear down is the whole reason this app exists. So the runway is inferred as
-  supporting detail only, and the reported state is the path, measured where it is
-  actually felt — overhead, by altitude band:
+  supporting detail only, and the reported state is the route, measured by the one
+  number a listener cares about — how close each arrival came to home, and how high it
+  was when it did:
 
-    `:low_approach`   overhead on final, gear down. The loud one.
-    `:high_approach`  overhead on the long loop that runs out to the north-east before
-                      turning back in — gear still up, a steady ~3600 ft. Audible only
-                      with the windows open.
-    `:river_approach` the field is demonstrably landing, and none of it comes over the
-                      zone. Quiet — and the reason the flight list is empty.
+    `:low_approach`   arrivals pass within `@near_home_nm` at 1000-3000 ft, gear down.
+                      The loud one; the same band that lights the icon amber.
+    `:high_approach`  arrivals pass within `@near_home_nm` at 3000-6000 ft — the long
+                      loop out to the north-east before turning back in, gear still up,
+                      a steady ~3600 ft. Audible only with the windows open.
+    `:river_approach` the field is landing and none of it comes near. Quiet — and the
+                      reason the flight list is empty. The label is the listener's name
+                      for it; strictly it means "whatever they are flying avoids you".
 
-  `:river_approach` is only meaningful against evidence that the airport is busy, which is
-  why arrivals near the field are counted at all: with no traffic anywhere, an empty zone
-  says nothing. Both halves come from one fetch of the airspace around the field, so the
-  classification costs nothing beyond what the runway inference already spends.
+  A local receiver sees the entire arrival stream, so the stream is what gets measured:
+  every aircraft in the terminal area is followed, and only those that demonstrably LAND
+  at this field get a vote. The route reported is the noisiest one in meaningful use —
+  not a majority. During a high-approach period only some arrivals fly the loop while the
+  rest come straight in from the other side; a majority would have called that "river"
+  while seven aircraft in thirteen minutes went over the listener at 3600 ft.
   """
 
   # --- Overhead altitude bands ------------------------------------------------------
@@ -60,130 +65,168 @@ defmodule LgaPredictor.Approach do
   # Descending hard enough to be arriving rather than levelling off or departing.
   @descent_fpm -200
 
-  # --- Is the field landing? ---------------------------------------------------------
-  # A deliberately wider gate than the runway one below, because it answers a different
-  # question — and measurement showed the narrow gate cannot answer it. Over 16 minutes
-  # of live LGA traffic the final-approach filter matched ZERO aircraft while this one
-  # accumulated 12: aircraft on short final are inside 6 nm for barely a minute, and
-  # many stop reporting a vertical rate altogether by then. The descent into the
-  # terminal area is observed far more reliably than the final itself.
+  # --- Which route are the arrivals flying? ------------------------------------------
+  # An earlier design inferred the route from crossings of the ANC zone, and it broke the
+  # first time the high approach threaded past the polygon instead of through it — same
+  # routing, same 3600 ft, a mile or two of lateral drift, and the zone saw nothing. That
+  # polygon was drawn to decide when to ENGAGE ANC, which is a different question.
+
+  # Follow anything this close to the field and this low. Departures climb out through
+  # the same airspace and are dropped by their climb rate; the high approach's outbound
+  # leg is level (±64 fpm measured), so it stays.
+  @terminal_radius_nm 15.0
+  @terminal_ceiling_ft 6000
+  @climbing_fpm 500
+
+  # A position older than this is not where the aircraft is. Measured: readsb re-emitted
+  # a frozen lat/lon for 60+ s after losing an aircraft at 3 nm, with the altitude still
+  # updating — a low, "descending", stationary target that the gates below would
+  # otherwise take for a landing.
+  @max_pos_age_s 15
+
+  # "Bound for THIS field", which is the vote gate. NOT "landed": this antenna never sees
+  # a landing. Measured over a twelve-minute bank, six airliners were tracked on the
+  # loop's outbound leg and every one lost position at 2575-3100 ft, 2-4 nm from the
+  # field; not one final was received afterwards, at any altitude, from any direction.
+  # The runway-22 approach comes in over the far side, low, 7-10 nm from the antenna,
+  # and simply never reaches it. A gate that waits for the last mile waits forever
+  # (it confirmed one landing in thirty-four).
   #
-  # This counts DESCENDING traffic in the area, not strictly arrivals at this field — in
-  # dense airspace some of it is bound elsewhere. That is the right scope for the
-  # question actually being asked: is the sky busy enough that an empty zone means
-  # something?
-  @field_radius_nm 10.0
-  @field_ceiling_ft 6000
+  # Two things ARE observable and are unambiguously this field's traffic:
+  #   (a) anything under the ceiling inside the terminal core — nothing else flies that
+  #       low that close, in any direction, at any speed. The loop leg lives here.
+  #   (b) a descent outside the core that is closing on the field. A neighbouring
+  #       airport's arrivals descend through this box too, but heading away.
+  @core_radius_nm 4.0
+  @core_ceiling_ft 3500
+  @closing_radius_nm 10.0
+  @closing_ceiling_ft 6000
+  @closing_max_offset_deg 60
 
-  @doc "Descending traffic near `airport` — evidence the field is working."
-  @spec landing_traffic([map()], {number(), number()}) :: [map()]
-  def landing_traffic(aircraft, airport) when is_list(aircraft),
-    do: Enum.filter(aircraft, &descending_near?(&1, airport))
+  # How close an arrival must come to count as "over you". Measured against a live high
+  # approach at the 60-second ambient cadence: seven aircraft came within 1.0-2.0 nm of
+  # home, and NOTHING else came within 4.8 (the nearest being GA, then this field's own
+  # straight-in finals at 6.4+). 3.0 sits in that gap with a mile of margin each way, and
+  # is wider than the ANC zone on purpose — the zone is where ANC engages, not where an
+  # arrival stops being over you.
+  @near_home_nm 3.0
 
-  def landing_traffic(_aircraft, _airport), do: []
+  # Fewer landings than this and the picture is not worth reporting: a lull, not a route.
+  @min_landings 3
+  # A landing stops describing the current routing after this long.
+  @retention_seconds 1200
 
-  defp descending_near?(ac, {alat, alon}) do
-    is_number(ac.lat) and is_number(ac.lon) and is_number(ac.alt_ft) and
-      ac.alt_ft < @field_ceiling_ft and (ac.vspeed_fpm || 0) < @descent_fpm and
-      distance_nm(ac.lat, ac.lon, alat, alon) <= @field_radius_nm
-  end
+  @typedoc "What is remembered per aircraft: its closest pass to home, and whether it is this field's traffic."
+  @type pass :: %{
+          closest_nm: number() | nil,
+          closest_alt: number() | nil,
+          bound: boolean(),
+          last_seen: integer()
+        }
 
-  # Below this much traffic, an empty zone is not evidence of anything — it is just a
-  # quiet sky. A busy evening measured 12 in 15 minutes, so 4 clears easily in normal
-  # operation while still staying silent overnight.
-  @min_arrivals 4
-  # One crossing is a stray (a go-around, a single odd vector). Two is a pattern.
-  @min_overhead 2
-
-  # TWO windows, because presence and absence need different amounts of evidence.
-  #
-  # `@band_window_seconds` decides WHICH approach is running, from crossings recent
-  # enough to still describe it.
-  #
-  # `@absence_seconds` is how long the zone must stay completely empty before claiming
-  # the arrivals have gone somewhere else. It has to comfortably exceed the gap between
-  # consecutive overflights or the marker flaps: measured on a steady high approach,
-  # crossings came at 7:48, 7:56, 8:01, 8:16, 8:34, 8:42, 8:59 — gaps of up to 18
-  # minutes. A single 15-minute window emptied during those gaps and reported the
-  # arrivals gone, then reported them back on the next aircraft, four times in seventy
-  # minutes while the altitudes never moved off 3600 ft.
-  #
-  # So a gap is not evidence: between crossings this reports nil and the state stands.
-  # Only a sustained absence, well past any normal gap, is allowed to assert a change.
-  # The retention window is therefore the load-bearing part — the caller must keep
-  # crossings for `absence_seconds/0`, or an ordinary gap empties the pool and the
-  # absence branch fires on it.
-  @band_window_seconds 1200
-  @absence_seconds 2700
-
-  @doc "How long a crossing stays relevant — the caller must retain at least this long."
-  @spec absence_seconds() :: pos_integer()
-  def absence_seconds, do: @absence_seconds
+  @doc "How long a landing keeps voting on the route."
+  @spec retention_seconds() :: pos_integer()
+  def retention_seconds, do: @retention_seconds
 
   @doc """
-  The arrival path in use, from `traffic` (distinct descending aircraft near the field,
-  per `landing_traffic/2`) and `overhead` — `{age_seconds, altitude}` for each distinct
-  aircraft that crossed the zone, retained for `@absence_seconds`.
-
-  Returns nil rather than guessing: too little traffic to interpret an empty zone, a
-  mere gap between overflights, too few recent crossings to call a band, or a genuinely
-  mixed picture.
+  Fold this poll's sightings into the per-aircraft `passes` map: update each aircraft's
+  closest approach to `home` and mark it bound for `airport` once it is seen in the
+  terminal core or closing on the field. Aircraft not seen for `@retention_seconds`
+  are dropped.
   """
-  @spec overhead_path(non_neg_integer(), [{number(), number() | nil}]) ::
-          :low_approach | :high_approach | :river_approach | nil
-  def overhead_path(traffic, overhead) when is_integer(traffic) and is_list(overhead) do
-    # Only arrival-band crossings count. Rotorcraft underneath and transits above say
-    # nothing about which approach the airport is using.
-    arrivals_overhead =
-      for {age, alt} <- overhead,
-          band = overhead_band(alt),
-          band in [:low_approach, :high_approach],
-          do: {age, band}
+  @spec track_passes(%{String.t() => pass()}, [map()], {number(), number()}, {number(), number()}, integer()) ::
+          %{String.t() => pass()}
+  def track_passes(passes, aircraft, airport, {hlat, hlon} = _home, now)
+      when is_map(passes) and is_list(aircraft) do
+    aircraft
+    |> Enum.filter(&terminal?(&1, airport))
+    |> Enum.reduce(passes, fn ac, acc ->
+      case ac.hex || ac.callsign do
+        nil ->
+          acc
 
-    recent = for {age, band} <- arrivals_overhead, age <= @band_window_seconds, do: band
+        key ->
+          d = distance_nm(ac.lat, ac.lon, hlat, hlon)
+          prior = Map.get(acc, key, %{closest_nm: nil, closest_alt: nil, bound: false, last_seen: now})
 
-    # An aircraft whose altitude the feed omitted still crossed the zone, so it blocks
-    # the absence claim without contributing to a band.
-    unread_recent? =
-      Enum.any?(overhead, fn {age, alt} ->
-        age <= @band_window_seconds and overhead_band(alt) == nil
-      end)
+          nearer? = is_nil(prior.closest_nm) or d < prior.closest_nm
 
-    cond do
-      traffic < @min_arrivals ->
-        nil
-
-      # Nothing has crossed at an arrival altitude for the whole absence window while
-      # the field is demonstrably busy. At this airport that means the river routing:
-      # the arrivals are flying, and they are not coming over you.
-      arrivals_overhead == [] and not unread_recent? ->
-        :river_approach
-
-      # Too few recent crossings to call a band — including none at all, which just
-      # means we are between arrivals. Holding the previous state here is what stops
-      # the marker flapping; the absence claim above is deliberately checked against
-      # the FULL retention window, never this recent subset.
-      length(recent) < @min_overhead ->
-        nil
-
-      true ->
-        dominant_band(recent)
-    end
+          Map.put(acc, key, %{
+            closest_nm: if(nearer?, do: d, else: prior.closest_nm),
+            closest_alt: if(nearer?, do: ac.alt_ft, else: prior.closest_alt),
+            bound: prior.bound or bound_here?(ac, airport),
+            last_seen: now
+          })
+      end
+    end)
+    |> Map.filter(fn {_k, p} -> p.last_seen > now - @retention_seconds end)
   end
 
-  # A clear two-thirds majority, or nothing. Without this, traffic split across both
-  # bands would flip the reported path on every poll and fill the timeline with noise
-  # about noise. An unclear picture is reported as unclear (nil = leave the state alone).
-  defp dominant_band(bands) do
-    n = length(bands)
-    low = Enum.count(bands, &(&1 == :low_approach))
+  @doc """
+  The route in use, from the aircraft bound for this field: the noisiest routing with
+  at least `@min_landings` recent arrivals on it, or nil when too few to say.
+  """
+  @spec route(%{String.t() => pass()}) :: :low_approach | :high_approach | :river_approach | nil
+  def route(passes) when is_map(passes) do
+    votes = for {_k, %{bound: true} = p} <- passes, v = vote(p), v != nil, do: v
+    count = fn which -> Enum.count(votes, &(&1 == which)) end
 
     cond do
-      low * 3 >= n * 2 -> :low_approach
-      (n - low) * 3 >= n * 2 -> :high_approach
+      count.(:low_approach) >= @min_landings -> :low_approach
+      count.(:high_approach) >= @min_landings -> :high_approach
+      length(votes) >= @min_landings -> :river_approach
       true -> nil
     end
   end
+
+  # A field-bound aircraft that never came near is a vote for "they avoid you". One that did
+  # votes by the band it was in at its closest — unless that band says nothing about an
+  # arrival (rotorcraft floor, or an altitude the feed omitted), in which case it abstains
+  # rather than being counted as evidence of the quiet routing.
+  defp vote(%{closest_nm: d}) when is_nil(d), do: nil
+  defp vote(%{closest_nm: d}) when d > @near_home_nm, do: :river_approach
+
+  defp vote(%{closest_alt: alt}) do
+    case overhead_band(alt) do
+      band when band in [:low_approach, :high_approach] -> band
+      _ -> nil
+    end
+  end
+
+  defp terminal?(ac, {alat, alon}) do
+    is_number(ac.lat) and is_number(ac.lon) and is_number(ac.alt_ft) and
+      fresh_position?(ac) and
+      ac.alt_ft > 0 and ac.alt_ft < @terminal_ceiling_ft and
+      (ac.vspeed_fpm || 0) < @climbing_fpm and
+      distance_nm(ac.lat, ac.lon, alat, alon) <= @terminal_radius_nm
+  end
+
+  defp bound_here?(ac, {alat, alon} = airport) do
+    d = distance_nm(ac.lat, ac.lon, alat, alon)
+
+    cond do
+      d <= @core_radius_nm and ac.alt_ft < @core_ceiling_ft -> true
+      d > @closing_radius_nm or ac.alt_ft >= @closing_ceiling_ft -> false
+      (ac.vspeed_fpm || 0) >= @descent_fpm -> false
+      true -> closing_on?(ac, airport)
+    end
+  end
+
+  # Heading within @closing_max_offset_deg of the bearing to the field. No track → no.
+  defp closing_on?(%{track_deg: trk} = ac, {alat, alon}) when is_number(trk),
+    do: angular_distance(trk, bearing_deg(ac.lat, ac.lon, alat, alon)) <= @closing_max_offset_deg
+
+  defp closing_on?(_ac, _airport), do: false
+
+  defp bearing_deg(lat1, lon1, lat2, lon2) do
+    dn = (lat2 - lat1) * 60.0
+    de = (lon2 - lon1) * 60.0 * :math.cos(rad(lat1))
+    :math.atan2(de, dn) |> deg() |> normalise()
+  end
+
+  # Unknown age (feeds that do not report it) is treated as fresh.
+  defp fresh_position?(%{pos_age_s: age}) when is_number(age), do: age <= @max_pos_age_s
+  defp fresh_position?(_ac), do: true
 
   # --- Runway inference (supporting detail) ------------------------------------------
   # An aircraft on final is by definition aligned with the runway it is landing on, so

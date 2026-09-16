@@ -58,6 +58,12 @@ defmodule LgaPredictor.ADSB.ClientTest do
       assert [%Aircraft{vspeed_fpm: 0}] = Client.parse(%{"ac" => [base]}, @box)
     end
 
+    test "carries readsb's seen_pos as the position age" do
+      base = %{"hex" => "a1421b", "lat" => 40.76, "lon" => -73.87, "gs" => 200, "alt_baro" => 4525}
+      assert [%Aircraft{pos_age_s: 19.9}] = Client.parse(%{"ac" => [Map.put(base, "seen_pos", 19.9)]}, @box)
+      assert [%Aircraft{pos_age_s: nil}] = Client.parse(%{"ac" => [base]}, @box)
+    end
+
     test "drops aircraft outside the bounding box (circle is trimmed to the box)" do
       body = %{
         "ac" => [

@@ -23,6 +23,12 @@ defmodule LgaPredictor.FR24.Aircraft do
     :type,
     :reg,
     :dest_iata,
+    # Seconds since the last POSITION message, where the feed reports it (readsb's
+    # seen_pos). readsb keeps emitting an aircraft's last-known lat/lon for a while after
+    # position reception is lost, while altitude and velocity keep updating from other
+    # message types — so a low, descending aircraft can sit at a frozen distance for a
+    # minute. nil = unknown/fresh.
+    :pos_age_s,
     vspeed_fpm: 0
   ]
 

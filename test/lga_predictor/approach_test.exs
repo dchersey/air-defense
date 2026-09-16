@@ -99,101 +99,164 @@ defmodule LgaPredictor.ApproachTest do
     assert median < 30 or median > 330, "expected ~0, got #{median}"
   end
 
-  # --- Arrival path (what actually happens overhead) ---------------------------------
-  # `overhead_path(arrivals_near_field, overhead_altitudes)`. Both pools cover the same
-  # recent window; the first is the evidence that the airport is landing at all, without
-  # which an empty zone means nothing.
+  # --- Arrival route (from the whole stream, not zone crossings) ---------------------
+  # `track_passes/5` follows every aircraft in the terminal area and remembers how close
+  # it came to home; `route/1` lets only the ones that landed here vote.
 
-  describe "overhead_path/2" do
-    # `overhead` is {age_seconds, altitude} per distinct aircraft that crossed the zone.
-    # NOW = just observed; a large age = seen a while ago but still within retention.
-    defp fresh(alts), do: Enum.map(alts, &{60, &1})
+  # Synthetic home: the centre of the test zone in poller_test, ~3 nm south of the
+  # field. Same shape as the real geometry, not the real point.
+  @home {40.728, -73.864}
+  @now 1_000_000
 
-    test "a busy field with nothing crossing the zone is the river routing" do
-      assert Approach.overhead_path(6, []) == :river_approach
+  @over_home {40.728, -73.864}
+  # ~1.4 nm north of the field, ~4.3 nm from home — a straight-in final that never
+  # comes near the listener.
+  @far_final {40.80, -73.87}
+  # Hudson-ish: 8 nm west of home.
+  @river {40.728, -74.03}
+
+  # Default speed 150 kt: a jet on final. Loop-leg and transit fixtures pass their own.
+  defp plane(hex, {lat, lon}, alt, vs \\ -700, opts \\ []) do
+    %{hex: hex, callsign: hex, lat: lat, lon: lon, alt_ft: alt * 1.0, vspeed_fpm: vs,
+      track_deg: 40.0, gspeed_kt: Keyword.get(opts, :gs, 150.0), pos_age_s: Keyword.get(opts, :pos_age, nil)}
+  end
+
+  defp seen(fleet, passes \\ %{}, at \\ @now),
+    do: Approach.track_passes(passes, fleet, @lga, @home, at)
+
+  describe "track_passes/5" do
+    test "remembers each aircraft's closest pass to home and the altitude there" do
+      passes = seen([plane("a", @far_final, 2000)]) |> then(&seen([plane("a", @over_home, 3600, 0)], &1))
+      assert %{"a" => %{closest_nm: d, closest_alt: 3600.0}} = passes
+      assert d < 0.1
     end
 
-    # The whole point of counting traffic at the field: at 3am the zone is empty because
-    # nobody is flying, not because the routing changed. Claiming river_approach there
-    # would announce a configuration swing every single night.
-    test "a quiet field with nothing crossing the zone says nothing" do
-      assert Approach.overhead_path(3, []) == nil
-      assert Approach.overhead_path(0, []) == nil
+    test "a later, farther sighting does not overwrite the closest one" do
+      passes = seen([plane("a", @over_home, 3600, 0)]) |> then(&seen([plane("a", @far_final, 1200)], &1))
+      assert %{"a" => %{closest_alt: 3600.0}} = passes
     end
 
-    test "crossings on final, gear down" do
-      assert Approach.overhead_path(6, fresh([1475.0, 1800.0, 1520.0])) == :low_approach
+    test "marks an aircraft bound once seen in the core, and keeps it marked" do
+      # 12 nm out, level: not yet anything.
+      passes = seen([%{plane("a", @river, 5500, 0) | lon: -74.10}])
+      refute passes["a"].bound
+      passes = seen([plane("a", @far_final, 1200)], passes)
+      assert passes["a"].bound
+      passes = seen([%{plane("a", @river, 5500, 0) | lon: -74.10}], passes)
+      assert passes["a"].bound, "bound is sticky"
     end
 
-    test "crossings on the long north-east loop, gear still up" do
-      assert Approach.overhead_path(6, fresh([3575.0, 3600.0, 3600.0])) == :high_approach
+    # Departures climb out through the same airspace. Without the climb-rate gate a
+    # departure passing over home at 1500 ft would look exactly like the low approach.
+    test "ignores departures" do
+      assert seen([plane("dep", @over_home, 1500, 2400)]) == %{}
     end
 
-    # THE FLAPPING BUG. Overflights on a steady high approach arrived up to 18 minutes
-    # apart; a single short window emptied in the gaps and reported the arrivals gone,
-    # then back on the next aircraft — four times in seventy minutes while every
-    # altitude sat on 3600 ft.
-    #
-    # The fix is that the absence branch tests the FULL retained list, not the recent
-    # subset. A crossing too old to vote on the band must still veto the claim that
-    # nothing is coming over.
-    test "a crossing still in retention vetoes the absence claim" do
-      stale = [{2000, 3600.0}, {2100, 3575.0}]
-      refute Approach.overhead_path(6, stale) == :river_approach
-      assert Approach.overhead_path(6, stale) == nil, "hold the state, do not guess"
+    # The loop's outbound leg — 250+ kt, descending through 3000 ft, 2-3 nm from the
+    # field, heading AWAY from it — is this field's traffic and the only part of the
+    # high approach this antenna ever receives. It must count.
+    test "the loop leg in the terminal core is this field's traffic" do
+      passes = seen([plane("loop", @far_final, 2600, -1400, gs: 266.0)])
+      assert passes["loop"].bound
     end
 
-    test "but a sustained absence is evidence" do
-      # Nothing at all: the previous crossings have aged out of retention entirely.
-      assert Approach.overhead_path(6, []) == :river_approach
+    # A neighbouring airport's arrival descends through the same box, 7 nm out, heading
+    # away from this field. Without the heading check it would vote here.
+    test "a descent passing wide and heading away is not this field's traffic" do
+      away = %{plane("jfk", @river, 2500, -900) | track_deg: 250.0}
+      refute seen([away])["jfk"].bound
     end
 
-    # The retention window is the load-bearing part: the caller must hold crossings
-    # longer than the real gap between them, or the absence branch fires on a gap.
-    # Measured gaps on a steady high approach reached 18 minutes.
-    test "retention outlasts the observed gap between overflights" do
-      assert Approach.absence_seconds() > 18 * 60
+    test "a descent closing on the field from outside the core is this field's traffic" do
+      # 8 nm west, descending, tracking toward the field (bearing ~070).
+      toward = %{plane("in", @river, 2500, -900) | track_deg: 75.0}
+      assert seen([toward])["in"].bound
     end
 
-    # A police helicopter over the zone is not an arrival path. Without the floor it
-    # would read as a low approach — the loudest classification — on no airport traffic.
-    test "rotorcraft below the arrival floor are not a path" do
-      assert Approach.overhead_path(6, fresh([700.0, 450.0, 800.0])) == :river_approach
+    # readsb kept emitting a frozen position for 60+ s after losing an aircraft at 3 nm,
+    # altitude still updating. A stale position is not where the aircraft is, so it
+    # neither counts as bound nor moves the closest-pass record.
+    test "a stale position counts for nothing" do
+      passes = seen([plane("stale", @far_final, 1200, -700, pos_age: 45.0)])
+      assert passes == %{}
+      passes = seen([plane("ok", @over_home, 3600, 0, pos_age: 3.0)])
+      assert %{"ok" => %{closest_alt: 3600.0}} = passes
     end
 
-    test "high transiting traffic is not a path" do
-      assert Approach.overhead_path(6, fresh([11_000.0, 12_500.0])) == :river_approach
+    # Short-final aircraft often carry no vertical rate; in the core that must not matter.
+    test "no vertical rate in the core still counts" do
+      assert seen([plane("nr", @far_final, 1300, 0, gs: 145.0)])["nr"].bound
     end
 
-    # An aircraft with no altitude reading DID cross the zone. Calling that the river
-    # routing would assert the arrivals moved on the strength of missing data.
-    test "an unknown altitude is not evidence either way" do
-      assert Approach.overhead_path(6, fresh([nil, nil, nil])) == nil
-      assert Approach.overhead_path(6, fresh([700.0, nil])) == nil
-      # ...but it does not veto a picture the rest of the crossings already make clear.
-      assert Approach.overhead_path(6, fresh([1500.0, 1600.0, nil])) == :low_approach
+    test "forgets aircraft not seen within retention" do
+      passes = seen([plane("a", @over_home, 3600, 0)])
+      assert seen([], passes, @now + Approach.retention_seconds() + 1) == %{}
+    end
+  end
+
+  # Build a fleet that has been fully observed: near home at `alt`, then in the core.
+  defp landed_via(hexes, where, alt, vs \\ 0) do
+    fleet1 = Enum.map(hexes, &plane(&1, where, alt, vs))
+    fleet2 = Enum.map(hexes, &plane(&1, @far_final, 1200))
+    seen(fleet1) |> then(&seen(fleet2, &1))
+  end
+
+  describe "route/1" do
+    test "three arrivals that passed home low is the low approach" do
+      assert Approach.route(landed_via(~w(a b c), @over_home, 1500, -700)) == :low_approach
     end
 
-    # One crossing is a go-around or an odd vector, not a pattern.
-    test "a single crossing does not decide" do
-      assert Approach.overhead_path(6, fresh([1500.0])) == nil
+    test "three arrivals that passed home high is the high approach" do
+      assert Approach.route(landed_via(~w(a b c), @over_home, 3600)) == :high_approach
     end
 
-    # Without the majority rule a genuinely mixed picture would flip the reported path
-    # on alternate polls and fill the timeline with noise about noise.
-    test "an evenly split picture says nothing rather than flapping" do
-      assert Approach.overhead_path(8, fresh([1500.0, 1600.0, 3800.0, 4100.0])) == nil
+    test "three arrivals that never came near is the river approach" do
+      assert Approach.route(landed_via(~w(a b c), @river, 2500)) == :river_approach
     end
 
-    test "a two-thirds majority is enough to call it" do
-      assert Approach.overhead_path(8, fresh([1500.0, 1600.0, 4100.0])) == :low_approach
-      assert Approach.overhead_path(8, fresh([1500.0, 3900.0, 4100.0])) == :high_approach
+    # THE CASE A MAJORITY GETS WRONG. Measured live: during a high-approach period only
+    # a third of the arrivals flew the loop over home; the rest came straight in from the
+    # other side. A majority would have called that "river" while seven aircraft in
+    # thirteen minutes went over the listener at 3600 ft. The noisiest routing in
+    # meaningful use is the answer.
+    test "the noisiest route in meaningful use wins, not the majority" do
+      loopers = landed_via(~w(a b c), @over_home, 3600)
+      direct = landed_via(~w(d e f g h i), @river, 2500)
+      assert Approach.route(Map.merge(loopers, direct)) == :high_approach
     end
 
-    # Only crossings recent enough to still describe the routing get a vote.
-    test "stale crossings do not vote on the current band" do
-      mixed = [{60, 3600.0}, {60, 3575.0}, {2000, 1500.0}, {2000, 1600.0}]
-      assert Approach.overhead_path(8, mixed) == :high_approach
+    test "low outranks high" do
+      low = landed_via(~w(a b c), @over_home, 1500, -700)
+      high = landed_via(~w(d e f g), @over_home, 3600)
+      assert Approach.route(Map.merge(low, high)) == :low_approach
+    end
+
+    test "too few arrivals is a lull, not a route" do
+      assert Approach.route(landed_via(~w(a b), @over_home, 3600)) == nil
+    end
+
+    # An aircraft passing 9 nm from the field, level, bound elsewhere, says nothing about
+    # this field's routing — even three of them.
+    test "aircraft not bound here do not vote" do
+      elsewhere = {elem(@lga, 0) - 9 / 60, elem(@lga, 1)}
+      passing = seen(Enum.map(~w(a b c), &plane(&1, elsewhere, 4000, 0)))
+      assert Approach.route(passing) == nil
+    end
+
+    # A helicopter that lands here after passing home at 600 ft is not an approach
+    # route; nor is an aircraft whose altitude the feed omitted. Both abstain rather than
+    # being counted as evidence of the quiet routing.
+    test "rotorcraft and unread altitudes abstain" do
+      rotor = landed_via(~w(a b c), @over_home, 600, -300)
+      assert Approach.route(rotor) == nil
+    end
+
+    test "the near-home radius is wider than the ANC zone but excludes the straight-in" do
+      # 2 nm off: still "over you" for a 3600 ft loop.
+      two_nm = {elem(@home, 0) + 2 / 60, elem(@home, 1)}
+      assert Approach.route(landed_via(~w(a b c), two_nm, 3600)) == :high_approach
+      # 4.6 nm off: the straight-in final. Not over you.
+      assert Approach.route(landed_via(~w(a b c), @far_final, 3600)) == :river_approach
     end
   end
 
@@ -209,29 +272,6 @@ defmodule LgaPredictor.ApproachTest do
 
     test "an absent reading has no band" do
       assert Approach.overhead_band(nil) == nil
-    end
-  end
-
-  describe "landing_traffic/2" do
-    # The gate that broke live: over 16 minutes of real LGA traffic the tight
-    # final-approach filter matched ZERO aircraft, because aircraft are inside 6 nm
-    # and under 3000 ft for barely a minute. The descent into the terminal area is
-    # what is actually observable, so "is the field working" must not reuse the
-    # runway filter.
-    test "counts the descent into the terminal area, which the final gate misses" do
-      descending = ac(track: 20, alt: 4500, lat: 40.90, vspeed: -900)
-
-      assert Approach.arrivals([descending], @lga) == [], "too high and too far for a final"
-      assert [_] = Approach.landing_traffic([descending], @lga)
-    end
-
-    test "climbing traffic is not evidence the field is landing" do
-      assert Approach.landing_traffic([ac(track: 20, alt: 4500, lat: 40.90, vspeed: 1800)], @lga) == []
-    end
-
-    test "excludes traffic too high or too far to be bound for this field" do
-      assert Approach.landing_traffic([ac(track: 20, alt: 9000, lat: 40.80, vspeed: -900)], @lga) == []
-      assert Approach.landing_traffic([ac(track: 20, alt: 4500, lat: 41.10, vspeed: -900)], @lga) == []
     end
   end
 
