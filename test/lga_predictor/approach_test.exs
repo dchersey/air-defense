@@ -17,7 +17,8 @@ defmodule LgaPredictor.ApproachTest do
       lon: Keyword.get(opts, :lon, -73.90),
       track_deg: Keyword.fetch!(opts, :track),
       alt_ft: Keyword.get(opts, :alt, 1200.0),
-      vspeed_fpm: Keyword.get(opts, :vspeed, -800)
+      vspeed_fpm: Keyword.get(opts, :vspeed, -800),
+      gspeed_kt: 150.0
     }
   end
 
@@ -79,6 +80,13 @@ defmodule LgaPredictor.ApproachTest do
     assert Approach.active_runway([ac(track: 85), ac(track: 87), ac(track: 86)], @lga, @runways) == nil
   end
 
+  # The loop's outbound leg at 270 kt dips under 3000 ft within 6 nm and, read as a
+  # final, named runway 13 while 22 was in use. A final is slow.
+  test "a fast aircraft is not on final, whatever its track" do
+    fast = Enum.map(1..3, fn _ -> %{ac(track: 40) | gspeed_kt: 270.0} end)
+    assert Approach.active_runway(fast, @lga, @runways) == nil
+  end
+
   test "accepts a realistic crosswind crab but not a transit" do
     # 15 degrees off: a stiff crosswind on final, still runway 4.
     assert {"4", _, _} = Approach.active_runway([ac(track: 55), ac(track: 55), ac(track: 55)], @lga, @runways)
@@ -107,6 +115,8 @@ defmodule LgaPredictor.ApproachTest do
   # field. Same shape as the real geometry, not the real point.
   @home {40.728, -73.864}
   @now 1_000_000
+  # A moment by which every fixture's pass counts as complete (gone > @gone_seconds).
+  @done @now + 200
 
   @over_home {40.728, -73.864}
   # ~1.4 nm north of the field, ~4.3 nm from home — a straight-in final that never
@@ -203,15 +213,15 @@ defmodule LgaPredictor.ApproachTest do
 
   describe "route/1" do
     test "three arrivals that passed home low is the low approach" do
-      assert Approach.route(landed_via(~w(a b c), @over_home, 1500, -700)) == :low_approach
+      assert Approach.route(landed_via(~w(a b c), @over_home, 1500, -700), @done) == :low_approach
     end
 
     test "three arrivals that passed home high is the high approach" do
-      assert Approach.route(landed_via(~w(a b c), @over_home, 3600)) == :high_approach
+      assert Approach.route(landed_via(~w(a b c), @over_home, 3600), @done) == :high_approach
     end
 
     test "three arrivals that never came near is the river approach" do
-      assert Approach.route(landed_via(~w(a b c), @river, 2500)) == :river_approach
+      assert Approach.route(landed_via(~w(a b c), @river, 2500), @done) == :river_approach
     end
 
     # THE CASE A MAJORITY GETS WRONG. Measured live: during a high-approach period only
@@ -222,17 +232,38 @@ defmodule LgaPredictor.ApproachTest do
     test "the noisiest route in meaningful use wins, not the majority" do
       loopers = landed_via(~w(a b c), @over_home, 3600)
       direct = landed_via(~w(d e f g h i), @river, 2500)
-      assert Approach.route(Map.merge(loopers, direct)) == :high_approach
+      assert Approach.route(Map.merge(loopers, direct), @done) == :high_approach
+    end
+
+    # THE PROBE-7 RESULT. Two airliners crossed home at 3600 ft and one GA aircraft
+    # did not; the old fallback made that "they avoid you". River is not a default.
+    test "river is not the fallback when the noisy routes fall short" do
+      high = landed_via(~w(a b), @over_home, 3600)
+      river = landed_via(~w(c), @river, 2500)
+      assert Approach.route(Map.merge(high, river), @done) == nil
+    end
+
+    test "river tolerates one stray near-home pass" do
+      river = landed_via(~w(a b c), @river, 2500)
+      stray = landed_via(~w(d), @over_home, 3600)
+      assert Approach.route(Map.merge(river, stray), @done) == :river_approach
+    end
+
+    # Three staying away and two coming over is a changeover in progress: say nothing.
+    test "river does not tolerate two" do
+      river = landed_via(~w(a b c), @river, 2500)
+      two = landed_via(~w(d e), @over_home, 3600)
+      assert Approach.route(Map.merge(river, two), @done) == nil
     end
 
     test "low outranks high" do
       low = landed_via(~w(a b c), @over_home, 1500, -700)
       high = landed_via(~w(d e f g), @over_home, 3600)
-      assert Approach.route(Map.merge(low, high)) == :low_approach
+      assert Approach.route(Map.merge(low, high), @done) == :low_approach
     end
 
     test "too few arrivals is a lull, not a route" do
-      assert Approach.route(landed_via(~w(a b), @over_home, 3600)) == nil
+      assert Approach.route(landed_via(~w(a b), @over_home, 3600), @done) == nil
     end
 
     # An aircraft passing 9 nm from the field, level, bound elsewhere, says nothing about
@@ -240,7 +271,7 @@ defmodule LgaPredictor.ApproachTest do
     test "aircraft not bound here do not vote" do
       elsewhere = {elem(@lga, 0) - 9 / 60, elem(@lga, 1)}
       passing = seen(Enum.map(~w(a b c), &plane(&1, elsewhere, 4000, 0)))
-      assert Approach.route(passing) == nil
+      assert Approach.route(passing, @done) == nil
     end
 
     # A helicopter that lands here after passing home at 600 ft is not an approach
@@ -248,15 +279,40 @@ defmodule LgaPredictor.ApproachTest do
     # being counted as evidence of the quiet routing.
     test "rotorcraft and unread altitudes abstain" do
       rotor = landed_via(~w(a b c), @over_home, 600, -300)
-      assert Approach.route(rotor) == nil
+      assert Approach.route(rotor, @done) == nil
+    end
+
+    # THE 11:35 MARKER. Three loop aircraft recognised as bound while still 8 nm out,
+    # each with a closest-pass-so-far of 8 nm, voted "river" together — three minutes
+    # before crossing home at 3600 ft. A pass votes only once it is complete.
+    test "an aircraft still inbound does not vote yet" do
+      inbound = seen(Enum.map(~w(a b c), &%{plane(&1, @river, 4000, -900) | track_deg: 75.0}))
+      assert Enum.all?(inbound, fn {_, p} -> p.bound end), "recognised as this field's traffic"
+      assert Approach.route(inbound, @now) == nil, "but nobody has passed yet"
+    end
+
+    test "a completed pass votes by its closest point, and moving away completes it" do
+      fleet = ~w(a b c)
+      p1 = seen(Enum.map(fleet, &plane(&1, @over_home, 3600, 0)))
+      # Now 2 nm past home, distance increasing: passed.
+      away = {elem(@home, 0) + 2 / 60, elem(@home, 1)}
+      p2 = seen(Enum.map(fleet, &plane(&1, away, 3300, 0)), p1)
+      assert Approach.route(p2, @now) == :high_approach
+    end
+
+    test "dropping off the receiver completes a pass" do
+      # 3400 ft: inside the core ceiling, so the over-home sighting alone makes them bound.
+      p1 = seen(Enum.map(~w(a b c), &plane(&1, @over_home, 3400, 0)))
+      assert Approach.route(p1, @now) == nil
+      assert Approach.route(p1, @now + 121) == :high_approach
     end
 
     test "the near-home radius is wider than the ANC zone but excludes the straight-in" do
       # 2 nm off: still "over you" for a 3600 ft loop.
       two_nm = {elem(@home, 0) + 2 / 60, elem(@home, 1)}
-      assert Approach.route(landed_via(~w(a b c), two_nm, 3600)) == :high_approach
+      assert Approach.route(landed_via(~w(a b c), two_nm, 3600), @done) == :high_approach
       # 4.6 nm off: the straight-in final. Not over you.
-      assert Approach.route(landed_via(~w(a b c), @far_final, 3600)) == :river_approach
+      assert Approach.route(landed_via(~w(a b c), @far_final, 3600), @done) == :river_approach
     end
   end
 

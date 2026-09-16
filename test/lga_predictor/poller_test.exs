@@ -190,10 +190,24 @@ defmodule LgaPredictor.PollerTest do
   defp marker, do: Enum.find(LgaPredictor.History.all(), &Map.has_key?(&1, :approach))
 
   # A fleet observed across two ticks: first at `where`/`alt`, then on short final.
+  # ~2.5 nm north of the field: farther from home than @far_final, so a fleet seen there
+  # after @far_final is moving AWAY from home — its pass is complete and it may vote.
+  @gone_away {40.815, -73.870}
+
   defp fly_and_land(feed, hexes, where, alt, vs \\ 0) do
     Agent.update(feed, fn _ -> Enum.map(hexes, &plane(&1, where, alt, vs)) end)
     ambient_tick!()
     Agent.update(feed, fn _ -> Enum.map(hexes, &plane(&1, @far_final, 1200)) end)
+    ambient_tick!()
+    Agent.update(feed, fn _ -> Enum.map(hexes, &plane(&1, @gone_away, 800)) end)
+    ambient_tick!()
+  end
+
+  # Only ever seen on the straight-in, then moving away: never came near, pass complete.
+  defp straight_in(feed, hexes) do
+    Agent.update(feed, fn _ -> Enum.map(hexes, &plane(&1, @far_final, 1200)) end)
+    ambient_tick!()
+    Agent.update(feed, fn _ -> Enum.map(hexes, &plane(&1, @gone_away, 800)) end)
     ambient_tick!()
   end
 
@@ -218,8 +232,7 @@ defmodule LgaPredictor.PollerTest do
   test "arrivals that never came near home are the river approach" do
     # Only ever seen on the straight-in final, well clear of home.
     feed = start_route_test()
-    Agent.update(feed, fn _ -> Enum.map(~w(a b c), &plane(&1, @far_final, 1200)) end)
-    ambient_tick!()
+    straight_in(feed, ~w(a b c))
     assert %{approach: "river approach"} = marker()
   end
 
@@ -236,8 +249,7 @@ defmodule LgaPredictor.PollerTest do
   test "the noisiest route in use wins even when most arrivals avoid home" do
     feed = start_route_test()
     # Six straight-in, three around the loop over home.
-    Agent.update(feed, fn _ -> Enum.map(~w(d e f g h i), &plane(&1, @far_final, 1200)) end)
-    ambient_tick!()
+    straight_in(feed, ~w(d e f g h i))
     fly_and_land(feed, ~w(a b c), @home, 3600)
     assert %{approach: "high approach"} = marker()
   end
@@ -252,11 +264,10 @@ defmodule LgaPredictor.PollerTest do
 
   test "a change of route records where it changed FROM" do
     feed = start_route_test()
-    Agent.update(feed, fn _ -> Enum.map(~w(a b c), &plane(&1, @far_final, 1200)) end)
-    ambient_tick!()
+    straight_in(feed, ~w(a b c))
     assert %{approach: "river approach"} = marker()
 
-    # Lower 3000 ft: only ever seen on the straight-in.
+    # Then three around the loop, low.
     fly_and_land(feed, ~w(x y z), @home, 1500, -700)
     assert %{approach: "low approach", approach_from: "river approach"} = marker()
   end
@@ -269,9 +280,8 @@ defmodule LgaPredictor.PollerTest do
 
   test "the route needs home configured, but not runways" do
     feed = start_route_test()
-    Agent.update(feed, fn _ -> Enum.map(~w(a b c), &plane(&1, @far_final, 1200)) end)
     # runways: [] must not silence it.
-    ambient_tick!()
+    straight_in(feed, ~w(a b c))
     assert %{approach: "river approach"} = marker()
   end
 

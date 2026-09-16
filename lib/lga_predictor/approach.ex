@@ -111,15 +111,28 @@ defmodule LgaPredictor.Approach do
   # arrival stops being over you.
   @near_home_nm 3.0
 
-  # Fewer landings than this and the picture is not worth reporting: a lull, not a route.
+  # Fewer arrivals than this on a route and it is not in meaningful use: a lull, or a
+  # stray, not a route.
   @min_landings 3
+  # Near-home passes the river call tolerates. One is a go-around or an odd vector; two
+  # means the loop is being flown.
+  @river_max_strays 1
   # A landing stops describing the current routing after this long.
   @retention_seconds 1200
+
+  # A vote is cast only once the pass is COMPLETE: the aircraft is now moving away from
+  # home, or it has dropped off the receiver. Without this an inbound aircraft votes the
+  # moment it is recognised as bound — twelve miles out, "never came near" — and three
+  # arriving together announce the river three minutes before they cross home at
+  # 3600 ft. Measured live: that was the installed app's first marker.
+  @passed_margin_nm 0.5
+  @gone_seconds 120
 
   @typedoc "What is remembered per aircraft: its closest pass to home, and whether it is this field's traffic."
   @type pass :: %{
           closest_nm: number() | nil,
           closest_alt: number() | nil,
+          last_nm: number() | nil,
           bound: boolean(),
           last_seen: integer()
         }
@@ -147,13 +160,15 @@ defmodule LgaPredictor.Approach do
 
         key ->
           d = distance_nm(ac.lat, ac.lon, hlat, hlon)
-          prior = Map.get(acc, key, %{closest_nm: nil, closest_alt: nil, bound: false, last_seen: now})
+          prior =
+            Map.get(acc, key, %{closest_nm: nil, closest_alt: nil, last_nm: nil, bound: false, last_seen: now})
 
           nearer? = is_nil(prior.closest_nm) or d < prior.closest_nm
 
           Map.put(acc, key, %{
             closest_nm: if(nearer?, do: d, else: prior.closest_nm),
             closest_alt: if(nearer?, do: ac.alt_ft, else: prior.closest_alt),
+            last_nm: d,
             bound: prior.bound or bound_here?(ac, airport),
             last_seen: now
           })
@@ -163,21 +178,38 @@ defmodule LgaPredictor.Approach do
   end
 
   @doc """
-  The route in use, from the aircraft bound for this field: the noisiest routing with
-  at least `@min_landings` recent arrivals on it, or nil when too few to say.
+  The route in use, from the aircraft bound for this field whose pass is complete: the
+  noisiest routing with at least `@min_landings` recent arrivals on it, or nil when too
+  few to say.
   """
-  @spec route(%{String.t() => pass()}) :: :low_approach | :high_approach | :river_approach | nil
-  def route(passes) when is_map(passes) do
-    votes = for {_k, %{bound: true} = p} <- passes, v = vote(p), v != nil, do: v
-    count = fn which -> Enum.count(votes, &(&1 == which)) end
+  @spec route(%{String.t() => pass()}, integer()) :: :low_approach | :high_approach | :river_approach | nil
+  def route(passes, now) when is_map(passes) and is_integer(now) do
+    votes =
+      for {_k, %{bound: true} = p} <- passes, passed?(p, now), v = vote(p), v != nil, do: v
+    low = Enum.count(votes, &(&1 == :low_approach))
+    high = Enum.count(votes, &(&1 == :high_approach))
+    river = Enum.count(votes, &(&1 == :river_approach))
 
+    # Every route earns its own threshold. River was once the fallback whenever neither
+    # noisy route reached three votes, which made it the DEFAULT at low traffic: two
+    # airliners crossing home at 3600 ft plus one GA aircraft that did not came out as
+    # "they avoid you". River means the arrivals are landing and staying away — three of
+    # them, with at most one stray near-home pass. Two near-home passes alongside three
+    # river ones is a changeover in progress, and the honest answer is not yet.
     cond do
-      count.(:low_approach) >= @min_landings -> :low_approach
-      count.(:high_approach) >= @min_landings -> :high_approach
-      length(votes) >= @min_landings -> :river_approach
+      low >= @min_landings -> :low_approach
+      high >= @min_landings -> :high_approach
+      river >= @min_landings and low + high <= @river_max_strays -> :river_approach
       true -> nil
     end
   end
+
+  # Moving away from home again, or not seen for a while (this antenna loses every
+  # arrival before it lands, so "gone" is how a completed pass usually looks).
+  defp passed?(%{closest_nm: c, last_nm: l}, _now) when is_number(c) and is_number(l) and l > c + @passed_margin_nm,
+    do: true
+
+  defp passed?(%{last_seen: seen}, now), do: now - seen > @gone_seconds
 
   # A field-bound aircraft that never came near is a vote for "they avoid you". One that did
   # votes by the band it was in at its closest — unless that band says nothing about an
@@ -294,9 +326,14 @@ defmodule LgaPredictor.Approach do
 
   def runway_from_tracks(_tracks, _runways), do: nil
 
+  # A final is SLOW. The loop's outbound leg dips under 3000 ft within 6 nm of the field
+  # at 266-272 kt; read as a final it named a runway that was not in use.
+  @final_max_gs_kt 180
+
   defp arriving?(ac, {alat, alon}) do
     is_number(ac.lat) and is_number(ac.lon) and is_number(ac.track_deg) and
       is_number(ac.alt_ft) and ac.alt_ft < @approach_ceiling_ft and
+      is_number(ac.gspeed_kt) and ac.gspeed_kt < @final_max_gs_kt and
       (ac.vspeed_fpm || 0) < @descent_fpm and
       distance_nm(ac.lat, ac.lon, alat, alon) <= @arrival_radius_nm
   end

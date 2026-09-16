@@ -412,7 +412,7 @@ defmodule LgaPredictor.Poller do
       state = %{state | approach_samples: tracks, approach_passes: passes}
 
       runway = Approach.runway_from_tracks(Enum.map(tracks, &elem(&1, 1)), runways)
-      passes |> Approach.route() |> decide_path(state, runway)
+      passes |> Approach.route(now) |> decide_path(state, runway)
     else
       _ -> state
     end
