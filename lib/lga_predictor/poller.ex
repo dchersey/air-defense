@@ -368,12 +368,27 @@ defmodule LgaPredictor.Poller do
     end
   end
 
-  defp mark_receiver(state, ok?) do
-    if state.receiver_ok != ok? do
-      Logger.info("[poller] receiver #{if ok?, do: "reachable again", else: "UNREACHABLE"}")
-    end
+  # Consecutive failed ambient polls before the receiver is declared unreachable. At a
+  # 5 s tick over Wi-Fi to the Pi, a single timed-out fetch is routine (one in ~64
+  # measured) and used to flash the antenna red for one tick — noise on the one signal
+  # that means "the Pi is gone". Two misses is ~10 s, still six times faster than the
+  # old 60 s cadence ever noticed anything. Recovery is immediate: one good poll.
+  @receiver_miss_threshold 2
 
-    %{state | receiver_ok: ok?}
+  defp mark_receiver(state, true) do
+    if state.receiver_ok == false, do: Logger.info("[poller] receiver reachable again")
+    %{state | receiver_ok: true, receiver_misses: 0}
+  end
+
+  defp mark_receiver(state, false) do
+    misses = state.receiver_misses + 1
+
+    if misses >= @receiver_miss_threshold and state.receiver_ok != false do
+      Logger.info("[poller] receiver UNREACHABLE (#{misses} consecutive misses)")
+      %{state | receiver_ok: false, receiver_misses: misses}
+    else
+      %{state | receiver_misses: misses}
+    end
   end
 
   defp record_ambient(state, ac, now) do
@@ -1385,6 +1400,7 @@ defmodule LgaPredictor.Poller do
       # dies with no session running is otherwise invisible from both ends: its own
       # health monitor cannot report its own death, and nothing here was watching.
       receiver_ok: true,
+      receiver_misses: 0,
       headphones_connected: true,
       keep_alive_held: false,
       actioned: MapSet.new(),

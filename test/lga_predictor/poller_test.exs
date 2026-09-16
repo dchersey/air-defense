@@ -124,9 +124,35 @@ defmodule LgaPredictor.PollerTest do
     # with the Pi, and feed_ok only means anything while a session polls.
     start_with_history(config_fun: local_config(), fetcher: fn _ -> {:error, :timeout} end)
     ambient_tick!()
+    ambient_tick!()
 
     assert Poller.status().receiver_ok == false
     refute Poller.status().active?, "and with no session, so nothing else would notice"
+  end
+
+  # At a 5 s tick a single timed-out fetch is routine; it must not flash the antenna.
+  test "one missed poll between good ones is not an outage" do
+    alive = fn _ -> {:ok, [low_overflight(2000.0)]} end
+    dead = fn _ -> {:error, :timeout} end
+    agent = start_supervised!({Agent, fn -> alive end})
+
+    start_with_history(config_fun: local_config(), fetcher: fn box -> Agent.get(agent, & &1).(box) end)
+    ambient_tick!()
+    assert Poller.status().receiver_ok == true
+
+    Agent.update(agent, fn _ -> dead end)
+    ambient_tick!()
+    assert Poller.status().receiver_ok == true, "one miss is not evidence"
+
+    Agent.update(agent, fn _ -> alive end)
+    ambient_tick!()
+    assert Poller.status().receiver_ok == true
+
+    # But two in a row is.
+    Agent.update(agent, fn _ -> dead end)
+    ambient_tick!()
+    ambient_tick!()
+    assert Poller.status().receiver_ok == false
   end
 
   test "the receiver flag clears once it answers again" do
@@ -140,15 +166,17 @@ defmodule LgaPredictor.PollerTest do
     )
 
     ambient_tick!()
+    ambient_tick!()
     assert Poller.status().receiver_ok == false
 
     Agent.update(agent, fn _ -> alive end)
     ambient_tick!()
-    assert Poller.status().receiver_ok == true
+    assert Poller.status().receiver_ok == true, "recovery is immediate"
   end
 
   test "providers with no receiver of ours report nil, not a false alarm" do
     start_with_history(fetcher: fn _ -> {:error, :timeout} end)
+    ambient_tick!()
     ambient_tick!()
     assert Poller.status().receiver_ok == nil
   end
