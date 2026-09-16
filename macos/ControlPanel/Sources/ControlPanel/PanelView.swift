@@ -748,11 +748,15 @@ private struct ActivityStrip: View {
         // a full-width line instead of being forced into the flight columns. It is the
         // answer to "why did the list go quiet" — without it, a configuration swing and
         // a dead receiver look identical from here.
-        if let rwy = flight.approach {
+        //
+        // The label names what happens OVERHEAD ("low final", "high downwind", "not
+        // overhead"), not a runway: the same runway is fed by routes that differ
+        // entirely underfoot, so the runway alone would not say whether to expect noise.
+        if let path = flight.approach {
           HStack(spacing: 6) {
             Image(systemName: "arrow.triangle.turn.up.right.diamond")
               .font(.adMono).foregroundStyle(Palette.inbound)
-            Text(flight.approachFrom.map { "LGA \($0) → \(rwy)" } ?? "LGA landing \(rwy)")
+            Text(flight.approachFrom.map { "\($0) → \(path)" } ?? "approach: \(path)")
               .font(.adMono).foregroundStyle(Palette.ink2)
             Spacer(minLength: 8)
             Text(ancTime(flight)).font(.adMono).monospacedDigit()

@@ -98,4 +98,114 @@ defmodule LgaPredictor.ApproachTest do
 
     assert median < 30 or median > 330, "expected ~0, got #{median}"
   end
+
+  # --- Arrival path (what actually happens overhead) ---------------------------------
+  # `overhead_path(arrivals_near_field, overhead_altitudes)`. Both pools cover the same
+  # recent window; the first is the evidence that the airport is landing at all, without
+  # which an empty zone means nothing.
+
+  describe "overhead_path/2" do
+    test "a busy field with nothing crossing the zone is a route that avoids us" do
+      assert Approach.overhead_path(6, []) == :not_overhead
+    end
+
+    # The whole point of counting arrivals at the field: at 3am the zone is empty
+    # because nobody is flying, not because the route changed. Claiming :not_overhead
+    # there would announce a configuration swing every single night.
+    test "a quiet field with nothing crossing the zone says nothing" do
+      assert Approach.overhead_path(3, []) == nil
+      assert Approach.overhead_path(0, []) == nil
+    end
+
+    test "crossings on final, gear down" do
+      assert Approach.overhead_path(6, [1475.0, 1800.0, 1520.0]) == :low_final
+    end
+
+    test "crossings on the longer loop, gear still up" do
+      assert Approach.overhead_path(6, [3500.0, 4200.0, 3900.0]) == :high_downwind
+    end
+
+    # A police helicopter over the zone is not an arrival path. Without the floor it
+    # would read as :low_final — the loudest classification — on no airport traffic.
+    test "rotorcraft below the arrival floor are not a path" do
+      assert Approach.overhead_path(6, [700.0, 450.0, 800.0]) == :not_overhead
+    end
+
+    # Likewise above: traffic at 12000 ft is crossing the city, not landing here.
+    test "high transiting traffic is not a path" do
+      assert Approach.overhead_path(6, [11_000.0, 12_500.0]) == :not_overhead
+    end
+
+    # An aircraft with no altitude reading DID cross the zone. Calling that
+    # :not_overhead would assert the route avoids us on the strength of missing data.
+    test "an unknown altitude is not evidence either way" do
+      assert Approach.overhead_path(6, [nil, nil, nil]) == nil
+      assert Approach.overhead_path(6, [700.0, nil]) == nil
+      # ...but it does not veto a picture the rest of the crossings already make clear.
+      assert Approach.overhead_path(6, [1500.0, 1600.0, nil]) == :low_final
+    end
+
+    # One crossing is a go-around or an odd vector, not a pattern.
+    test "a single crossing does not decide" do
+      assert Approach.overhead_path(6, [1500.0]) == nil
+    end
+
+    # Without the majority rule a genuinely mixed picture would flip the reported path
+    # on alternate polls and fill the timeline with noise about noise.
+    test "an evenly split picture says nothing rather than flapping" do
+      assert Approach.overhead_path(8, [1500.0, 1600.0, 3800.0, 4100.0]) == nil
+    end
+
+    test "a two-thirds majority is enough to call it" do
+      assert Approach.overhead_path(8, [1500.0, 1600.0, 4100.0]) == :low_final
+      assert Approach.overhead_path(8, [1500.0, 3900.0, 4100.0]) == :high_downwind
+    end
+  end
+
+  describe "overhead_band/1" do
+    test "band edges" do
+      assert Approach.overhead_band(999) == :rotor
+      assert Approach.overhead_band(1000) == :low_final
+      assert Approach.overhead_band(2999) == :low_final
+      assert Approach.overhead_band(3000) == :high_downwind
+      assert Approach.overhead_band(5999) == :high_downwind
+      assert Approach.overhead_band(6000) == :transit
+    end
+
+    test "an absent reading has no band" do
+      assert Approach.overhead_band(nil) == nil
+    end
+  end
+
+  describe "landing_traffic/2" do
+    # The gate that broke live: over 16 minutes of real LGA traffic the tight
+    # final-approach filter matched ZERO aircraft, because aircraft are inside 6 nm
+    # and under 3000 ft for barely a minute. The descent into the terminal area is
+    # what is actually observable, so "is the field working" must not reuse the
+    # runway filter.
+    test "counts the descent into the terminal area, which the final gate misses" do
+      descending = ac(track: 20, alt: 4500, lat: 40.90, vspeed: -900)
+
+      assert Approach.arrivals([descending], @lga) == [], "too high and too far for a final"
+      assert [_] = Approach.landing_traffic([descending], @lga)
+    end
+
+    test "climbing traffic is not evidence the field is landing" do
+      assert Approach.landing_traffic([ac(track: 20, alt: 4500, lat: 40.90, vspeed: 1800)], @lga) == []
+    end
+
+    test "excludes traffic too high or too far to be bound for this field" do
+      assert Approach.landing_traffic([ac(track: 20, alt: 9000, lat: 40.80, vspeed: -900)], @lga) == []
+      assert Approach.landing_traffic([ac(track: 20, alt: 4500, lat: 41.10, vspeed: -900)], @lga) == []
+    end
+  end
+
+  describe "arrivals/2" do
+    # The path classifier counts distinct AIRCRAFT, so it needs the aircraft, not just
+    # their tracks — arrival_tracks/2 is now a projection of this.
+    test "returns the arriving aircraft themselves" do
+      fleet = [ac(track: 40), ac(track: 40, alt: 8000), ac(track: 40, vspeed: 1800)]
+      assert [%{alt_ft: 1200.0, vspeed_fpm: -800}] = Approach.arrivals(fleet, @lga)
+    end
+  end
 end

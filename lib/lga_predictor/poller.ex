@@ -41,22 +41,11 @@ defmodule LgaPredictor.Poller do
   # session. Only ever runs on an UNMETERED provider — doing this on FR24 would spend
   # credits continuously for a graph.
   @ambient_interval_ms 60_000
-  # Overhead traffic sorts into four altitude bands here, and only one of them is what
-  # ANC exists for. All of them under the global ceiling are recorded for the activity
-  # graph; only the noisy band lights the idle menu-bar icon amber.
-  #
-  #   < 1000 ft   rotorcraft and light GA. Measured over this zone, every sub-1000ft
-  #               crossing was a Bell 206/429 or a Cessna Caravan. A police helicopter
-  #               lighting the icon is a false alarm.
-  #   1000-3000   near-arrivals on final, GEAR DOWN — the loud ones. This is the band
-  #               worth reacting to; flights that actually engaged ANC crossed at
-  #               1475-1800 ft.
-  #   3000-6000   arrivals taking the longer loop overhead toward the NE/SW runway,
-  #               inbound from the north-east. Gear still up; audible only with the
-  #               windows open. Real traffic, worth counting, not worth an alert.
-  #   > 6000      not LGA-bound at all (excluded by the global ceiling).
-  @ambient_alert_ft 3000
-  @ambient_alert_min_ft 1000
+  # Overhead traffic sorts into altitude bands (`Approach.overhead_band/1`), and only
+  # one of them is what ANC exists for. All of them under the global ceiling are
+  # recorded for the activity graph; only `:low_final` — gear down, the loud ones —
+  # lights the idle menu-bar icon amber. The bands live in `Approach` because the same
+  # thresholds decide which arrival path is in use, and the two must not drift apart.
   # How long that amber persists after the last low overflight.
   @ambient_clear_seconds 600
   # One aircraft crossing the zone spans several 60s polls; record it once per pass.
@@ -374,87 +363,158 @@ defmodule LgaPredictor.Poller do
     end
   end
 
-  # Unknown altitude never raises the flag — an absent reading is not evidence.
-  defp alert_altitude?(alt) when is_number(alt),
-    do: alt >= @ambient_alert_min_ft and alt < @ambient_alert_ft
+  # Unknown altitude never raises the flag — an absent reading is not evidence, and
+  # `overhead_band/1` returns nil for it rather than guessing a band.
+  defp alert_altitude?(alt), do: Approach.overhead_band(alt) == :low_final
 
-  defp alert_altitude?(_), do: false
-
-  # Which runway the airport is landing on, recorded only when it CHANGES.
+  # Which arrival path the airport is using, recorded only when it CHANGES.
   #
   # A configuration swing stops arrivals crossing the zone entirely, and from inside the
   # zone that is indistinguishable from a dead receiver or an empty sky — the failure
   # mode is silence, which looks the same whatever caused it. Naming the change in the
   # flight list turns twelve hours of nothing into a fact.
   #
-  # Needs a wider view than the zone box, so it queries around the field rather than
-  # reusing the zoneset's bounds. Free on a local receiver (the whole picture arrives in
-  # one fetch and is trimmed client-side); skipped entirely on a metered provider, like
-  # everything else in the ambient path.
+  # The path is measured where it is felt rather than at the field, because the runway
+  # does not determine what happens overhead: the same runway is fed both by a route
+  # that crosses the neighbourhood low with the gear down and by one that never crosses
+  # it at all. So this pools two things over a rolling window, both from ONE fetch:
+  # distinct arrivals near the field (is the airport even landing?) and distinct
+  # crossings of the ANC zones with their altitudes (is it coming over us, and how low?).
+  # The runway is still inferred, but only as detail for the log.
+  #
+  # Free on a local receiver (the whole picture arrives in one fetch and is trimmed
+  # client-side); skipped entirely on a metered provider, like everything else in the
+  # ambient path.
+  #
   # Samples older than this stop counting, so a genuine configuration change is reflected
   # within roughly this long rather than being outvoted by stale observations forever.
   @approach_window_seconds 900
 
   defp check_approach(state, config) do
+    zones =
+      config.zonesets |> Enum.filter(& &1.enabled) |> Enum.flat_map(& &1.anc_zones)
+
+    # Runways are optional: they only sharpen the log line. The path itself is measured
+    # overhead and must not go unreported just because nobody configured the field.
+    runways = Map.get(config, :runways, [])
+
     with {alat, alon} <- Map.get(config, :airport_coords),
-         runways when runways != [] <- Map.get(config, :runways, []),
-         {:ok, aircraft} <- fetch(state, airport_box(alat, alon)) do
+         {:ok, aircraft} <- fetch(state, approach_box({alat, alon}, zones)) do
       now = System.os_time(:second)
       cutoff = now - @approach_window_seconds
+      flying = Enum.reject(aircraft, &ramp?/1)
 
-      fresh =
-        aircraft
-        |> Approach.arrival_tracks({alat, alon})
-        |> Enum.map(&{now, &1})
+      arrivals = Approach.arrivals(flying, {alat, alon})
 
-      pool =
-        (fresh ++ state.approach_samples)
+      # Two DIFFERENT populations, deliberately. `arrivals` is the tight final-approach
+      # filter, whose tracks name the runway. `landing_traffic` is the wider descending
+      # gate that says whether the field is working at all — measured live, the tight
+      # one matched zero aircraft in 16 minutes, so using it for both would have left
+      # the path permanently unreported.
+      #
+      # Per-aircraft, not per-sighting: one aircraft spans several polls, and counting
+      # sightings would let a single slow one impersonate a busy sky.
+      seen_traffic =
+        flying
+        |> Approach.landing_traffic({alat, alon})
+        |> pool(state.approach_traffic, now, cutoff)
+
+      seen_overhead =
+        flying
+        |> Enum.filter(&(is_number(&1.lat) and is_number(&1.lon)))
+        |> Enum.filter(&in_any_zone?(zones, {&1.lat, &1.lon}))
+        |> pool(state.approach_overhead, now, cutoff, & &1.alt_ft)
+
+      tracks =
+        (Enum.map(arrivals, &{now, &1.track_deg}) ++ state.approach_samples)
         |> Enum.filter(fn {t, _} -> t > cutoff end)
         |> Enum.take(60)
 
-      state = %{state | approach_samples: pool}
-      decide_approach(state, Enum.map(pool, &elem(&1, 1)), runways)
+      state = %{
+        state
+        | approach_samples: tracks,
+          approach_traffic: seen_traffic,
+          approach_overhead: seen_overhead
+      }
+
+      runway = Approach.runway_from_tracks(Enum.map(tracks, &elem(&1, 1)), runways)
+
+      Approach.overhead_path(
+        map_size(seen_traffic),
+        seen_overhead |> Map.values() |> Enum.map(&elem(&1, 1))
+      )
+      |> decide_path(state, runway)
     else
       _ -> state
     end
   end
 
-  defp decide_approach(state, tracks, runways) do
-    case Approach.runway_from_tracks(tracks, runways) do
-      {name, track, n} ->
-        if name != state.active_runway do
-          Logger.info(
-            "[poller] approach: #{state.active_runway || "(unknown)"} -> #{name} " <>
-              "(median final #{round(track)}deg, #{n} samples)"
-          )
+  # Fold this poll's sightings into a `%{key => {last_seen, extra}}` pool and drop the
+  # stale ones. Keyed by aircraft so the pool counts AIRCRAFT, not observations.
+  defp pool(aircraft, prior, now, cutoff, extra \\ fn _ac -> nil end) do
+    aircraft
+    |> Enum.reduce(prior, fn ac, acc ->
+      case ac.hex || ac.callsign do
+        nil -> acc
+        key -> Map.put(acc, key, {now, extra.(ac)})
+      end
+    end)
+    |> Map.filter(fn {_k, {t, _}} -> t > cutoff end)
+  end
 
-          record_history(%{
-            at: System.os_time(:second),
-            callsign: nil,
-            hex: nil,
-            type: nil,
-            alt_ft: nil,
-            enters_in: 0,
-            dwell: 0,
-            engaged: false,
-            approach: name,
-            approach_from: state.active_runway
-          })
+  defp decide_path(nil, state, _runway), do: state
 
-          %{state | active_runway: name}
-        else
-          state
+  defp decide_path(path, state, runway) do
+    if path == state.active_path do
+      state
+    else
+      detail =
+        case runway do
+          {name, track, n} -> " (runway #{name}, median final #{round(track)}deg, #{n} samples)"
+          nil -> ""
         end
 
-      nil ->
-        state
+      Logger.info(
+        "[poller] approach: #{path_label(state.active_path) || "(unknown)"} -> " <>
+          "#{path_label(path)}#{detail}"
+      )
+
+      record_history(%{
+        at: System.os_time(:second),
+        callsign: nil,
+        hex: nil,
+        type: nil,
+        alt_ft: nil,
+        enters_in: 0,
+        dwell: 0,
+        engaged: false,
+        approach: path_label(path),
+        approach_from: path_label(state.active_path)
+      })
+
+      %{state | active_path: path, active_runway: runway && elem(runway, 0)}
     end
   end
 
-  # A box around the field wide enough to hold aircraft on final. @arrival_radius_nm in
-  # Approach is 6 nm; 0.2 degrees is ~12 nm of latitude, so this comfortably contains it.
-  defp airport_box(lat, lon), do: {lat + 0.2, lat - 0.2, lon - 0.25, lon + 0.25}
+  # Named for what the listener experiences, not for the airport's own vocabulary —
+  # these are the three states that differ underfoot.
+  defp path_label(:low_final), do: "low final"
+  defp path_label(:high_downwind), do: "high downwind"
+  defp path_label(:not_overhead), do: "not overhead"
+  defp path_label(nil), do: nil
 
+  # One box wide enough for both halves of the measurement: aircraft on final near the
+  # field AND the ANC zones themselves, which are the other end of the same question.
+  # @arrival_radius_nm in Approach is 6 nm; 0.2 degrees is ~12 nm of latitude, so the
+  # airport half comfortably contains it.
+  defp approach_box({lat, lon}, zones) do
+    boxes = [{lat + 0.2, lat - 0.2, lon - 0.25, lon + 0.25} | Enum.map(zones, &Geo.bbox/1)]
+    n = boxes |> Enum.map(&elem(&1, 0)) |> Enum.max()
+    s = boxes |> Enum.map(&elem(&1, 1)) |> Enum.min()
+    w = boxes |> Enum.map(&elem(&1, 2)) |> Enum.min()
+    e = boxes |> Enum.map(&elem(&1, 3)) |> Enum.max()
+    {n, s, w, e}
+  end
   defp prune_ambient_seen(state) do
     cutoff = System.os_time(:second) - @ambient_dedupe_seconds
     %{state | ambient_seen: Map.filter(state.ambient_seen, fn {_k, t} -> t > cutoff end)}
@@ -1317,17 +1377,23 @@ defmodule LgaPredictor.Poller do
       polls: 0,
       credits: 0,
       # Ambient (session-off) tracking. `ambient_seen` is hex/callsign -> last recorded
-      # unix seconds, for dedupe; `ambient_low_at` is when a sub-@ambient_alert_ft
-      # aircraft was last seen in zone, which drives the amber idle icon.
+      # unix seconds, for dedupe; `ambient_low_at` is when a :low_final aircraft was
+      # last seen in zone, which drives the amber idle icon.
       ambient_timer: nil,
       ambient_seen: %{},
       ambient_low_at: nil,
-      # Last inferred landing runway, so a CHANGE can be recorded rather than the
-      # current state re-announced every minute.
+      # Last classified arrival path and the runway behind it, so a CHANGE can be
+      # recorded rather than the current state re-announced every minute.
+      active_path: nil,
       active_runway: nil,
-      # Pooled final-approach tracks as {unix_seconds, track}. One 60s snapshot rarely
-      # holds enough arrivals inside 6 nm to decide, so observations accumulate.
+      # Pooled observations over @approach_window_seconds. One 60s snapshot rarely holds
+      # enough arrivals inside 6 nm to decide, so they accumulate: `approach_samples` is
+      # {unix_seconds, track} for the runway median, while `approach_traffic` and
+      # `approach_overhead` are keyed by aircraft (key -> {unix_seconds, extra}) so they
+      # count distinct AIRCRAFT rather than repeat sightings of one.
       approach_samples: [],
+      approach_traffic: %{},
+      approach_overhead: %{},
       # Whether the local receiver answered its last ambient poll. Distinct from
       # feed_ok, which only means anything while a session is polling — a receiver that
       # dies with no session running is otherwise invisible from both ends: its own

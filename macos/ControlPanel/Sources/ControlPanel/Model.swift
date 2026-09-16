@@ -21,8 +21,9 @@ struct Flight: Codable, Identifiable {
   // the activity graph, never acted on, and deliberately never route-resolved — so the
   // UI dims it rather than showing it as a flight Air Defense handled.
   let engaged: Bool?
-  // Set only on approach-change markers: the runway now in use, and the one before it.
-  // These are events in the timeline, not flights.
+  // Set only on approach-change markers: the arrival path now in use, and the one
+  // before it ("low final" / "high downwind" / "not overhead" — what the traffic does
+  // overhead, which is what decides whether it is audible). Events, not flights.
   let approach: String?
   let approachFrom: String?
 
