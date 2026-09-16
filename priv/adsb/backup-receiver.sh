@@ -35,6 +35,11 @@ for f in /usr/local/share/airplanes/airplanes-uuid \
          /etc/systemd/system/adsb-health.timer \
          /etc/systemd/system/adsb-health-boot.service \
          /usr/local/bin/adsb-health \
+         /etc/systemd/system/adsb-netwatch.service \
+         /etc/systemd/system/adsb-netwatch.timer \
+         /usr/local/bin/adsb-netwatch \
+         /etc/systemd/journald.conf.d/50-persistent.conf \
+         /etc/needrestart/conf.d/50-local.conf \
          /etc/ssh/sshd_config.d/99-hardening.conf \
          /etc/lighttpd/lighttpd.conf; do
   out="$WORK/pi/$(echo "${f#/}" | tr / _)"
@@ -66,7 +71,9 @@ Most of this system is reproducible; only a few things here are not.
   `~/Library/Application Support/air-defense/config.json`, then restart the backend.
 
 ## Secrets NOT in this archive (recover from source, do not store here)
-- Pushover token/user  -> Pushover dashboard, rewrite `/etc/adsb-health.conf` (0600 root)
+- Pushover token/user  -> Pushover dashboard, rewrite `/etc/adsb-health.conf` (0600 root).
+  Add `EXPECTED_GATEWAY=<the LAN gateway>` to that same file, or adsb-netwatch cannot
+  tell "on the wrong network" from "healthy" and will report false all-clears.
 - Wi-Fi PSK            -> `sudo nmcli --ask device wifi connect <SSID> ifname wlan0`
 - AeroAPI key          -> FlightAware account, paste in Settings (stored in Keychain)
 
@@ -87,6 +94,18 @@ Most of this system is reproducible; only a few things here are not.
    latency and jitter. wlan0 MAC is the reservation key, NOT eth0's.
 6. Air Defense points at `http://adsb.internal/tar1090/data/aircraft.json`
    (tar1090 serves under /tar1090/, NOT /).
+
+## If the receiver goes unreachable but is clearly still alive
+Check WHERE it is before assuming it is down — ask the Pi, do not infer from the Mac:
+
+    ssh <pi> 'uptime -p; ip route show default; nmcli -t -f SSID,BSSID,FREQ,SIGNAL dev wifi list | grep -i <ssid>'
+
+More than one BSSID for your SSID means something else is broadcasting it. A stray
+mesh node still carrying an old SSID+PSK will authenticate the Pi perfectly and bridge
+it to a different subnet, usually with client isolation on — so the Pi keeps decoding,
+keeps internet, and is invisible to every scan from the LAN. `journalctl -b -u
+NetworkManager | grep 'new lease, address='` shows the subnet changing; that is the
+only tell, because roaming within one SSID logs no error anywhere.
 NOTE
 
 # Finder drops .DS_Store into any directory it touches; keep it out of the archive.

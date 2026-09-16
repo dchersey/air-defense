@@ -287,8 +287,172 @@ else
     ok "wrote /etc/adsb-health.conf"
   else warn "skipped — monitor installed but inert until /etc/adsb-health.conf exists"; fi
 fi
+# --- adsb-netwatch: the monitor that watches the LINK, not the decoder -------------
+# adsb-health is structurally blind to "I am unreachable" — every check it makes is
+# local. This is the other half, and it lives here rather than being hand-installed so
+# a rebuilt card is not silently missing it.
+cat > /usr/local/bin/adsb-netwatch <<'NETWATCH'
+#!/bin/bash
+# Detect and repair the receiver's own network isolation.
+#
+# The Pi cannot page anyone while it is offline. What it CAN do is fix itself, and then
+# report the outage once it is back — which turns an invisible gap into a stated one.
+# adsb-health is structurally blind here: every check it runs is local, so it cannot see
+# "I am unreachable" any more than it can report its own death.
+#
+# Escalation: bounce the Wi-Fi connection first; reboot only if that has not worked for
+# a sustained period. A headless receiver whose sole job is this has nothing to lose from
+# a reboot and everything to lose from staying dark.
+#
+# TWO different failures, which need opposite responses:
+#
+#   1. ISOLATION — no usable link. Cannot notify; self-heal, then report on recovery.
+#   2. WRONG NETWORK — associated and online, but on the wrong LAN. On 2026-09-15 a
+#      secondary mesh node was plugged in still carrying this SSID and PSK, bridging it
+#      to a different subnet with client isolation on. The Pi roamed to it (it was on a
+#      lower 5GHz channel and simply looked stronger), took a lease there, and kept
+#      decoding for 8h32m while unreachable to everything that mattered.
+#
+# Case 2 is why this script cannot just ask "can I reach my gateway": it derives the
+# gateway from the routing table, so on the wrong network it happily pinged THAT
+# gateway and logged four "network recovered" lines during the outage. A false all-clear
+# is worse than silence — it actively argues that nothing is wrong. So the question has
+# to be "is my gateway the EXPECTED one", which needs a value from outside the routing
+# table. The saving grace: on the wrong network the Pi still has internet, so unlike
+# isolation it can report this the moment it happens rather than hours later.
+
+set -uo pipefail
+CONF=/etc/adsb-health.conf
+STATE=/var/lib/adsb-health
+mkdir -p "$STATE"
+[ -r "$CONF" ] && . "$CONF"
+
+FAIL_BEFORE_BOUNCE=2      # ~4 min at a 2-minute timer
+FAIL_BEFORE_REBOOT=10     # ~20 min
+FAILFILE="$STATE/net-fails"
+DOWNFILE="$STATE/net-down-since"
+WRONGFILE="$STATE/net-wrong-since"
+WRONGNOTIFY="$STATE/net-wrong-notified"
+WRONGBOUNCE="$STATE/net-wrong-bounced"
+WRONG_NOTIFY_GAP=1800     # re-nag at most every 30 min while misplaced
+WRONG_BOUNCE_GAP=600      # retry the bounce at most every 10 min
+
+notify() {
+  [ -n "${PUSHOVER_TOKEN:-}" ] || return 0
+  curl -s -m 20 --form-string "token=$PUSHOVER_TOKEN" --form-string "user=$PUSHOVER_USER" \
+       --form-string "title=$1" --form-string "message=$2" --form-string "priority=${3:-0}" \
+       https://api.pushover.net/1/messages.json >/dev/null
+}
+
+now=$(date +%s)
+GW=$(ip route | awk '/^default/{print $3; exit}')
+WIFI=$(nmcli -g NAME,TYPE connection show 2>/dev/null | awk -F: '$2=="802-11-wireless"{print $1; exit}')
+
+# --- Wrong network ------------------------------------------------------------------
+# Checked BEFORE reachability, because on the wrong network the gateway is reachable and
+# the isolation logic below would report everything as fine.
+if [ -n "${EXPECTED_GATEWAY:-}" ] && [ -n "$GW" ] && [ "$GW" != "$EXPECTED_GATEWAY" ]; then
+  [ -f "$WRONGFILE" ] || printf '%s' "$now" > "$WRONGFILE"
+  mins=$(( (now - $(cat "$WRONGFILE")) / 60 ))
+  logger -t adsb-netwatch "WRONG NETWORK: gateway $GW, expected $EXPECTED_GATEWAY (${mins} min)"
+
+  last=$(cat "$WRONGNOTIFY" 2>/dev/null || echo 0)
+  if [ $(( now - last )) -ge "$WRONG_NOTIFY_GAP" ]; then
+    printf '%s' "$now" > "$WRONGNOTIFY"
+    # Priority 1: this one needs a human. The Pi cannot fix a second access point
+    # handing out the wrong LAN, and nothing else on the network can see the problem.
+    notify "ADS-B: wrong network" \
+      "The receiver is on the wrong network — gateway $GW, expected $EXPECTED_GATEWAY, for ~${mins} min. It is decoding normally but is unreachable from the LAN. Usually a second access point broadcasting the same SSID on a different subnet." 1
+  fi
+
+  lastb=$(cat "$WRONGBOUNCE" 2>/dev/null || echo 0)
+  if [ -n "$WIFI" ] && [ $(( now - lastb )) -ge "$WRONG_BOUNCE_GAP" ]; then
+    printf '%s' "$now" > "$WRONGBOUNCE"
+    logger -t adsb-netwatch "bouncing '$WIFI' to try to leave the wrong network"
+    # Best-effort only: this reassociates to whichever AP of that SSID looks strongest,
+    # which may well be the same wrong one. The notification above is the real remedy.
+    nmcli connection down "$WIFI" >/dev/null 2>&1
+    sleep 3
+    nmcli connection up "$WIFI" >/dev/null 2>&1
+  fi
+
+  # Reachability state means nothing here. Clearing it stops the isolation branch from
+  # later announcing a "recovery" from an outage it never observed.
+  rm -f "$FAILFILE" "$DOWNFILE"
+  exit 0
+fi
+
+# Back on the expected network after being misplaced — say so, and say how long.
+if [ -f "$WRONGFILE" ]; then
+  mins=$(( (now - $(cat "$WRONGFILE")) / 60 ))
+  notify "ADS-B: back on the correct network" \
+    "The receiver rejoined the expected network after ~${mins} min on the wrong one. Nothing was lost — it kept decoding throughout — but it was unreachable for that whole period." 0
+  logger -t adsb-netwatch "back on the expected network after ${mins} min"
+  rm -f "$WRONGFILE" "$WRONGNOTIFY" "$WRONGBOUNCE"
+fi
+
+# --- Isolation ----------------------------------------------------------------------
+# Cache the gateway only while it is the expected one, so a stray lease can never become
+# the thing we later ping when the routing table is empty.
+[ -n "$GW" ] && printf '%s' "$GW" > "$STATE/net-gateway"
+# No default route at all is itself the failure, so fall back to the last known gateway.
+[ -n "$GW" ] || GW=$(cat "$STATE/net-gateway" 2>/dev/null)
+[ -n "$GW" ] || exit 0
+
+fails=$(cat "$FAILFILE" 2>/dev/null || echo 0)
+
+if ping -c 2 -W 3 "$GW" >/dev/null 2>&1; then
+  if [ -f "$DOWNFILE" ]; then
+    mins=$(( (now - $(cat "$DOWNFILE")) / 60 ))
+    # The report that could not be sent at the time. Priority 0: it is already fixed,
+    # but a pattern of these means the Wi-Fi link needs attention rather than a script.
+    notify "ADS-B: network recovered" \
+      "The receiver was off the network for ~${mins} min and is back. It kept decoding throughout — only its link was gone, so nothing on the Pi could report it at the time." 0
+    logger -t adsb-netwatch "network recovered after ${mins} min"
+    rm -f "$DOWNFILE"
+  fi
+  rm -f "$FAILFILE"
+  exit 0
+fi
+
+# Unreachable.
+fails=$((fails + 1))
+printf '%s' "$fails" > "$FAILFILE"
+[ -f "$DOWNFILE" ] || printf '%s' "$now" > "$DOWNFILE"
+logger -t adsb-netwatch "gateway $GW unreachable (failure $fails)"
+
+if [ "$fails" -ge "$FAIL_BEFORE_REBOOT" ]; then
+  logger -t adsb-netwatch "still offline after $fails checks — rebooting"
+  rm -f "$FAILFILE"
+  systemctl reboot
+elif [ "$fails" -ge "$FAIL_BEFORE_BOUNCE" ] && [ -n "$WIFI" ]; then
+  logger -t adsb-netwatch "bouncing wifi connection '$WIFI'"
+  nmcli connection down "$WIFI" >/dev/null 2>&1
+  sleep 3
+  nmcli connection up "$WIFI" >/dev/null 2>&1
+fi
+NETWATCH
+chmod 755 /usr/local/bin/adsb-netwatch
+
+printf '[Unit]\nDescription=Air Defense receiver network watchdog\n[Service]\nType=oneshot\nTimeoutStartSec=120\nExecStart=/usr/local/bin/adsb-netwatch\n' \
+  > /etc/systemd/system/adsb-netwatch.service
+printf '[Unit]\nDescription=Check the ADS-B receiver is on the right network every 2 minutes\n[Timer]\nOnBootSec=3min\nOnUnitActiveSec=2min\nAccuracySec=30s\n[Install]\nWantedBy=timers.target\n' \
+  > /etc/systemd/system/adsb-netwatch.timer
+
+# The gateway in use at provision time is by definition the expected one. Recording it
+# gives the check a reference OUTSIDE the routing table — the whole point, since a
+# second access point on the wrong LAN changes the routing table and nothing else.
+if [ -r /etc/adsb-health.conf ] && ! grep -q '^EXPECTED_GATEWAY=' /etc/adsb-health.conf; then
+  PROV_GW=$(ip route | awk '/^default/{print $3; exit}')
+  if [ -n "$PROV_GW" ]; then
+    printf 'EXPECTED_GATEWAY=%s\n' "$PROV_GW" >> /etc/adsb-health.conf
+    ok "recorded expected gateway $PROV_GW"
+  else warn "no default route — wrong-network detection stays off until EXPECTED_GATEWAY is set"; fi
+fi
+
 systemctl daemon-reload
 systemctl enable --now adsb-health.timer >/dev/null 2>&1 && ok "timer armed (15 min)"
+systemctl enable --now adsb-netwatch.timer >/dev/null 2>&1 && ok "network watchdog armed (2 min)"
 systemctl enable adsb-health-boot.service >/dev/null 2>&1 && ok "boot notification enabled"
 [ -r /etc/adsb-health.conf ] && /usr/local/bin/adsb-health --test >/dev/null && ok "test notification sent"
 
