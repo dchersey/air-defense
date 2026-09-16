@@ -31,9 +31,11 @@ from datetime import datetime, timezone
 RECEIVER = os.environ.get("ADSB_URL", "http://adsb.internal/tar1090/data/aircraft.json")
 AIRDEF   = os.environ.get("AIRDEFENSE_URL", "http://127.0.0.1:4040/api/status")
 OUT      = os.path.expanduser("~/air-defense-noise-timing.csv")
-HOME     = (40.722832, -73.857549)      # antenna position; override with ADSB_LAT/LON
-if os.environ.get("ADSB_LAT"):
-    HOME = (float(os.environ["ADSB_LAT"]), float(os.environ["ADSB_LON"]))
+# Antenna position. No default on purpose: this file is public, and a receiver
+# position is a home address.
+if not (os.environ.get("ADSB_LAT") and os.environ.get("ADSB_LON")):
+    sys.exit("set ADSB_LAT and ADSB_LON to the antenna position")
+HOME     = (float(os.environ["ADSB_LAT"]), float(os.environ["ADSB_LON"]))
 
 CLIFF_DB    = 10.0    # dB below peak that counts as the cone-of-silence edge
 TRACK_NM    = 2.0     # consider aircraft inside this range

@@ -199,11 +199,13 @@ defmodule LgaPredictor.PredictorTest do
       assert Predictor.time_to_closest(%{base | gspeed_kt: 5.0}, {41.0, -73.0}) == nil
     end
 
-    # The real case: LGA arrival at 150 kt, 0.5 nm out on a 077 track, matching the
-    # live pass this was validated against.
+    # The real case: an arrival at 150 kt, ~0.4 nm short of the listener on a 077
+    # track, matching the live pass this was validated against. Geometry is the
+    # measured one translated onto the synthetic test home — same offsets, not the
+    # real point.
     test "matches the measured live geometry" do
-      ac = %{lat: 40.7190, lon: -73.8640, track_deg: 77.0, gspeed_kt: 152.0}
-      t = Predictor.time_to_closest(ac, {40.722832, -73.857549})
+      ac = %{lat: 40.7242, lon: -73.8705, track_deg: 77.0, gspeed_kt: 152.0}
+      t = Predictor.time_to_closest(ac, {40.728, -73.864})
       assert t > 0 and t < 30, "expected a short positive countdown, got #{inspect(t)}"
     end
   end
