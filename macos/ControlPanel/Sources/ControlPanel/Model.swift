@@ -21,11 +21,6 @@ struct Flight: Codable, Identifiable {
   // the activity graph, never acted on, and deliberately never route-resolved — so the
   // UI dims it rather than showing it as a flight Air Defense handled.
   let engaged: Bool?
-  // Set only on approach-change markers: the arrival path now in use, and the one
-  // before it ("low approach" / "high approach" / "river approach" — what the traffic
-  // does overhead, which is what decides whether it is audible). Events, not flights.
-  let approach: String?
-  let approachFrom: String?
 
   var id: String { "\(callsign ?? "?")-\(at)" }
 }
@@ -89,6 +84,12 @@ struct StatusResponse: Codable {
   let ambient: Bool?
   // false = the local receiver is not answering. nil for providers with no receiver.
   let receiverOk: Bool?
+  // The arrival route in use ("low approach" / "high approach" / "river approach"),
+  // when it began, and when the classifier last polled. A state, shown as a banner —
+  // it is the answer to "why is the list quiet". All nil on a metered provider.
+  let route: String?
+  let routeSince: Int?
+  let routePolledAt: Int?
   let billingResetDay: Int
   let provider: String
   let localFeedUrl: String?
@@ -150,6 +151,10 @@ final class StatusModel {
   var ambient = false
   // nil until known; false means the receiver has stopped answering.
   var receiverOk: Bool?
+  // Arrival route banner (nil = not yet determined, or a metered provider).
+  var route: String?
+  var routeSince: Int?
+  var routePolledAt: Int?
   // Day-of-month the FR24 allotment resets (billing anniversary; 1 = calendar month).
   var billingResetDay = 1
   // Flight-data source for all zones, + whether an FR24 key is stored.
@@ -273,6 +278,9 @@ final class StatusModel {
       creditMode = status.creditMode ?? "monthly"
       ambient = status.ambient ?? false
       receiverOk = status.receiverOk
+      route = status.route
+      routeSince = status.routeSince
+      routePolledAt = status.routePolledAt
       billingResetDay = status.billingResetDay
       provider = status.provider
       fr24KeyPresent = status.fr24KeyPresent

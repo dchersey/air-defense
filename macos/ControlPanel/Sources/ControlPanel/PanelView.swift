@@ -574,6 +574,8 @@ private struct ActivityStrip: View {
 
         bars
 
+        routeBanner
+
         if !model.recent.isEmpty {
           Button { withAnimation(.easeInOut(duration: 0.18)) { showFlights.toggle() } } label: {
             HStack(spacing: 4) {
@@ -744,30 +746,6 @@ private struct ActivityStrip: View {
   private var flightList: some View {
     VStack(alignment: .leading, spacing: 5) {
       ForEach(model.recent.prefix(10)) { flight in
-        // An approach change is a fact about the airport, not an overflight, so it gets
-        // a full-width line instead of being forced into the flight columns. It is the
-        // answer to "why did the list go quiet" — without it, a configuration swing and
-        // a dead receiver look identical from here.
-        //
-        // The label names what happens OVERHEAD, not a runway: the same runway is fed
-        // by routes that differ entirely underfoot, so the runway alone would not say
-        // whether to expect noise.
-        //   "low approach"    gear down, under 3000 ft — the loud one (amber icon)
-        //   "high approach"   the long north-east loop, a steady ~3600 ft, gear up
-        //   "river approach"  the field is busy and none of it comes over you
-        if let path = flight.approach {
-          HStack(spacing: 6) {
-            Image(systemName: "arrow.triangle.turn.up.right.diamond")
-              .font(.adMono).foregroundStyle(Palette.inbound)
-            Text(flight.approachFrom.map { "\($0) → \(path)" } ?? "approach: \(path)")
-              .font(.adMono).foregroundStyle(Palette.ink2)
-            Spacer(minLength: 8)
-            Text(ancTime(flight)).font(.adMono).monospacedDigit()
-              .foregroundStyle(Palette.ink3)
-              .frame(width: 92, alignment: .trailing)
-          }
-          .contentShape(Rectangle())
-        } else {
         // Observed-only: crossed the zone while ANC was off. Dimmed throughout, and the
         // timestamp is not in the accent colour because nothing was engaged at it.
         let observed = flight.engaged == false
@@ -808,7 +786,6 @@ private struct ActivityStrip: View {
         // Only SET on enter; clearing is handled once at the list level (below) so
         // moving between rows never blips through the empty/hint state.
         .onHover { inside in if inside { hoveredFlightID = flight.id } }
-        }
       }
 
       // Hover detail: the full aircraft name for the hovered row — a real .help()
@@ -844,6 +821,36 @@ private struct ActivityStrip: View {
       let name = AircraftTypes.name(for: type)
     else { return "hover a type code for the aircraft model" }
     return "\(type) — \(name)"
+  }
+
+  // The arrival route LGA is flying, as a persistent line rather than a list row: a
+  // route is a state, and a row scrolls away under the overflights it exists to
+  // explain (and was being counted by the overflight graph). Shows when it began and
+  // when the classifier last looked, so a quiet list reads as "river approach since
+  // 11:20, still checking" instead of as a dead feed. Absent on a metered provider,
+  // where the classifier never runs.
+  @ViewBuilder private var routeBanner: some View {
+    if model.routePolledAt != nil || model.route != nil {
+      HStack(spacing: 6) {
+        Image(systemName: "arrow.triangle.turn.up.right.diamond")
+          .font(.adMono).foregroundStyle(model.route == nil ? Palette.ink3 : Palette.inbound)
+        Text(model.route ?? "route undetermined")
+          .font(.adMono).foregroundStyle(model.route == nil ? Palette.ink3 : Palette.ink)
+          .lineLimit(1)
+        if let since = model.routeSince {
+          Text("since \(clock(since))").font(.adMono).monospacedDigit().foregroundStyle(Palette.ink3)
+        }
+        Spacer(minLength: 8)
+        if let polled = model.routePolledAt {
+          Text("polled \(clock(polled))").font(.adMono).monospacedDigit().foregroundStyle(Palette.ink3)
+        }
+      }
+      .padding(.vertical, 2)
+    }
+  }
+
+  private func clock(_ unix: Int) -> String {
+    Date(timeIntervalSince1970: TimeInterval(unix)).formatted(date: .omitted, time: .shortened)
   }
 
   // Clock time ANC engaged for this flight: detection time + predicted lead to the

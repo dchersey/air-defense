@@ -236,6 +236,10 @@ defmodule LgaPredictor.API.Router do
       # menu-bar icon amber.
       ambient: Map.get(status, :ambient, false),
       receiver_ok: Map.get(status, :receiver_ok),
+      # Arrival route banner: the route in use, since when, and the classifier's last poll.
+      route: Map.get(status, :route),
+      route_since: Map.get(status, :route_since),
+      route_polled_at: Map.get(status, :route_polled_at),
       approx_credits: status.approx_credits,
       zonesets: status.zonesets,
       inbound_at: status.inbound_at,
@@ -328,9 +332,6 @@ defmodule LgaPredictor.API.Router do
     |> Map.put(:is_private, private)
     |> Map.put(:engaged, engaged)
   end
-
-  # Approach-change events carry no callsign and must not be route-resolved; they are
-  # rendered as a timeline marker rather than a flight.
 
   # Echo the persisted config back as plain JSON (the raw form, so the UI
   # round-trips the GeoJSON it sent rather than the derived polygons/tuples).

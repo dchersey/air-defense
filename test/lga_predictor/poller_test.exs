@@ -232,7 +232,8 @@ defmodule LgaPredictor.PollerTest do
     fn -> config(opts) |> Map.put(:airport_coords, @lga) |> Map.put(:home_coords, @home) end
   end
 
-  defp marker, do: Enum.find(LgaPredictor.History.all(), &Map.has_key?(&1, :approach))
+  # The route is a state in status, not a row in history.
+  defp route, do: Poller.status().route
 
   # A fleet observed across two ticks: first at `where`/`alt`, then on short final.
   # ~2.5 nm north of the field: farther from home than @far_final, so a fleet seen there
@@ -265,20 +266,22 @@ defmodule LgaPredictor.PollerTest do
   test "arrivals that passed over home low are recorded as the low approach" do
     feed = start_route_test()
     fly_and_land(feed, ~w(a b c), @home, 1500, -700)
-    assert %{approach: "low approach", approach_from: nil, engaged: false} = marker()
+    assert route() == "low approach"
+    assert LgaPredictor.History.all() |> Enum.all?(&(not Map.has_key?(&1, :approach))),
+           "a route is not a flight-list row"
   end
 
   test "arrivals that passed over home high are the high approach" do
     feed = start_route_test()
     fly_and_land(feed, ~w(a b c), @home, 3600)
-    assert %{approach: "high approach"} = marker()
+    assert route() == "high approach"
   end
 
   test "arrivals that never came near home are the river approach" do
     # Only ever seen on the straight-in final, well clear of home.
     feed = start_route_test()
     straight_in(feed, ~w(a b c))
-    assert %{approach: "river approach"} = marker()
+    assert route() == "river approach"
   end
 
   # The live failure this guards: the high approach drifted a mile sideways, stopped
@@ -288,7 +291,7 @@ defmodule LgaPredictor.PollerTest do
     feed = start_route_test()
     two_nm_off = {elem(@home, 0) + 2 / 60, elem(@home, 1)}
     fly_and_land(feed, ~w(a b c), two_nm_off, 3600)
-    assert %{approach: "high approach"} = marker()
+    assert route() == "high approach"
   end
 
   test "the noisiest route in use wins even when most arrivals avoid home" do
@@ -296,38 +299,42 @@ defmodule LgaPredictor.PollerTest do
     # Six straight-in, three around the loop over home.
     straight_in(feed, ~w(d e f g h i))
     fly_and_land(feed, ~w(a b c), @home, 3600)
-    assert %{approach: "high approach"} = marker()
+    assert route() == "high approach"
   end
 
-  test "an unchanged route is not re-announced every minute" do
+  test "an unchanged route keeps its start time while the poll time advances" do
     feed = start_route_test()
     fly_and_land(feed, ~w(a b c), @home, 3600)
+    %{route: "high approach", route_since: since, route_polled_at: polled} = Poller.status()
+    assert is_integer(since) and is_integer(polled)
+    Process.sleep(1100)
     approach_tick!()
-    approach_tick!()
-    assert length(Enum.filter(LgaPredictor.History.all(), &Map.has_key?(&1, :approach))) == 1
+    %{route_since: since2, route_polled_at: polled2} = Poller.status()
+    assert since2 == since, "the route did not change, so neither does its start"
+    assert polled2 > polled, "but the classifier is visibly still looking"
   end
 
   test "a change of route records where it changed FROM" do
     feed = start_route_test()
     straight_in(feed, ~w(a b c))
-    assert %{approach: "river approach"} = marker()
+    assert route() == "river approach"
 
     # Then three around the loop, low.
     fly_and_land(feed, ~w(x y z), @home, 1500, -700)
-    assert %{approach: "low approach", approach_from: "river approach"} = marker()
+    assert route() == "low approach"
   end
 
   test "a lull is not reported as a route" do
     feed = start_route_test()
     fly_and_land(feed, ~w(a b), @home, 3600)
-    assert marker() == nil
+    assert route() == nil
   end
 
   test "the route needs home configured, but not runways" do
     feed = start_route_test()
     # runways: [] must not silence it.
     straight_in(feed, ~w(a b c))
-    assert %{approach: "river approach"} = marker()
+    assert route() == "river approach"
   end
 
   test "traffic under 3000 ft raises the ambient flag" do

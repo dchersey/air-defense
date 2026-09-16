@@ -463,7 +463,7 @@ defmodule LgaPredictor.Poller do
         |> Enum.take(60)
 
       passes = Approach.track_passes(state.approach_passes, flying, {alat, alon}, home, now)
-      state = %{state | approach_samples: tracks, approach_passes: passes}
+      state = %{state | approach_samples: tracks, approach_passes: passes, approach_polled_at: now}
 
       runway = Approach.runway_from_tracks(Enum.map(tracks, &elem(&1, 1)), runways)
       passes |> Approach.route(now) |> decide_path(state, runway)
@@ -489,20 +489,12 @@ defmodule LgaPredictor.Poller do
           "#{path_label(path)}#{detail}"
       )
 
-      record_history(%{
-        at: System.os_time(:second),
-        callsign: nil,
-        hex: nil,
-        type: nil,
-        alt_ft: nil,
-        enters_in: 0,
-        dwell: 0,
-        engaged: false,
-        approach: path_label(path),
-        approach_from: path_label(state.active_path)
-      })
-
-      %{state | active_path: path, active_runway: runway && elem(runway, 0)}
+      %{
+        state
+        | active_path: path,
+          path_since: System.os_time(:second),
+          active_runway: runway && elem(runway, 0)
+      }
     end
   end
 
@@ -1323,6 +1315,11 @@ defmodule LgaPredictor.Poller do
       ambient: ambient_active?(state),
       # nil for providers that have no local receiver to be down.
       receiver_ok: if(active_provider(state) == :local, do: state.receiver_ok, else: nil),
+      # The arrival route in use (a state, shown as a banner), when it began, and when
+      # the classifier last looked. All nil on a metered provider, where it never runs.
+      route: if(metered?(active_provider(state)), do: nil, else: path_label(state.active_path)),
+      route_since: if(metered?(active_provider(state)), do: nil, else: state.path_since),
+      route_polled_at: if(metered?(active_provider(state)), do: nil, else: state.approach_polled_at),
       approx_credits: state.credits,
       feed_ok: feed_ok?(state),
       # What we're actually fetching from, and why it differs from the configured
@@ -1385,9 +1382,15 @@ defmodule LgaPredictor.Poller do
       approach_timer: nil,
       ambient_seen: %{},
       ambient_low_at: nil,
-      # Last classified arrival path and the runway behind it, so a CHANGE can be
-      # recorded rather than the current state re-announced every minute.
+      # Last classified arrival route, when it began, and the runway behind it. A route
+      # is a STATE the panel shows as a banner, not an event in the flight list — an
+      # event scrolls away under the very overflights it is meant to explain, and it was
+      # also being counted by the overflight graph. `approach_polled_at` is the last
+      # successful terminal-area fetch, so the banner can show the classifier is alive
+      # even while it has nothing to say.
       active_path: nil,
+      path_since: nil,
+      approach_polled_at: nil,
       active_runway: nil,
       # `approach_samples` is {unix_seconds, track} pooled over @approach_window_seconds
       # for the runway median — one 60s snapshot rarely holds enough arrivals inside 6 nm
