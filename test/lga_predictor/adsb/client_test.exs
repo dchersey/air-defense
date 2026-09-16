@@ -37,6 +37,27 @@ defmodule LgaPredictor.ADSB.ClientTest do
       assert ac.reg == "N321"
     end
 
+    # readsb sends whichever vertical rate the aircraft transmits. Reading only
+    # baro_rate reported ~a fifth of traffic as level, and the arrival filter then
+    # rejected them for "not descending" — which is why the live final-approach gate
+    # matched zero aircraft over 16 minutes of busy LGA traffic.
+    test "falls back to geom_rate when the aircraft sends no baro_rate" do
+      base = %{"hex" => "a1421b", "lat" => 40.76, "lon" => -73.87, "gs" => 200, "alt_baro" => 4525}
+
+      assert [%Aircraft{vspeed_fpm: -704}] =
+               Client.parse(%{"ac" => [Map.put(base, "geom_rate", -704)]}, @box)
+
+      # baro_rate still wins when both are present.
+      assert [%Aircraft{vspeed_fpm: -640}] =
+               Client.parse(
+                 %{"ac" => [base |> Map.put("baro_rate", -640) |> Map.put("geom_rate", -704)]},
+                 @box
+               )
+
+      # Neither reported is still 0 — Geo.project does arithmetic on this.
+      assert [%Aircraft{vspeed_fpm: 0}] = Client.parse(%{"ac" => [base]}, @box)
+    end
+
     test "drops aircraft outside the bounding box (circle is trimmed to the box)" do
       body = %{
         "ac" => [

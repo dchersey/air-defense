@@ -96,7 +96,11 @@ defmodule LgaPredictor.ADSB.Client do
       track_deg: numeric(a["track"]),
       alt_ft: altitude(a["alt_baro"]),
       gspeed_kt: numeric(a["gs"]),
-      vspeed_fpm: numeric(a["baro_rate"]) || 0,
+      # readsb reports vertical rate as `baro_rate` OR `geom_rate` depending on what the
+      # aircraft transmits, and roughly a fifth of traffic carries only the latter.
+      # Reading just `baro_rate` silently reported those as level flight, which the
+      # arrival filter then rejected as "not descending".
+      vspeed_fpm: numeric(a["baro_rate"]) || numeric(a["geom_rate"]) || 0,
       type: a["t"],
       reg: a["r"]
     }
