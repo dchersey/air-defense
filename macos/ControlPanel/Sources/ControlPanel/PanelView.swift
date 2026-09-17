@@ -842,15 +842,20 @@ private struct ActivityStrip: View {
         }
         Spacer(minLength: 8)
         if let polled = model.routePolledAt {
-          Text("polled \(clock(polled))").font(.adMono).monospacedDigit().foregroundStyle(Palette.ink3)
+          Text("as of \(clock(polled))").font(.adMono).monospacedDigit().foregroundStyle(Palette.ink3)
         }
       }
       .padding(.vertical, 2)
     }
   }
 
+  // "3:21 PM" today; "3:21 PM Wed" once the day has turned — a route that began
+  // yesterday afternoon otherwise reads as this afternoon.
   private func clock(_ unix: Int) -> String {
-    Date(timeIntervalSince1970: TimeInterval(unix)).formatted(date: .omitted, time: .shortened)
+    let date = Date(timeIntervalSince1970: TimeInterval(unix))
+    let time = date.formatted(date: .omitted, time: .shortened)
+    if Calendar.current.isDateInToday(date) { return time }
+    return "\(time) \(date.formatted(.dateTime.weekday(.abbreviated)))"
   }
 
   // Clock time ANC engaged for this flight: detection time + predicted lead to the
