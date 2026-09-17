@@ -489,14 +489,48 @@ defmodule LgaPredictor.Poller do
           "#{path_label(path)}#{detail}"
       )
 
-      %{
-        state
-        | active_path: path,
-          path_since: System.os_time(:second),
-          active_runway: runway && elem(runway, 0)
-      }
+      since = System.os_time(:second)
+      save_route(state.route_path, path, since)
+      %{state | active_path: path, path_since: since, active_runway: runway && elem(runway, 0)}
     end
   end
+
+  # --- Route persistence -------------------------------------------------------------
+  # The route and when it began survive a restart. Without this every install, reboot
+  # or toolchain rebuild wiped them, and ten minutes later the banner said "since 1:05
+  # PM" about a routing that had been running since the previous afternoon — the one
+  # number the banner exists to state. Stored as the atom's name, not the label, so
+  # the wording can change without invalidating the file. Written only on a change.
+  @route_path Path.join([System.user_home() || ".", "Library", "Application Support",
+                         "air-defense", "route.json"])
+
+  defp load_route(nil), do: %{active_path: nil, path_since: nil}
+
+  defp load_route(path) do
+    with {:ok, body} <- File.read(path),
+         {:ok, %{"route" => r, "since" => since}} when is_integer(since) <- Jason.decode(body),
+         route when not is_nil(route) <- path_from_name(r) do
+      %{active_path: route, path_since: since}
+    else
+      _ -> %{active_path: nil, path_since: nil}
+    end
+  end
+
+  defp save_route(nil, _path, _since), do: :ok
+
+  defp save_route(file, path, since) do
+    File.mkdir_p(Path.dirname(file))
+
+    case File.write(file, Jason.encode!(%{route: Atom.to_string(path), since: since})) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("[poller] could not persist route: #{inspect(reason)}")
+    end
+  end
+
+  defp path_from_name("low_approach"), do: :low_approach
+  defp path_from_name("high_approach"), do: :high_approach
+  defp path_from_name("river_approach"), do: :river_approach
+  defp path_from_name(_), do: nil
 
   # The three routings as they are actually experienced from under them.
   defp path_label(:low_approach), do: "low approach"
@@ -1358,6 +1392,7 @@ defmodule LgaPredictor.Poller do
   end
 
   defp build_state(opts) do
+    restored_route = load_route(Keyword.get(opts, :route_path, @route_path))
     fr24 = Application.get_env(:lga_predictor, :fr24, %{})
     sandbox? = Keyword.get(opts, :sandbox?, Map.get(fr24, :sandbox?, false))
 
@@ -1388,8 +1423,8 @@ defmodule LgaPredictor.Poller do
       # also being counted by the overflight graph. `approach_polled_at` is the last
       # successful terminal-area fetch, so the banner can show the classifier is alive
       # even while it has nothing to say.
-      active_path: nil,
-      path_since: nil,
+      active_path: restored_route.active_path,
+      path_since: restored_route.path_since,
       approach_polled_at: nil,
       active_runway: nil,
       # `approach_samples` is {unix_seconds, track} pooled over @approach_window_seconds
@@ -1413,6 +1448,8 @@ defmodule LgaPredictor.Poller do
       provider_fallback_reason: nil,
       fetcher: Keyword.get(opts, :fetcher, &default_fetch(&1, &2, sandbox?)),
       config_fun: Keyword.get(opts, :config_fun, fn -> ConfigStore.get() end),
+      # Where the route/since pair lives across restarts; nil disables persistence.
+      route_path: Keyword.get(opts, :route_path, @route_path),
       keep_alive_fun: Keyword.get(opts, :keep_alive_fun, &default_keep_alive/1),
       window:
         Keyword.get(

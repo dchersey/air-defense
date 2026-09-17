@@ -73,6 +73,8 @@ defmodule LgaPredictor.PollerTest do
     defaults = [
       fetcher: fn _box -> {:ok, [inbound()]} end,
       config_fun: fn -> config() end,
+      # No route file by default: tests must not read or write the real one.
+      route_path: nil,
       window_seconds: 90,
       poll_interval_ms: 30,
       session_duration_ms: 10_000
@@ -322,6 +324,50 @@ defmodule LgaPredictor.PollerTest do
     # Then three around the loop, low.
     fly_and_land(feed, ~w(x y z), @home, 1500, -700)
     assert route() == "low approach"
+  end
+
+  # --- Route persistence -------------------------------------------------------------
+  defp route_file do
+    f = Path.join(System.tmp_dir!(), "air-defense-route-test-#{System.unique_integer([:positive])}.json")
+    on_exit(fn -> File.rm(f) end)
+    f
+  end
+
+  # Every install, reboot or rebuild restarts the backend; the banner's "since" must
+  # not restart with it, or a routing that began yesterday afternoon reads as today's.
+  test "the route and its start survive a restart" do
+    f = route_file()
+    File.write!(f, Jason.encode!(%{route: "river_approach", since: 1_700_000_000}))
+    start_with_history(config_fun: with_home(), fetcher: fn _ -> {:ok, []} end, route_path: f)
+    assert %{route: "river approach", route_since: 1_700_000_000} = Poller.status()
+  end
+
+  test "a restart followed by the same route keeps the original start" do
+    f = route_file()
+    File.write!(f, Jason.encode!(%{route: "high_approach", since: 1_700_000_000}))
+    {:ok, feed} = Agent.start_link(fn -> [] end)
+    start_with_history(config_fun: with_home(), fetcher: fn _ -> {:ok, Agent.get(feed, & &1)} end, route_path: f)
+    fly_and_land(feed, ~w(a b c), @home, 3600)
+    assert %{route: "high approach", route_since: 1_700_000_000} = Poller.status()
+  end
+
+  test "a change of route is written to the file" do
+    f = route_file()
+    {:ok, feed} = Agent.start_link(fn -> [] end)
+    start_with_history(config_fun: with_home(), fetcher: fn _ -> {:ok, Agent.get(feed, & &1)} end, route_path: f)
+    fly_and_land(feed, ~w(a b c), @home, 3600)
+    assert %{"route" => "high_approach", "since" => since} = f |> File.read!() |> Jason.decode!()
+    assert since == Poller.status().route_since
+  end
+
+  test "a missing or corrupt route file is simply no route" do
+    f = route_file()
+    start_with_history(config_fun: with_home(), fetcher: fn _ -> {:ok, []} end, route_path: f)
+    assert Poller.status().route == nil
+    stop_supervised!(Poller)
+    File.write!(f, "not json")
+    start_supervised!({Poller, [config_fun: with_home(), fetcher: fn _ -> {:ok, []} end, route_path: f, window_seconds: 90, poll_interval_ms: 30, session_duration_ms: 10_000]})
+    assert Poller.status().route == nil
   end
 
   test "a lull is not reported as a route" do
