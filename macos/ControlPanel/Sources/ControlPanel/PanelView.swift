@@ -172,15 +172,49 @@ private func sectionLabel(_ text: String) -> some View {
 
 // MARK: - Root
 
+// Hands the hosting NSWindow to SwiftUI once the view is in one. Delivered on the next
+// run-loop turn so it never mutates state mid-layout.
+private struct WindowAccessor: NSViewRepresentable {
+  let onWindow: (NSWindow) -> Void
+  func makeNSView(context: Context) -> NSView { Probe(onWindow: onWindow) }
+  func updateNSView(_ nsView: NSView, context: Context) {}
+
+  private final class Probe: NSView {
+    let onWindow: (NSWindow) -> Void
+    init(onWindow: @escaping (NSWindow) -> Void) { self.onWindow = onWindow; super.init(frame: .zero) }
+    required init?(coder: NSCoder) { nil }
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      guard let window else { return }
+      DispatchQueue.main.async { [onWindow] in onWindow(window) }
+    }
+  }
+}
+
 struct PanelView: View {
   let model: StatusModel
   @State private var showSettings = false
   @State private var showEditor = false
+  // The hosting MenuBarExtra window, and the content's own ideal height. The .window
+  // style sizes its panel to the content when it PRESENTS and does not reliably
+  // re-measure after a @State toggle grows or shrinks it: expand "Recent flights" and
+  // the rows render while the hover line and footer fall off the bottom edge. So the
+  // content reports its height and the window is fitted to it explicitly, growing
+  // downward from the menu bar and capped at the screen.
+  @State private var hostWindow: NSWindow?
+  @State private var contentHeight: CGFloat = 0
 
   var body: some View {
     content
       .padding(15)
-      .frame(width: 340)
+      // Report the ideal height even when the host proposes a stale, smaller one.
+      .fixedSize(horizontal: false, vertical: true)
+      .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+        contentHeight = h
+        fitWindow(to: h)
+      }
+      .frame(width: 340, height: contentHeight > 0 ? contentHeight : nil, alignment: .top)
+      .background(WindowAccessor { hostWindow = $0 })
       .background(Palette.gradient)
       .tint(Palette.accent)
       .overlay(alignment: .bottom) {
@@ -204,6 +238,21 @@ struct PanelView: View {
         showSettings = false
         showEditor = false
       }
+  }
+
+  // Grow or shrink the panel to the content, keeping its top edge where the menu bar
+  // put it (an NSWindow origin is its bottom-left). No-op while closed — the host
+  // re-measures on the next open — and bounded by the screen's visible height.
+  private func fitWindow(to contentHeight: CGFloat) {
+    guard let window = hostWindow, window.isVisible else { return }
+    let screenHeight = (window.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
+    let target = min(ceil(contentHeight), screenHeight - 24)
+    let delta = target - window.frame.height
+    guard abs(delta) > 0.5 else { return }
+    var frame = window.frame
+    frame.size.height = target
+    frame.origin.y -= delta
+    window.setFrame(frame, display: true)
   }
 
   @ViewBuilder private var content: some View {
@@ -560,6 +609,10 @@ private struct ActivityStrip: View {
   @State private var showFlights = false
   @State private var hoveredBar: Int?
   @State private var hoveredFlightID: String?
+  // Measured height of the rows, so the scroll region is exactly as tall as its
+  // contents up to the cap, and scrolls beyond it.
+  @State private var listContentHeight: CGFloat = 0
+  private let listMaxHeight: CGFloat = 200
 
   var body: some View {
     if model.reachable {
@@ -577,7 +630,9 @@ private struct ActivityStrip: View {
         routeBanner
 
         if !model.recent.isEmpty {
-          Button { withAnimation(.easeInOut(duration: 0.18)) { showFlights.toggle() } } label: {
+          // Not animated: the window is fitted to the content's final height, and an
+          // animated intermediate height fights that.
+          Button { showFlights.toggle() } label: {
             HStack(spacing: 4) {
               Image(systemName: showFlights ? "chevron.down" : "chevron.right")
                 .font(.system(size: 9, weight: .semibold))
@@ -739,13 +794,18 @@ private struct ActivityStrip: View {
     return LinearGradient(colors: [c, c.opacity(0.45)], startPoint: .top, endPoint: .bottom)
   }
 
-  // Plain VStack (no ScrollView — a greedy ScrollView collapses to ~0 height in the
-  // content-sized MenuBarExtra window). Each row: flight id + the time ANC engaged
-  // (≈ detection time + lead-to-zone-entry). The release is a fixed dwell, so it's
-  // omitted.
+  // The rows live in a ScrollView with an EXPLICIT height — a ScrollView left to size
+  // itself is greedy and collapses to ~0 in the content-sized MenuBarExtra window. The
+  // height is the measured height of the rows, capped at listMaxHeight, so a short
+  // list fits exactly and a long one scrolls. Everything the backend keeps (50) is
+  // shown; the hover line sits below the scroll region so it is always visible.
+  // Each row: flight id + the time ANC engaged (≈ detection time + lead-to-zone-
+  // entry). The release is a fixed dwell, so it's omitted.
   private var flightList: some View {
     VStack(alignment: .leading, spacing: 5) {
-      ForEach(model.recent.prefix(10)) { flight in
+      ScrollView(.vertical) {
+        VStack(alignment: .leading, spacing: 5) {
+      ForEach(model.recent) { flight in
         // Observed-only: crossed the zone while ANC was off. Dimmed throughout, and the
         // timestamp is not in the accent colour because nothing was engaged at it.
         let observed = flight.engaged == false
@@ -787,6 +847,13 @@ private struct ActivityStrip: View {
         // moving between rows never blips through the empty/hint state.
         .onHover { inside in if inside { hoveredFlightID = flight.id } }
       }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listContentHeight = $0 }
+      }
+      // Until the first measurement lands, estimate from the row count so the first
+      // frame is not a 1pt sliver.
+      .frame(height: min(listContentHeight > 0 ? listContentHeight : CGFloat(model.recent.count) * 20, listMaxHeight))
+      .scrollIndicators(.automatic)
 
       // Hover detail: the full aircraft name for the hovered row — a real .help()
       // tooltip doesn't fire inside MenuBarExtra's window, so we mirror the chart's
