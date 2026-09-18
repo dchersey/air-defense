@@ -716,6 +716,104 @@ defmodule LgaPredictor.PollerTest do
            "next session starts back on the configured provider"
   end
 
+  for fallback_result <- [{:ok, []}, {:error, {:http_error, 402, %{}}}] do
+    @fallback_result fallback_result
+    test "local recovery preserves a session with fallback #{inspect(fallback_result)}" do
+      previous_key = System.get_env("FR24_API_KEY")
+      System.put_env("FR24_API_KEY", "test-key")
+
+      on_exit(fn ->
+        if previous_key,
+          do: System.put_env("FR24_API_KEY", previous_key),
+          else: System.delete_env("FR24_API_KEY")
+      end)
+
+      {:ok, healthy} = Agent.start_link(fn -> false end)
+      test_pid = self()
+      fallback = @fallback_result
+
+      start(
+        config_fun: fn -> config() |> Map.put(:provider, :local) end,
+        poll_interval_ms: 60_000,
+        fetcher: fn _box, provider ->
+          send(test_pid, {:recovery_fetch, provider})
+
+          case provider do
+            :local -> if Agent.get(healthy, & &1), do: {:ok, []}, else: {:error, :closed}
+            :fr24 -> fallback
+          end
+        end
+      )
+
+      :ok = Poller.start_session()
+      send(Poller, {:poll, "z1"})
+      assert Poller.status().provider_active == "fr24"
+      send(Poller, {:poll, "z1"})
+      before = :sys.get_state(Poller)
+      assert_receive {:recovery_fetch, :fr24}
+
+      # Failed local probe cannot clear the warning or disturb the session.
+      send(Poller, :approach)
+      assert Poller.status().provider_active == "fr24"
+      assert Poller.status().provider_fallback_reason != nil
+      assert :sys.get_state(Poller).sessions == before.sessions
+
+      # Drain the two initial local failures and the failed probe.
+      for _ <- 1..3, do: assert_receive({:recovery_fetch, :local})
+      Agent.update(healthy, fn _ -> true end)
+      send(Poller, :approach)
+      assert Poller.status().provider_active == "local"
+      assert Poller.status().provider_fallback_reason == nil
+      assert_receive {:recovery_fetch, :local}
+      assert_receive {:recovery_fetch, :local}
+      # Barrier after recovery's immediate poll.
+      after_recovery = :sys.get_state(Poller)
+      assert after_recovery.sessions == before.sessions
+      assert after_recovery.actioned == before.actioned
+      assert after_recovery.credits == before.credits
+      assert Poller.status().receiver_ok
+      assert Poller.status().feed_ok
+    end
+  end
+
+  test "local recovery also runs while headphones are disconnected or sessions are idle" do
+    start(
+      config_fun: fn -> config() |> Map.put(:provider, :local) end,
+      fetcher: fn _box, provider ->
+        assert provider == :local
+        {:ok, []}
+      end
+    )
+
+    :ok = Poller.set_headphones(false)
+    :ok = Poller.start_session()
+
+    for idle <- [false, true] do
+      if idle, do: Poller.stop_session()
+
+      :sys.replace_state(Poller, fn state ->
+        %{state | provider_override: :fr24, provider_fallback_reason: "closed"}
+      end)
+
+      send(Poller, :approach)
+      status = Poller.status()
+      assert status.provider_active == "local"
+      assert status.active? == not idle
+      assert status.approx_credits == 0
+      assert status.polls == 0
+    end
+  end
+
+  test "recovery probes never run for an explicitly selected paid provider" do
+    start(
+      config_fun: fn -> config() |> Map.put(:provider, :fr24) end,
+      fetcher: fn _box, _provider -> flunk("unexpected paid health check") end
+    )
+
+    send(Poller, :approach)
+    assert Poller.status().provider_active == "fr24"
+  end
+
   test "feed_ok flips false after consecutive fetch errors and recovers on success" do
     # A test-controlled mode flag (not a poll counter — that races the timing): the
     # feed errors (provider/network down), then the test flips it healthy. feed_ok must

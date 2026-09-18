@@ -166,7 +166,7 @@ defmodule LgaPredictor.Poller do
   end
 
   def handle_info(:approach, state) do
-    {:noreply, state |> approach_tick() |> schedule_approach()}
+    {:noreply, state |> retry_local_receiver() |> approach_tick() |> schedule_approach()}
   end
 
   def handle_info({:poll, id}, state) do
@@ -187,15 +187,13 @@ defmodule LgaPredictor.Poller do
     # Reset stats only when starting from fully idle.
     state =
       if map_size(state.sessions) == 0 do
-        # Starting fresh also re-checks the configured provider: a failover only lasts
-        # for the session that hit the failure, so a restored feed is picked up again.
         %{state | polls: 0, credits: 0, actioned: MapSet.new(), engaged: MapSet.new()}
       else
         state
       end
 
-    # Starting ANY session re-checks the configured provider: a failover lasts only until
-    # you next start something, so a restored feed is picked up without touching settings.
+    # Starting ANY session re-checks the configured provider immediately, without
+    # waiting for the next automatic recovery probe.
     # Costs at most a couple of failed polls (which spend no credits) if it's still down.
     state = %{state | provider_override: nil, provider_fallback_reason: nil}
 
@@ -749,7 +747,7 @@ defmodule LgaPredictor.Poller do
   # poll clears it; an errored poll bumps it. (Skipped polls — headphones off — don't
   # fetch, so they neither clear nor bump it.)
   # The provider actually in use: normally whatever config says, but a failover pins it
-  # to `provider_override` until the next session start re-checks the configured one.
+  # to `provider_override` until a recovery probe or session start re-checks it.
   defp active_provider(state),
     do: state.provider_override || Map.get(state.config_fun.(), :provider, :local)
 
@@ -761,22 +759,62 @@ defmodule LgaPredictor.Poller do
 
   @doc false
   # A failed local receiver can fall back to FR24 when a key is configured. Re-check
-  # the receiver on the next session start; report the reason and actual provider.
+  # the receiver every 30 seconds and on session start; report the actual provider.
   defp maybe_failover(state, id, reason) do
     configured = Map.get(state.config_fun.(), :provider, :local)
 
     cond do
-      state.provider_override != nil -> state
-      configured == :fr24 -> state
-      Map.get(state.fetch_errors, id, 0) < @feed_down_threshold -> state
-      not LgaPredictor.FR24.Client.key_present?() -> state
+      state.provider_override != nil ->
+        state
+
+      configured == :fr24 ->
+        state
+
+      Map.get(state.fetch_errors, id, 0) < @feed_down_threshold ->
+        state
+
+      not LgaPredictor.FR24.Client.key_present?() ->
+        state
+
       true ->
         Logger.warning(
           "[poller] #{configured} is failing (#{inspect(reason)}) — falling back to FR24 " <>
-            "for this session; the configured provider is re-checked when you start the next one."
+            "while retrying the local receiver every 30 seconds."
         )
 
         %{state | provider_override: :fr24, provider_fallback_reason: describe(reason)}
+    end
+  end
+
+  # Share the classifier's 30-second timer, which also runs while idle or paused.
+  # Probe ONLY local: a health check must never consume paid-provider credits.
+  # Keep the override until a successful response, including a valid empty sky.
+  defp retry_local_receiver(state) do
+    config = state.config_fun.()
+
+    if state.provider_override == :fr24 and Map.get(config, :provider, :local) == :local do
+      case List.first(config.zonesets) do
+        nil ->
+          state
+
+        zoneset ->
+          local = %{state | provider_override: nil, provider_fallback_reason: nil}
+
+          case fetch(local, query_box(zoneset)) do
+            {:ok, _aircraft} ->
+              Logger.info("[poller] local receiver recovered — leaving FR24 fallback")
+
+              # Preserve session deadlines, credits, dedupe and ANC holds. Resume
+              # each zone promptly; poll_tick still respects pause and lock-on.
+              local = local |> mark_receiver(true) |> schedule_ambient()
+              Enum.reduce(Map.keys(local.sessions), local, &reschedule_poll(&2, &1, 0))
+
+            {:error, _reason} ->
+              mark_receiver(state, false)
+          end
+      end
+    else
+      state
     end
   end
 

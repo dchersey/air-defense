@@ -329,8 +329,12 @@ Settings. The key is stored in the macOS Keychain (service `air-defense-fr24`,
 The `light` position feed is billed per flight returned, so small query areas matter.
 
 If a local receiver repeatedly fails and an FR24 key is stored, the current app can
-fall back to FR24 for that session. The panel identifies the active provider and the
-reason for the switch. Starting another session rechecks the receiver. This fallback
+fall back to FR24 temporarily. The panel identifies the active provider and the
+reason for the switch. During fallback, it probes the local receiver every 30 seconds
+and switches back after a successful response, without restarting monitoring or
+resetting session timers. Failed probes leave fallback in place; these local checks
+spend no credits and continue while monitoring is paused or idle. Starting another
+session also rechecks the receiver. This fallback
 spends FR24 credits; background classification and activity collection pause while it
 is in use.
 
