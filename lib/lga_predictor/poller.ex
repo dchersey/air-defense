@@ -335,7 +335,12 @@ defmodule LgaPredictor.Poller do
   # the whole terminal area, which would be a credit sink on a paid feed.
   defp approach_tick(state) do
     config = state.config_fun.()
-    if metered?(active_provider(state)), do: state, else: check_approach(state, config)
+    if metered?(active_provider(state)) do
+      record_route_observation(nil, System.os_time(:second))
+      state
+    else
+      check_approach(state, config)
+    end
   end
 
   # Ambient fills the gaps the session path leaves: no session at all, or a session
@@ -466,10 +471,19 @@ defmodule LgaPredictor.Poller do
       state = %{state | approach_samples: tracks, approach_passes: passes, approach_polled_at: now}
 
       runway = Approach.runway_from_tracks(Enum.map(tracks, &elem(&1, 1)), runways)
-      passes |> Approach.route(now) |> decide_path(state, runway)
+      path = Approach.route(passes, now)
+      record_route_observation(path, now)
+      decide_path(path, state, runway)
     else
-      _ -> state
+      _ ->
+        record_route_observation(nil, System.os_time(:second))
+        state
     end
+  end
+
+  defp record_route_observation(path, now) do
+    if Process.whereis(LgaPredictor.RouteHistory),
+      do: LgaPredictor.RouteHistory.observe(path, now)
   end
 
   defp decide_path(nil, state, _runway), do: state

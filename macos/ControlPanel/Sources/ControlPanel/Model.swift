@@ -131,6 +131,10 @@ final class StatusModel {
   var overheadAt: Int?
   var overheadRoute: String?
   var history: [Int] = []
+  var routeHistory: RouteHistoryResponse?
+  var routeHistoryError = false
+  @ObservationIgnored private var historyFetchedAt = Date.distantPast
+  @ObservationIgnored private var fetchingRouteHistory = false
   var reachable = false
   // Whether the backend's data feed is currently returning data (false = provider/
   // network down). Drives the "feed unreachable" banner and pauses the quiet-alert
@@ -249,7 +253,9 @@ final class StatusModel {
     }
   }
 
-  init() {
+  init(startMonitoring: Bool = true) {
+    // Render fixtures without polling the service or touching headphone permissions.
+    guard startMonitoring else { return }
     let trusted = AncController.ensureTrusted()
     Log.line("StatusModel init — accessibility trusted=\(trusted)")
     timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
@@ -305,9 +311,33 @@ final class StatusModel {
       applyModeIfChanged(status.mode)
       updateMenuPulse()
       evaluateQuietAlert()
+      await refreshRouteHistoryIfNeeded()
     } catch {
       reachable = false
       updateMenuPulse()
+    }
+  }
+
+  private func refreshRouteHistoryIfNeeded() async {
+    guard !fetchingRouteHistory, Date().timeIntervalSince(historyFetchedAt) >= 60,
+      let url = URL(string: "\(base)/api/route_history") else { return }
+    fetchingRouteHistory = true
+    historyFetchedAt = Date()
+    defer { fetchingRouteHistory = false }
+    do {
+      var request = URLRequest(url: url)
+      request.timeoutInterval = 5
+      let (data, response) = try await URLSession.shared.data(for: request)
+      guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+        routeHistoryError = true
+        return
+      }
+      let decoder = JSONDecoder()
+      decoder.keyDecodingStrategy = .convertFromSnakeCase
+      routeHistory = try decoder.decode(RouteHistoryResponse.self, from: data)
+      routeHistoryError = false
+    } catch {
+      routeHistoryError = true
     }
   }
 

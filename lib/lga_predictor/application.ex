@@ -19,6 +19,7 @@ defmodule LgaPredictor.Application do
           {LgaPredictor.AircraftRegistry, name: LgaPredictor.AircraftRegistry},
           LgaPredictor.Actuator,
           LgaPredictor.History,
+          LgaPredictor.RouteHistory,
           LgaPredictor.Routes,
           LgaPredictor.CreditLedger,
           LgaPredictor.Poller,

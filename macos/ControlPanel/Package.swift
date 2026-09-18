@@ -9,6 +9,7 @@ let package = Package(
     // NSExceptions that Apple's implementation raises. See ADListeningMode.h.
     .target(name: "ADBluetooth", path: "Sources/ADBluetooth"),
     .executableTarget(
-      name: "ControlPanel", dependencies: ["ADBluetooth"], path: "Sources/ControlPanel")
+      name: "ControlPanel", dependencies: ["ADBluetooth"], path: "Sources/ControlPanel"),
+    .testTarget(name: "ControlPanelTests", dependencies: ["ControlPanel"])
   ]
 )

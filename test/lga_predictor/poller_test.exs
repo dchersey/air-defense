@@ -305,6 +305,7 @@ defmodule LgaPredictor.PollerTest do
   end
 
   test "an unchanged route keeps its start time while the poll time advances" do
+    start_supervised!({LgaPredictor.RouteHistory, path: nil})
     feed = start_route_test()
     fly_and_land(feed, ~w(a b c), @home, 3600)
     %{route: "high approach", route_since: since, route_polled_at: polled} = Poller.status()
@@ -314,6 +315,10 @@ defmodule LgaPredictor.PollerTest do
     %{route_since: since2, route_polled_at: polled2} = Poller.status()
     assert since2 == since, "the route did not change, so neither does its start"
     assert polled2 > polled, "but the classifier is visibly still looking"
+    history = LgaPredictor.RouteHistory.snapshot()
+    assert history.classified_seconds >= 1
+    assert [%{route: "high_approach"}] = history.intervals,
+           "unchanged classifications must extend durable history even without an ANC session"
   end
 
   test "a change of route records where it changed FROM" do

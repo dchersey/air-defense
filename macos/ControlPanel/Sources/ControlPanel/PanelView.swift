@@ -195,6 +195,7 @@ struct PanelView: View {
   let model: StatusModel
   @State private var showSettings = false
   @State private var showEditor = false
+  @State private var showRouteHistory = false
   // The hosting MenuBarExtra window, and the content's own ideal height. The .window
   // style sizes its panel to the content when it PRESENTS and does not reliably
   // re-measure after a @State toggle grows or shrinks it: expand "Recent flights" and
@@ -237,6 +238,7 @@ struct PanelView: View {
       .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
         showSettings = false
         showEditor = false
+        showRouteHistory = false
       }
   }
 
@@ -256,7 +258,9 @@ struct PanelView: View {
   }
 
   @ViewBuilder private var content: some View {
-    if showEditor {
+    if showRouteHistory {
+      RouteHistoryView(model: model) { showRouteHistory = false }
+    } else if showEditor {
       ZoneEditorScreen(model: model, onSettings: { showEditor = false; showSettings = true })
         { showEditor = false }
     } else if showSettings {
@@ -275,6 +279,11 @@ struct PanelView: View {
       StatusBanner(model: model)
       watchZones
       ActivityStrip(model: model)
+      Button { showRouteHistory = true } label: {
+        Label("Route history · 7 days", systemImage: "calendar")
+          .font(.adMono).foregroundStyle(Palette.accent)
+      }
+      .buttonStyle(.plain)
       Divider().overlay(Palette.hairline)
       footer
     }

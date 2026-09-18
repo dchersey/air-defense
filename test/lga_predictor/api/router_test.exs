@@ -29,6 +29,7 @@ defmodule LgaPredictor.API.RouterTest do
 
     start_supervised!(Actuator)
     start_supervised!({History, max: 50})
+    start_supervised!({LgaPredictor.RouteHistory, path: nil})
     start_supervised!({ConfigStore, path: path})
 
     start_supervised!(
@@ -60,6 +61,18 @@ defmodule LgaPredictor.API.RouterTest do
     assert is_list(body["zonesets"])
     assert body["engage_delta_seconds"] == 0
     assert body["release_delta_seconds"] == 0
+  end
+
+  test "GET /api/route_history exposes classified intervals and duration shares" do
+    now = System.os_time(:second)
+    LgaPredictor.RouteHistory.observe(:low_approach, now - 30)
+    LgaPredictor.RouteHistory.observe(:high_approach, now)
+    conn = call(:get, "/api/route_history")
+    assert conn.status == 200
+    body = Jason.decode!(conn.resp_body)
+    assert body["classified_seconds"] == 30
+    assert [%{"route" => "low_approach"}] = body["intervals"]
+    assert Enum.at(body["shares"], 0)["percent"] == 100.0
   end
 
   test "PUT /api/config can set engage/release deltas (partial merge keeps zonesets)" do

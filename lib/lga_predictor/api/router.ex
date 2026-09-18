@@ -22,6 +22,10 @@ defmodule LgaPredictor.API.Router do
     send_json(conn, 200, status_payload())
   end
 
+  get "/api/route_history" do
+    send_json(conn, 200, LgaPredictor.RouteHistory.snapshot())
+  end
+
   post "/api/session/start" do
     result =
       case conn.body_params do

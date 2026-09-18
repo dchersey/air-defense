@@ -268,6 +268,24 @@ app is Developer ID-signed, notarized, stapled, and accepted by Gatekeeper.
 
 ## Using it
 
+**Route history** opens a seven-column lookback: today and the preceding six local
+calendar days, with time of day running down each column. Amber marks low approaches,
+blue/teal high approaches, and green river approaches. Hover a block for its route and
+time range. The bottom bar shows each route's percentage of **classified time over the
+last 30 days**, with recorded hours and coverage alongside it; these are not percentages
+of aircraft. Classification reports the noisiest route in meaningful use, so this is a
+history of the inferred airport routing, not a census of individual flights.
+
+History records in the background on an unmetered feed, even without an ANC session,
+and survives app/backend restarts. It requires the airport and home coordinates used
+by the existing route classifier. Blank time is unclassified or unobserved, including
+outages and time before this feature was installed. Previous route changes cannot be
+reconstructed from the old single-route state file. Data is retained for 30 days in
+`~/Library/Application Support/air-defense/route-history.json`. The view refreshes once
+a minute; observations are recorded on the classifier's 30-second cadence. Day columns
+use local wall time (the repeated autumn DST hour shares rows, and the missing spring
+hour stays blank); duration percentages use actual elapsed time.
+
 - **Data source** picker: `airplanes.live` (free, default) or
   `FlightRadar24`. Pick FR24 and a field appears to paste your API key (stored in
   the Keychain by the backend). Applies to all zones.
