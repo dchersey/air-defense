@@ -141,6 +141,12 @@ bluetoothd owns that link, which is why you ask it instead of bypassing it).
 
 ## Reclaiming AirPods after a phone call
 
+On **macOS 27**, Apple moved the Sound and Control Center menu items into
+`com.apple.MenuBarAgent`, under a dialog rather than an `AXMenuBar`. The opened
+panels still belong to Control Center. Air Defense searches the new host first
+and retains the older Control Center lookup for earlier macOS versions. This
+change does not itself require regranting Accessibility permission.
+
 When an iPhone answers a call it takes the AirPods, and macOS often doesn't hand them
 back when the call ends — the usual fix is taking the headphones off and putting them
 back on. Air Defense notices (monitoring pauses, "AirPods not connected") and offers a

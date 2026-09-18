@@ -127,17 +127,22 @@ enum AncController {
   /// the row was clicked, not that audio arrived, which lands asynchronously and is
   /// observed via `airPodsAreOutput()` a beat later.
   static func reclaimAirPods(preferring preferred: String?) -> ReclaimOutcome {
+    guard AXIsProcessTrusted() else {
+      return .failed("Accessibility permission missing — enable Air Defense in System Settings")
+    }
     // Enter via the Control Center item, NOT the Sound one that `set` uses. Sound is a
     // separate menu extra only when pinned "Always Show"; on the common "Show When
     // Active" setting it disappears once the AirPods leave and output falls back to
     // built-in — precisely the state every reclaim runs in. Control Center is always
     // present, and carries the same device list one level in.
-    guard let cc = controlCenterApp(), let ccItem = menuBarItem(idContains: "controlcenter")
+    guard let cc = controlCenterApp(), let ccItem = menuBarItem(named: "controlcenter")
     else {
       return .failed("Control Center menu item not found; \(menuBarDiagnostic())")
     }
 
-    _ = press(ccItem)
+    guard press(ccItem) else {
+      return .failed("Control Center menu item found but AXPress failed; actions=\(actionNames(ccItem))")
+    }
     Thread.sleep(forTimeInterval: 0.9)
 
     guard let window = (attr(cc, kAXWindowsAttribute as String) as? [AXUIElement])?.first,
@@ -396,36 +401,59 @@ enum AncController {
 
   // MARK: - Control Center
 
-  /// Why the Sound menu-bar item wasn't found — distinguishes "Control Center missing",
-  /// "menu bar not enumerable" (what an open menu-bar window causes) and "item renamed
-  /// or unpinned", which otherwise all surface as the same silent nil.
+  /// macOS 27 moved status items to MenuBarAgent. Report each host and AX error
+  /// separately so a changed tree is distinguishable from a revoked permission.
   private static func menuBarDiagnostic() -> String {
-    guard let cc = controlCenterApp() else { return "controlCenterApp=nil" }
-    guard let menuBar = find(cc, { role($0) == "AXMenuBar" }) else {
-      return "menuBar=nil (not enumerable)"
+    let hosts = menuHostIDs.map { id -> String in
+      guard let app = applicationElement(id) else { return "\(id)=not running" }
+      var value: AnyObject?
+      let error = AXUIElementCopyAttributeValue(app, kAXChildrenAttribute as CFString, &value)
+      let count = (value as? [AXUIElement])?.count ?? 0
+      return "\(id): children=\(count) AXError=\(error.rawValue)"
     }
-    let ids = children(menuBar).map { str($0, kAXIdentifierAttribute as String) ?? "?" }
-    return "menuBarChildren=\(ids.count) ids=\(ids)"
+    return "trusted=\(AXIsProcessTrusted()); " + hosts.joined(separator: "; ")
   }
 
   private static func controlCenterApp() -> AXUIElement? {
+    applicationElement("com.apple.controlcenter")
+  }
+
+  private static func applicationElement(_ bundleID: String) -> AXUIElement? {
     NSRunningApplication
-      .runningApplications(withBundleIdentifier: "com.apple.controlcenter")
+      .runningApplications(withBundleIdentifier: bundleID)
       .first
       .map { AXUIElementCreateApplication($0.processIdentifier) }
   }
 
   /// The pinned Sound menu-bar item (id contains "sound"). Only present when Sound is
   /// pinned "Always Show", or while it's active — see `reclaim` for why that matters.
-  private static func soundMenuBarItem() -> AXUIElement? { menuBarItem(idContains: "sound") }
+  private static func soundMenuBarItem() -> AXUIElement? { menuBarItem(named: "sound") }
 
-  /// A Control Center menu-bar item whose identifier contains `needle`.
-  private static func menuBarItem(idContains needle: String) -> AXUIElement? {
-    guard let cc = controlCenterApp(), let menuBar = find(cc, { role($0) == "AXMenuBar" })
-    else { return nil }
+  private static let menuHostIDs = ["com.apple.MenuBarAgent", "com.apple.controlcenter"]
 
-    return children(menuBar).first {
-      (str($0, kAXIdentifierAttribute as String) ?? "").lowercased().contains(needle)
+  /// MenuBarAgent owns the status items on macOS 27; Control Center still owns
+  /// the opened panels. Older systems expose both through Control Center. Search
+  /// by exact identifier without requiring an AXMenuBar ancestor (27 uses a dialog).
+  private static func menuBarItem(named needle: String) -> AXUIElement? {
+    let wanted = "com.apple.menuextra.\(needle)"
+    for hostID in menuHostIDs {
+      guard let app = applicationElement(hostID) else { continue }
+      // Some AX hosts expose their window/menu roots via attributes rather than
+      // AXChildren. Include both, with a bounded traversal for each host.
+      var roots = [app]
+      roots += (attr(app, kAXWindowsAttribute as String) as? [AXUIElement]) ?? []
+      for key in [kAXMenuBarAttribute as String, "AXExtrasMenuBar"] {
+        if let value = attr(app, key), CFGetTypeID(value) == AXUIElementGetTypeID() {
+          roots.append(value as! AXUIElement)
+        }
+      }
+      if let item = MenuBarLookup.find(roots: roots, identifier: wanted, role: role,
+                                      identifier: { str($0, kAXIdentifierAttribute as String) },
+                                      children: children) {
+        Log.line("menu item \(wanted) host=\(hostID) role=\(role(item))")
+        return item
+      }
     }
+    return nil
   }
 }
