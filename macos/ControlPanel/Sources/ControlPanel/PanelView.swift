@@ -1127,7 +1127,7 @@ private struct TimingOffsets: View {
 
 // MARK: - Data source
 
-/// Choose the flight-data provider for all zones. The free ADS-B feeds need no
+/// Choose the flight-data provider for all zones. The local receiver needs no
 /// key; FlightRadar24 needs an API key (entered here → stored in the Keychain).
 private struct DataSource: View {
   let model: StatusModel
@@ -1137,7 +1137,6 @@ private struct DataSource: View {
 
   private let providers = [
     ("local", "Local receiver"),
-    ("airplanes_live", "airplanes.live"),
     ("fr24", "FlightRadar24 (API key)"),
   ]
 
@@ -1169,7 +1168,7 @@ private struct DataSource: View {
         HStack(spacing: 6) {
           Image(systemName: "antenna.radiowaves.left.and.right")
             .font(.adMono).foregroundStyle(Palette.go)
-          TextField("http://adsb.home.arpa/data/aircraft.json", text: $urlText)
+          TextField("http://adsb.local/tar1090/data/aircraft.json", text: $urlText)
             .textFieldStyle(.roundedBorder).font(.adMono)
           Button("Save") {
             let u = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1179,10 +1178,9 @@ private struct DataSource: View {
         }
         Text("Your own ADS-B receiver — no API, no credits, lowest latency.")
           .font(.adMono).foregroundStyle(Palette.ink2)
-      } else {
-        Text("Public API — no key, but subject to their availability.")
-          .font(.adMono).foregroundStyle(Palette.ink2)
       }
+      Text("airplanes.live disabled — API suspended.")
+        .font(.adMono).foregroundStyle(Palette.ink3)
     }
     .onAppear { urlText = model.localFeedURL ?? "" }
   }

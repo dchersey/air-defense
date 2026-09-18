@@ -2,7 +2,15 @@
 
 Thanks for your interest! This started as a personal tool for one apartment under
 one airport's flight paths, so expect some rough edges and author-specific
-defaults. PRs that make it more general (without adding bloat) are very welcome.
+defaults. Local features—including low/high/river route classification, background
+activity, route history, and acoustic timing—are specific to the author's apartment
+and LaGuardia. There is no planned maintainer work on a setup or adaptation workflow
+for other locations. Contributions that adapt these features or make them more general
+(without adding bloat) are welcome.
+
+Position sources are the local ADS-B receiver (default) and paid FlightRadar24.
+The airplanes.live API is suspended and its provider is disabled; new work should
+not depend on it.
 
 ## Layout
 
@@ -14,9 +22,11 @@ defaults. PRs that make it more general (without adding bloat) are very welcome.
   - `config_store.ex` — zonesets + global settings (JSON-persisted).
   - `credit_ledger.ex` — FR24 credit self-tally with a billing cycle.
   - `fr24/client.ex` — FlightRadar24 API client.
+  - `adsb/client.ex` — local receiver client.
+  - `approach.ex` / `route_history.ex` — local route classification and durable history.
   - `api/router.ex` — the localhost-only JSON API the app talks to.
 - `macos/ControlPanel/` — the SwiftUI menu-bar app (control panel + the ANC
-  switch via Control Center accessibility automation).
+  switch via private CoreBluetooth, with Control Center accessibility fallback).
 - `install.sh` — the end-user curl installer (backend release + app).
 - `priv/launchd/` — the dev LaunchAgent (`install.sh` here runs from source).
 
@@ -35,11 +45,13 @@ App (requires macOS 15+ and a recent Swift toolchain):
 
 ```sh
 cd macos/ControlPanel && swift build
+swift test
 ../build_app.sh --here           # build the .app without installing
 ../build_app.sh                  # build, sign, install to /Applications
 ```
 
-CI runs `mix test` (Linux) + `swift build` (macOS) on every push/PR.
+CI runs `mix test` (Linux), plus a release Swift build and `swift test` (macOS),
+on every push/PR.
 
 ## Guidelines
 

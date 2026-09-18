@@ -1,32 +1,28 @@
 defmodule LgaPredictor.ADSB.Client do
   @moduledoc """
-  Free ADS-B feed client (airplanes.live, readsb schema). A drop-in alternative to
-  `FR24.Client`: returns the same `LgaPredictor.FR24.Aircraft` structs the `Poller`
-  consumes, at zero cost and with no API key.
-
-  These feeds query a **point + radius** (a circle), not a bounding box, so we
-  circumscribe the monitor box with a circle, fetch, then trim back to the box —
-  matching what FR24's `bounds` query would have returned. Live ADS-B carries
-  ground speed, altitude, track, type and registration, which is everything the
-  predictor needs (and then some).
+  Local readsb/dump1090 receiver client. Fetches the receiver's full aircraft
+  snapshot and trims it to the requested box, returning the same Aircraft structs
+  as FR24. The suspended airplanes.live provider is explicitly disabled.
   """
 
   alias LgaPredictor.FR24.Aircraft
-
-  @hosts %{
-    airplanes_live: "https://api.airplanes.live"
-  }
 
   @type bounds :: {number(), number(), number(), number()}
 
   @doc """
   Fetch aircraft within `bounds` ({north, south, west, east}). `opts[:provider]`
-  defaults to `:airplanes_live`. Returns `{:ok, [%Aircraft{}]}`.
+  defaults to `:local`. Returns `{:ok, [%Aircraft{}]}`.
   """
   @spec positions(bounds(), keyword()) :: {:ok, [Aircraft.t()]} | {:error, term()}
   def positions(bounds, opts \\ []) do
-    provider = Keyword.get(opts, :provider, :airplanes_live)
-    url = url_for(provider, bounds, opts)
+    case Keyword.get(opts, :provider, :local) do
+      :local -> local_positions(bounds, opts)
+      provider -> {:error, {:provider_disabled, provider}}
+    end
+  end
+
+  defp local_positions(bounds, opts) do
+    url = Keyword.get(opts, :url) || "http://adsb.local/tar1090/data/aircraft.json"
 
     req =
       Req.new(
@@ -41,27 +37,6 @@ defmodule LgaPredictor.ADSB.Client do
       {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
       {:error, exception} -> {:error, exception}
     end
-  end
-
-  # A local receiver (dump1090/readsb) serves its entire picture at one fixed path —
-  # there is no point/radius query — so we fetch it all and trim to the box, exactly as
-  # we already do for the circle-shaped public queries.
-  defp url_for(:local, _bounds, opts) do
-    Keyword.get(opts, :url) || "http://localhost/tar1090/data/aircraft.json"
-  end
-
-  defp url_for(provider, bounds, _opts) do
-    {clat, clon, radius_nm} = bbox_to_circle(bounds)
-    "#{Map.fetch!(@hosts, provider)}/v2/point/#{f(clat, 4)}/#{f(clon, 4)}/#{f(radius_nm, 1)}"
-  end
-
-  @doc "Center + covering radius (nm) for a {north, south, west, east} box."
-  @spec bbox_to_circle(bounds()) :: {float(), float(), float()}
-  def bbox_to_circle({north, south, west, east}) do
-    clat = (north + south) / 2
-    clon = (west + east) / 2
-    radius_m = haversine_m(clat, clon, north, east)
-    {clat, clon, min(250.0, max(1.0, radius_m / 1852.0 * 1.15))}
   end
 
   @doc "Parse a readsb `%{\"ac\" => [...]}` body into Aircraft, trimmed to `bounds`."
@@ -116,20 +91,4 @@ defmodule LgaPredictor.ADSB.Client do
 
   defp trimmed(s) when is_binary(s), do: String.trim(s)
   defp trimmed(_), do: nil
-
-  defp f(x, decimals), do: :erlang.float_to_binary(x / 1.0, decimals: decimals)
-
-  defp haversine_m(lat1, lon1, lat2, lon2) do
-    r = 6_371_000.0
-    dlat = deg2rad(lat2 - lat1)
-    dlon = deg2rad(lon2 - lon1)
-
-    a =
-      :math.sin(dlat / 2) ** 2 +
-        :math.cos(deg2rad(lat1)) * :math.cos(deg2rad(lat2)) * :math.sin(dlon / 2) ** 2
-
-    2 * r * :math.asin(min(1.0, :math.sqrt(a)))
-  end
-
-  defp deg2rad(d), do: d * :math.pi() / 180.0
 end

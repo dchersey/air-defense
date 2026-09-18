@@ -751,7 +751,7 @@ defmodule LgaPredictor.Poller do
   # The provider actually in use: normally whatever config says, but a failover pins it
   # to `provider_override` until the next session start re-checks the configured one.
   defp active_provider(state),
-    do: state.provider_override || Map.get(state.config_fun.(), :provider, :airplanes_live)
+    do: state.provider_override || Map.get(state.config_fun.(), :provider, :local)
 
   defp arrival_ramp_seconds(state) do
     if metered?(active_provider(state)),
@@ -760,11 +760,10 @@ defmodule LgaPredictor.Poller do
   end
 
   @doc false
-  # airplanes.live blocks by IP with a 403 (not a 429), so a blocked feed never recovers
-  # on its own within a session — every poll fails and we sit blind. Fail over to FR24
-  # once, say so once, and re-check the configured provider at the next session start.
+  # A failed local receiver can fall back to FR24 when a key is configured. Re-check
+  # the receiver on the next session start; report the reason and actual provider.
   defp maybe_failover(state, id, reason) do
-    configured = Map.get(state.config_fun.(), :provider, :airplanes_live)
+    configured = Map.get(state.config_fun.(), :provider, :local)
 
     cond do
       state.provider_override != nil -> state

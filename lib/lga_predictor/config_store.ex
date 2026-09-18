@@ -58,9 +58,9 @@ defmodule LgaPredictor.ConfigStore do
     # [%{"name" => "4", "heading" => 40}, ...]
     "runways" => [],
     # Flight-data source for ALL zones: "local" (your own ADS-B receiver — free,
-    # lowest latency, no third party), "airplanes_live" (their public API) or "fr24"
+    # lowest latency, no third party), or "fr24"
     # (FlightRadar24, needs an API key, costs credits).
-    "provider" => "airplanes_live",
+    "provider" => "local",
     # Where a local receiver serves its readsb JSON. dump1090/readsb expose the whole
     # picture at one path and we trim to the zone box ourselves. The default assumes a
     # Raspberry Pi named `adsb` running readsb + tar1090 (tar1090 serves the JSON under
@@ -71,7 +71,7 @@ defmodule LgaPredictor.ConfigStore do
     "zonesets" => []
   }
 
-  @providers ~w(local airplanes_live fr24)
+  @providers ~w(local fr24)
   @credit_modes ~w(monthly reserve)
   @default_min_gspeed_kt 150
 
@@ -197,7 +197,10 @@ defmodule LgaPredictor.ConfigStore do
   defp load_or_default(path) do
     case File.read(path) do
       {:ok, body} ->
-        @global_defaults |> Map.merge(Jason.decode!(body)) |> migrate_legacy()
+        raw = Map.merge(@global_defaults, Jason.decode!(body))
+        migrated = migrate_legacy(raw)
+        if migrated != raw, do: write!(path, migrated)
+        migrated
 
       {:error, _} ->
         write!(path, @global_defaults)
@@ -205,11 +208,11 @@ defmodule LgaPredictor.ConfigStore do
     end
   end
 
-  # adsb.lol was removed as a provider (unreliable — TCP connects routinely time out).
-  # Fold any stored "adsb_lol" back to the default so an existing config keeps working
-  # and stays valid instead of failing validation on the next edit.
-  defp migrate_legacy(%{"provider" => "adsb_lol"} = raw),
-    do: %{raw | "provider" => "airplanes_live"}
+  # Retired public feeds must never be selected again after an upgrade. Preserve
+  # receiver URL and zones, and migrate to local rather than opting into paid usage.
+  defp migrate_legacy(%{"provider" => provider} = raw)
+       when provider in ["airplanes_live", "adsb_lol"],
+    do: %{raw | "provider" => "local"}
 
   defp migrate_legacy(raw), do: raw
 
@@ -317,6 +320,9 @@ defmodule LgaPredictor.ConfigStore do
 
       raw["credit_mode"] not in @credit_modes ->
         {:error, "credit_mode must be one of #{Enum.join(@credit_modes, ", ")}"}
+
+      raw["provider"] == "airplanes_live" ->
+        {:error, "airplanes.live is disabled: API suspended; use local or fr24"}
 
       raw["provider"] not in @providers ->
         {:error, "provider must be one of #{Enum.join(@providers, ", ")}"}
@@ -479,7 +485,7 @@ defmodule LgaPredictor.ConfigStore do
 
   defp provider_atom("fr24"), do: :fr24
   defp provider_atom("local"), do: :local
-  defp provider_atom(_), do: :airplanes_live
+  defp provider_atom(_), do: :local
 
   defp reckoning_atom("accelerating"), do: :accelerating
   defp reckoning_atom(_), do: :constant

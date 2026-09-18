@@ -162,7 +162,7 @@ final class StatusModel {
   // Day-of-month the FR24 allotment resets (billing anniversary; 1 = calendar month).
   var billingResetDay = 1
   // Flight-data source for all zones, + whether an FR24 key is stored.
-  var provider = "airplanes_live"
+  var provider = "local"
   // Where a local ADS-B receiver serves its readsb JSON (used when provider == local).
   var localFeedURL: String?
   var fr24KeyPresent = false
@@ -662,7 +662,7 @@ final class StatusModel {
     }
   }
 
-  /// Switch the flight-data provider for all zones (airplanes_live | fr24).
+  /// Switch the flight-data provider for all zones (local | fr24).
   func setProvider(_ id: String) {
     provider = id  // optimistic; refresh() reconciles
     guard let url = URL(string: "\(base)/api/config") else { return }

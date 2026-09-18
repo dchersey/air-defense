@@ -1,6 +1,7 @@
 {
   "version": 22,
-  "provider": "airplanes_live",
+  "provider": "local",
+  "local_feed_url": "http://adsb.local/tar1090/data/aircraft.json",
   "global_ceiling_ft": 6000,
   "anc_latency_seconds": 2.0,
   "engage_delta_seconds": 0,

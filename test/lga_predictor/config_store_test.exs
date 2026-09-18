@@ -33,23 +33,25 @@ defmodule LgaPredictor.ConfigStoreTest do
     assert ConfigStore.get(name).credit_mode == :reserve
   end
 
-  test "provider defaults to airplanes_live and round-trips a valid choice", %{name: name} do
-    assert ConfigStore.get(name).provider == :airplanes_live
+  test "provider defaults to local and round-trips a valid choice", %{name: name} do
+    assert ConfigStore.get(name).provider == :local
 
     assert {:ok, cfg} = ConfigStore.put(name, %{"provider" => "fr24"})
     assert cfg.provider == :fr24
 
-    assert {:ok, cfg} = ConfigStore.put(name, %{"provider" => "airplanes_live"})
-    assert cfg.provider == :airplanes_live
+    assert {:ok, cfg} = ConfigStore.put(name, %{"provider" => "local"})
+    assert cfg.provider == :local
   end
 
-  test "provider rejects unknown values (incl. the removed adsb_lol)", %{name: name} do
+  test "provider rejects unknown and retired providers", %{name: name} do
     assert {:error, _} = ConfigStore.put(name, %{"provider" => "skynet"})
     assert {:error, _} = ConfigStore.put(name, %{"provider" => "adsb_lol"})
-    assert ConfigStore.get(name).provider == :airplanes_live
+    assert {:error, message} = ConfigStore.put(name, %{"provider" => "airplanes_live"})
+    assert message =~ "API suspended"
+    assert ConfigStore.get(name).provider == :local
   end
 
-  test "a stored adsb_lol provider migrates to airplanes_live on load" do
+  test "a stored adsb_lol provider migrates to local on load" do
     # adsb.lol was removed; an existing on-disk config must keep working (and stay
     # editable) rather than derive to a dead provider or fail validation on next put.
     path = Path.join(System.tmp_dir!(), "ndcfg_legacy_#{System.unique_integer([:positive])}.json")
@@ -60,9 +62,25 @@ defmodule LgaPredictor.ConfigStoreTest do
     # Distinct child id — the setup block already supervises a ConfigStore (same module).
     start_supervised!(Supervisor.child_spec({ConfigStore, name: name, path: path}, id: name))
 
-    assert ConfigStore.get(name).provider == :airplanes_live
+    assert ConfigStore.get(name).provider == :local
     # and a later edit doesn't trip validation on the legacy value
     assert {:ok, _} = ConfigStore.put(name, %{"global_ceiling_ft" => 5000})
+  end
+
+  test "stored airplanes_live migrates durably without losing receiver settings or zones" do
+    path = Path.join(System.tmp_dir!(), "ndcfg_suspended_#{System.unique_integer([:positive])}.json")
+    on_exit(fn -> File.rm(path) end)
+    url = "http://receiver.example/tar1090/data/aircraft.json"
+    zone = %{"id" => "mine", "name" => "My zone", "enabled" => true,
+             "monitor_zone" => geojson_box(), "anc_zones" => [geojson_box()]}
+    File.write!(path, Jason.encode!(%{"provider" => "airplanes_live", "local_feed_url" => url,
+                                     "global_ceiling_ft" => 4321, "zonesets" => [zone]}))
+    name = :"cfg_suspended_#{System.unique_integer([:positive])}"
+    start_supervised!(Supervisor.child_spec({ConfigStore, name: name, path: path}, id: name))
+    assert %{provider: :local, local_feed_url: ^url, global_ceiling_ft: 4321} = ConfigStore.get(name)
+    assert %{"provider" => "local", "local_feed_url" => ^url} = Jason.decode!(File.read!(path))
+    assert [%{id: "mine"}] = ConfigStore.get(name).zonesets
+    assert Jason.decode!(File.read!(path))["zonesets"] == [zone]
   end
 
   test "billing_reset_day defaults to 1 and round-trips a valid day", %{name: name} do

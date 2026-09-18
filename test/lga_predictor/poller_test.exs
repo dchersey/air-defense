@@ -177,7 +177,8 @@ defmodule LgaPredictor.PollerTest do
   end
 
   test "providers with no receiver of ours report nil, not a false alarm" do
-    start_with_history(fetcher: fn _ -> {:error, :timeout} end)
+    start_with_history(config_fun: fn -> Map.put(config(), :provider, :fr24) end,
+      fetcher: fn _ -> {:error, :timeout} end)
     ambient_tick!()
     ambient_tick!()
     assert Poller.status().receiver_ok == nil
@@ -187,7 +188,6 @@ defmodule LgaPredictor.PollerTest do
   # about one pass in three and the overflight counter read 0 under a running loop.
   test "ambient polls fast on a free feed and slowly on a metered one" do
     assert Poller.ambient_interval_ms(:local) <= 10_000
-    assert Poller.ambient_interval_ms(:airplanes_live) <= 10_000
     assert Poller.ambient_interval_ms(:fr24) >= 60_000
     # And route classification is a separate, slower timer: it looks outside the zone.
     assert Poller.approach_interval_ms() >= 30_000
@@ -494,7 +494,7 @@ defmodule LgaPredictor.PollerTest do
   test "a free provider costs no credits" do
     # Counting free-feed polls as credits made the month-to-date tally read ~10x FR24's
     # real billing — the credit bar cried wolf while actual usage was fine.
-    start(config_fun: fn -> config() |> Map.put(:provider, :airplanes_live) end)
+    start(config_fun: fn -> config() |> Map.put(:provider, :local) end)
     :ok = Poller.start_session()
     Process.sleep(80)
 
@@ -679,9 +679,9 @@ defmodule LgaPredictor.PollerTest do
     assert is_integer(status.overhead_at)
   end
 
-  test "a blocked provider fails over to FR24 once, and a new session re-checks it" do
-    # airplanes.live blocks by IP with a 403, which never recovers mid-session — so we
-    # switch to FR24 rather than sit blind, and report which feed is actually in use.
+  test "a failed local receiver falls back to FR24 once, and a new session re-checks it" do
+    # A failing local receiver may fall back to a configured FR24 key; report
+    # which feed is actually in use.
     # The 2-arity fetcher receives the provider the poller resolved.
     {:ok, seen} = Agent.start_link(fn -> [] end)
 
@@ -691,28 +691,28 @@ defmodule LgaPredictor.PollerTest do
     on_exit(fn -> System.delete_env("FR24_API_KEY") end)
 
     start(
-      config_fun: fn -> config(trigger: :assume) |> Map.put(:provider, :airplanes_live) end,
+      config_fun: fn -> config(trigger: :assume) |> Map.put(:provider, :local) end,
       fetcher: fn _box, provider ->
         Agent.update(seen, &[provider | &1])
-        if provider == :airplanes_live, do: {:error, {:http_error, 403, %{}}}, else: {:ok, []}
+        if provider == :local, do: {:error, {:http_error, 503, %{}}}, else: {:ok, []}
       end,
       poll_interval_ms: 20
     )
 
-    assert Poller.status().provider_active == "airplanes_live"
+    assert Poller.status().provider_active == "local"
 
     :ok = Poller.start_session()
     Process.sleep(120)
 
     status = Poller.status()
-    assert status.provider_active == "fr24", "failed over to FR24 after repeated 403s"
-    assert status.provider_fallback_reason == "HTTP 403", "reports why it switched"
+    assert status.provider_active == "fr24", "failed over to FR24 after repeated receiver errors"
+    assert status.provider_fallback_reason == "HTTP 503", "reports why it switched"
     assert :fr24 in Agent.get(seen, & &1), "actually fetched from the fallback"
 
-    # A fresh session re-checks the configured provider (the block may have lifted).
+    # A fresh session re-checks the configured provider (the receiver may have recovered).
     :ok = Poller.stop_session()
     :ok = Poller.start_session()
-    assert Poller.status().provider_active == "airplanes_live",
+    assert Poller.status().provider_active == "local",
            "next session starts back on the configured provider"
   end
 

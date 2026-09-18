@@ -7,14 +7,23 @@ defmodule LgaPredictor.ADSB.ClientTest do
   # bounds {north, south, west, east}
   @box {40.80, 40.75, -73.92, -73.84}
 
-  describe "bbox_to_circle/1" do
-    test "centers the box and gives a radius (nm) that covers it" do
-      {clat, clon, radius_nm} = Client.bbox_to_circle(@box)
-      assert_in_delta clat, 40.775, 1.0e-6
-      assert_in_delta clon, -73.88, 1.0e-6
-      # half-diagonal of this ~3x4nm box is a couple nm; with margin, 1–10nm.
-      assert radius_nm > 1.0 and radius_nm < 10.0
-    end
+  test "suspended provider cannot issue requests, even with an explicit URL" do
+    opts = [provider: :airplanes_live, url: "http://example.test/",
+            req: [plug: fn _ -> flunk("disabled provider attempted HTTP") end]]
+    assert {:error, {:provider_disabled, :airplanes_live}} = Client.positions(@box, opts)
+    assert {:error, {:provider_disabled, :airplanes_live}} =
+             LgaPredictor.Sources.positions(@box, :airplanes_live, opts)
+  end
+
+  test "default provider fetches the configured local receiver" do
+    response = %{"aircraft" => [%{"hex" => "inbox", "lat" => 40.76, "lon" => -73.87}]}
+    opts = [url: "http://receiver.test/tar1090/data/aircraft.json", req: [plug: fn conn ->
+      assert conn.host == "receiver.test"
+      assert conn.request_path == "/tar1090/data/aircraft.json"
+      conn |> Plug.Conn.put_resp_content_type("application/json")
+           |> Plug.Conn.send_resp(200, Jason.encode!(response))
+    end]]
+    assert {:ok, [%Aircraft{hex: "inbox"}]} = Client.positions(@box, opts)
   end
 
   describe "parse/2" do
@@ -64,7 +73,7 @@ defmodule LgaPredictor.ADSB.ClientTest do
       assert [%Aircraft{pos_age_s: nil}] = Client.parse(%{"ac" => [base]}, @box)
     end
 
-    test "drops aircraft outside the bounding box (circle is trimmed to the box)" do
+    test "drops aircraft outside the requested bounding box" do
       body = %{
         "ac" => [
           %{"hex" => "inbox", "lat" => 40.76, "lon" => -73.87, "gs" => 140, "alt_baro" => 1500},

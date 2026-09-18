@@ -7,7 +7,7 @@ https://github.com/user-attachments/assets/0748e274-c487-4781-aa19-3b3a418021ef
 
 A macOS menu-bar app that watches the sky and automatically switches your AirPods
 Max into **Active Noise Cancellation** the moment an aircraft is about to pass over
-you — then back to **Transparency** once it's gone. A little SAM site for airplane
+you — then back to your previous listening mode once it's gone. A little SAM site for airplane
 noise: detect the inbound, lock on, engage.
 
 ## The problem
@@ -28,78 +28,79 @@ free. So I built an air-defense system for it. It watches live flight traffic,
 predicts which planes will actually cross over me and when, and engages ANC just in
 time, every time.
 
+## Current scope and data sources
+
+**The airplanes.live API has been suspended and is disabled in Air Defense.** It is
+no longer offered in Settings, and requests through that provider are rejected.
+Existing configurations using airplanes.live (or the previously retired adsb.lol)
+migrate to **Local receiver**, preserving the configured receiver URL and zones.
+Set that URL to a working receiver before expecting traffic. There is no supported
+free public position API in this app; **FlightRadar24 is the optional paid alternative**.
+
+Most development now focuses on my **local ADS-B receiver** and the traffic around
+my apartment in Queens under LaGuardia's flight paths. The local features—including
+low/high/river approach classification, background activity, route history, and
+noise timing—are designed and calibrated for this location. Those route names
+and classification thresholds describe what I hear here; they are not a general
+airport-routing model.
+
+**I do not plan to build a setup or adaptation workflow for other locations.**
+The zone editor and configuration are available to experiment with, but changing
+coordinates alone does not make the local features portable. Contributions that
+adapt them for other locations, or make them more general, are welcome; see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## What it does
 
-- **Tracks live traffic** via a **free ADS-B feed** (airplanes.live) —
-  no API key, no cost — and predicts, per flight, *when* it will be overhead:
-  distance to the noisy zone ÷ ground speed. (FlightRadar24 is an optional
-  alternative provider if you prefer it.)
-- **Engages ANC just before** the plane arrives and **releases it** once the plane
-  clears — so you're only cancelling when it actually matters.
-- **Only watches small boxes.** You draw a tiny **monitor zone** upstream; that's
-  the only thing polled — cheap on the free feed, and credit-frugal on FR24.
-- **Locks on.** Once it's caught an inbound it stops polling that zone until the
-  plane clears.
-- **Pauses when you take the AirPods off** (or switch output away) and resumes when
-  they're back, so it never toggles a device that isn't listening.
-- **Tracks FR24 credits** (when you use FR24) against your monthly allotment with a
-  pace bar, so you can see whether you're burning them faster than the month.
-- **Stays out of the way.** No Dock icon — a menu-bar icon that's amber when a plane
-  is inbound, red while ANC is engaged, and quiet otherwise.
+- **Tracks local traffic** from a readsb/dump1090 receiver. No position API key or
+  per-request charge; you supply the receiver hardware and network connection.
+- **Engages ANC for overhead aircraft** and restores the listening mode you had
+  before the overflight.
+- **Uses monitor and ANC zones** to detect inbound aircraft and decide when they
+  are close enough to matter. The receiver returns its full picture; the app
+  filters it locally.
+- **Tracks activity outside ANC sessions**, classifies my local arrival routes,
+  and records seven-day route timelines and rolling 30-day route shares.
+- **Pauses ANC monitoring when the AirPods are no longer the active output** and
+  resumes when they return. Background local-receiver observations continue.
+- **Supports FlightRadar24** as a paid position source, with credit accounting.
+  Background traffic and route classification are disabled on that metered feed.
+- **Stays out of the way.** No Dock icon—amber for inbound traffic, red while
+  ANC is engaged, and quiet otherwise.
 
-It's two pieces: a headless **Elixir/OTP** service that does the prediction and
-exposes a localhost-only JSON API, and a **SwiftUI menu-bar app** that's the
-control panel and performs the actual ANC switch (by driving Control Center through
-the macOS Accessibility API — every no-UI route is dead on current macOS).
+It's two pieces: a headless **Elixir/OTP** service that tracks traffic and exposes a
+localhost-only JSON API, and a **SwiftUI menu-bar app** that provides the control
+panel and switches ANC. Switching normally uses a private CoreBluetooth path,
+with Control Center Accessibility automation as a fallback.
 
 ## How it works
 
-You define **zonesets**. A zoneset is:
+A **zoneset** pairs a monitor zone upstream with one or more **ANC zones** where
+traffic is loud over the listener. Tracking queries cover the union of those
+zones so an aircraft remains visible between detection and the overhead pass.
+Timing offsets can be set globally or per zone.
 
-- a **monitor zone** — a small box upstream where planes are first detected (the
-  only thing polled), and
-- one or more **ANC zones** — where it's actually loud over you (never polled).
+- **Arrivals:** the tracked-arrival mode uses ETA to increase polling frequency as
+  a flight approaches, then engages on observed zone entry. Release is predicted
+  from closest approach to the listener plus an acoustic-decay allowance, or from
+  the zone dwell when listener geometry is unavailable. Predicting the release is
+  important here: the antenna often loses aircraft after they pass the building.
+- **Departures:** climbing and banking aircraft are tracked through the zone.
+  Successive observations keep ANC engaged while the aircraft is overhead; it
+  releases when those holds expire after exit or loss of tracking.
 
-When a flight shows up in a monitor zone, Air Defense computes its straight-line
-distance to the ANC zone and divides by ground speed to get a time-to-overhead,
-then schedules ANC to **engage** on predicted entry and **release** on predicted
-exit. Two global sliders (±15 s) nudge the on/off moments to taste, and a
-configurable `anc_latency_seconds` fires each switch slightly early so the mode has
-actually changed by the time the plane arrives.
+Both show amber while inbound and red while ANC is engaged. The arrival banner
+has a clear-by countdown; live-tracked departures show a radar mark.
 
-### Two kinds of zone: arrivals (steady) vs departures (accelerating)
+[`config.example.json`](config.example.json) contains my two zone geometries as an
+example, with the local receiver selected. Configure its URL under **Settings →
+Data source → Local receiver**. Receiver setup and diagnostics are documented in
+[`priv/adsb/README.md`](priv/adsb/README.md). These examples document my setup;
+there is no supported location-adaptation wizard.
 
-Each zoneset has a **type** — set it with the Arrival / Departure picker in the zone
-editor — because the two flight phases behave differently:
-
-- **Arrival (steady).** On final approach a jet is already on a stable vector:
-  roughly constant heading and speed. "Distance ÷ ground speed" is a good predictor,
-  so an arrival zone **schedules** the engage/release from that ETA, exactly as
-  above, and shows a **clear-by countdown** while the plane is overhead.
-
-- **Departure (accelerating).** Climbing out, a jet is still **accelerating and
-  banking**, and it turns at a different point on different days — some climb
-  straight, some make a big turn, some pass you entirely. A far-out ETA mistimes the
-  engage, and a near-distance threshold false-triggers on the ones that miss. So a
-  departure zone doesn't predict — it **tracks**: it polls fast (the free feed is
-  unmetered) over the **union** of the monitor and ANC zones to keep the climbing
-  plane on radar through the gap, **engages on actual entry** (latency-adjusted so
-  the mode flips just as it crosses in), **holds** ANC while it's overhead, and
-  **releases on the actual exit** rather than a straight-line dwell that would
-  under-count a curving path. A plane that's merely near the zone but tracking away
-  (a miss) never engages and is dropped once it's past. While it's live-tracked the
-  banner shows a **radar mark** instead of a countdown.
-
-Both types drive the same menu-bar signals: **amber** when a plane is inbound and
-closing, **red** while ANC is engaged.
-
-See [`config.example.json`](config.example.json) for my two actual zones — one of
-each type — as a worked example you can adapt (copy it to
-`~/Library/Application Support/air-defense/config.json`, or just read it alongside
-the zone editor).
-
-Sessions are manual: hit **Start** on a zone when the planes start, and it runs for
-~4 hours or until you stop it. Idle — and free — otherwise.
+ANC sessions are manual: **Start** a zone when needed; it runs for about four hours
+or until stopped. With the local receiver configured, background activity and route
+classification continue outside those sessions.
 
 ## Switching the AirPods mode
 
@@ -197,8 +198,10 @@ menu-bar app:
 
 It downloads a **self-contained** backend release (no Elixir/Erlang/Xcode needed),
 installs it as a per-user LaunchAgent, and installs the app to `/Applications`.
-**No API key needed** — it defaults to the free ADS-B feed. (If you later switch
-the provider to FlightRadar24 in the app's settings, you paste the key there.)
+**A local ADS-B receiver is required for the default data source.** Configure its
+URL in Settings; no position API key is needed for that receiver. Alternatively,
+select FlightRadar24 and enter a paid API key. Installation does not provide a
+receiver or a free public feed.
 
 The downloadable binaries are **code-signed with my Apple Developer ID and notarized
 by Apple** (and stapled), so Gatekeeper opens them without the "unidentified
@@ -207,11 +210,11 @@ developer" warning — every release is built, signed, and notarized in CI.
 Two one-time steps macOS requires and the script can't do for you:
 
 1. **Grant Accessibility** — System Settings → Privacy & Security → Accessibility →
-   enable **Air Defense**. (It drives Control Center to toggle ANC.)
+   enable **Air Defense**. (Required for the Control Center fallback and Reclaim.)
 2. **Pin Sound to the menu bar** — System Settings → Control Center → Sound →
    *Always Show in Menu Bar*.
 
-Then click the menu-bar icon and **Start** a zone.
+Set the receiver URL in **Settings → Data source**, then **Start** a zone.
 
 ## Keep Sound Alive (optional companion)
 
@@ -276,9 +279,10 @@ last 30 days**, with recorded hours and coverage alongside it; these are not per
 of aircraft. Classification reports the noisiest route in meaningful use, so this is a
 history of the inferred airport routing, not a census of individual flights.
 
-History records in the background on an unmetered feed, even without an ANC session,
+History records in the background from the local receiver, even without an ANC session,
 and survives app/backend restarts. It requires the airport and home coordinates used
-by the existing route classifier. Blank time is unclassified or unobserved, including
+by the existing route classifier. Classification is specific to my apartment and
+LaGuardia; the chart records those local classifications. Blank time is unclassified or unobserved, including
 outages and time before this feature was installed. Previous route changes cannot be
 reconstructed from the old single-route state file. Data is retained for 30 days in
 `~/Library/Application Support/air-defense/route-history.json`. The view refreshes once
@@ -286,9 +290,9 @@ a minute; observations are recorded on the classifier's 30-second cadence. Day c
 use local wall time (the repeated autumn DST hour shares rows, and the missing spring
 hour stays blank); duration percentages use actual elapsed time.
 
-- **Data source** picker: `airplanes.live` (free, default) or
-  `FlightRadar24`. Pick FR24 and a field appears to paste your API key (stored in
-  the Keychain by the backend). Applies to all zones.
+- **Data source** picker: `Local receiver` (default) or `FlightRadar24` (paid).
+  Set the receiver URL, or paste an FR24 key (stored in the macOS Keychain).
+  Applies to all zones. airplanes.live is disabled because its API is suspended.
 - **Start / Stop** per zone from the menu — each zone runs its own session.
 - **Edit zones** inline: paste GeoJSON, or "Open in geojson.io" to draw a box over
   the map and bring it back. Set a per-zone poll interval.
@@ -302,26 +306,29 @@ hour stays blank); duration percentages use actual elapsed time.
 
 ## Provider notes
 
-**Default (free):** `airplanes.live` is a community ADS-B aggregator — no API key, no
-cost. All US commercial jets broadcast ADS-B, and busy metro areas near major
-airports tend to have dense volunteer-receiver coverage, so traffic over the
-approach/departure paths comes through complete. This is the default and what most
-people should use. Be a good citizen: the small monitor zones keep request volume
-low.
+**Default: local receiver.** Air Defense reads `aircraft.json` from a local
+readsb/dump1090 receiver, typically at
+`http://adsb.local/tar1090/data/aircraft.json`. Adjust the hostname to your setup.
+This is the source used for background activity, route classification, and route
+history. See the [receiver guide](priv/adsb/README.md) for provisioning and diagnostics.
 
-**Fallback (FlightRadar24):** the community feed depends on nearby hobbyist
-receivers, so coverage varies by location. If `airplanes.live` doesn't reliably see
-the low-altitude traffic over *your* spot — planes you can clearly hear that never
-show up — switch the **Data source** to **FlightRadar24**, a commercial feed with
-broad, consistent coverage. Sign up at
-**[fr24api.flightradar24.com](https://fr24api.flightradar24.com/)** (the **Explorer**
-plan is enough), then paste the API key into the app — it's stored only in your
-macOS Keychain (service `air-defense-fr24`, `FR24_API_KEY` env fallback), **never**
-committed or written to the launchd plist. FlightRadar24's `light` feed is billed
-per flight returned, so small monitor zones keep usage low.
+**Disabled: airplanes.live.** Its public API has been suspended. Air Defense no
+longer selects or calls that provider. Older configurations migrate to Local receiver;
+users without a receiver can explicitly choose the paid FR24 alternative.
 
-> The Explorer plan exposes no month-to-date usage or balance endpoint, so the
-> credit bar is a **self-tally**: Air Defense counts every credit it spends and you
+**Optional paid source: FlightRadar24.** Obtain an API key from
+[FlightRadar24's API portal](https://fr24api.flightradar24.com/) and paste it in
+Settings. The key is stored in the macOS Keychain (service `air-defense-fr24`,
+`FR24_API_KEY` environment fallback), never in the repository or launchd plist.
+The `light` position feed is billed per flight returned, so small query areas matter.
+
+If a local receiver repeatedly fails and an FR24 key is stored, the current app can
+fall back to FR24 for that session. The panel identifies the active provider and the
+reason for the switch. Starting another session rechecks the receiver. This fallback
+spends FR24 credits; background classification and activity collection pause while it
+is in use.
+
+> The credit bar is a **self-tally**: Air Defense counts every credit it spends and you
 > periodically Sync it to the dashboard number. It rolls over on your billing
 > anniversary (the reset day you set).
 
@@ -336,16 +343,17 @@ plays no part in detecting or tracking aircraft** (that's all ADS-B). Paste an A
 key into the app's **Flight routes** setting — stored only in your macOS Keychain
 (service `air-defense-aeroapi`, `AEROAPI_KEY` env fallback), never committed. Lookups
 are cached one-per-callsign (a route is fixed once a flight is airborne), run in the
-background so they never block a poll, and are capped to **1,000/month** to stay inside
-the free tier (AeroAPI's Personal tier includes $5/month free and `GET /flights/{ident}`
-is $0.005/call, so 1,000 calls = exactly $5). With no key, over the cap, or on a miss, the
-list simply falls back to the raw callsign — everything else works identically.
+background so they never block a poll, and are capped to **1,000/month**. This is a
+billed API; consult your FlightAware plan for current pricing and allowances.
+With no key, over the cap, or on a miss,
+the list falls back to the raw callsign. Route labels are separate from the local
+low/high/river approach classifier and its history chart.
 
 ## Layout
 
 ```
 lib/lga_predictor/      Elixir service: geo, predictor, fr24 client, poller,
-                        config_store, credit_ledger, actuator, api/router
+                        config_store, route_history, credit_ledger, actuator, api/router
 macos/ControlPanel/     SwiftUI menu-bar app (control panel + ANC actuator)
 macos/build_app.sh      Builds the app + installs to /Applications
 config.example.json     My two real zonesets (one arrival, one departure) as a sample
@@ -358,13 +366,15 @@ test/                   ExUnit tests (TDD)
 ## Limitations
 
 - **Apple Silicon, macOS 15+.** Intel: build from source.
-- It's tuned for *my* apartment under *LaGuardia's* paths — the zones in
-  [`config.example.json`](config.example.json) are mine. You'll draw your own
-  monitor/ANC zones for wherever you are.
+- Local features are tuned for *my* apartment under *LaGuardia's* paths. I do not
+  plan to develop location-adaptation tooling; contributions are welcome. The
+  zone editor alone does not adapt route classification or acoustic assumptions.
 - It can only switch a device that's currently your active output and connected;
   pair it with Keep Sound Alive so the AirPods don't nap mid-session.
-- ANC is toggled by automating Control Center — it needs the Accessibility grant and
-  Sound pinned to the menu bar.
+- The normal ANC switch uses private CoreBluetooth APIs and may depend on macOS
+  behavior. Its Control Center fallback needs Accessibility and Sound pinned to
+  the menu bar.
+- airplanes.live is disabled. Use a local receiver or paid FR24 positions.
 
 ## Why this license?
 

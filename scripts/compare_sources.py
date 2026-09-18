@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Side-by-side comparison of FR24 vs airplanes.live over the same monitor box.
+"""Side-by-side comparison of FR24 vs a local ADS-B receiver over the same monitor box.
 
 Pulls the live monitor zone(s) from the running Air Defense service, queries both
 sources each tick, and reports presence agreement (both / FR24-only / ADSB-only)
 plus per-aircraft field deltas (ground speed, altitude, track, position, staleness).
 
 Usage:
-  scripts/compare_sources.py [--zone ID] [--count N] [--interval S] [--all]
+  scripts/compare_sources.py [--zone ID] [--count N] [--interval S] [--all] [--receiver-url URL]
 
 FR24 spends credits only when aircraft are in the box (6/flight); empty polls are
-free. airplanes.live is free. Be polite: interval >= ~5s.
+free. The local receiver has no per-request charge. Its URL defaults to the
+receiver configured in Air Defense. airplanes.live is suspended and is not queried.
 """
 import argparse, json, math, subprocess, sys, time, urllib.request, urllib.error
 from datetime import datetime
@@ -87,22 +88,19 @@ def fr24_fetch(key, bbox):
     return out, None
 
 
-def adsb_fetch(bbox):
+def adsb_fetch(bbox, url):
     n, s, w, e = bbox
-    clat, clon = (n + s) / 2, (w + e) / 2
-    radius_nm = min(250, max(1, haversine_m(clat, clon, n, e) / 1852 * 1.15))
-    url = f"https://api.airplanes.live/v2/point/{clat:.4f}/{clon:.4f}/{radius_nm:.1f}"
     try:
         _, body = http_json(url)
     except Exception as ex:
         return None, str(ex)
     out = {}
-    for a in body.get("ac", []):
+    for a in body.get("aircraft", body.get("ac", [])):
         hx = (a.get("hex") or "").lower()
         lat, lon = a.get("lat"), a.get("lon")
         if not hx or lat is None or lon is None:
             continue
-        if not (s <= lat <= n and w <= lon <= e):   # trim circle → the FR24 bbox
+        if not (s <= lat <= n and w <= lon <= e):   # trim the receiver snapshot to the FR24 bbox
             continue
         alt = a.get("alt_baro")
         out[hx] = dict(flight=(a.get("flight") or "").strip(), lat=lat, lon=lon,
@@ -120,7 +118,15 @@ def main():
     ap.add_argument("--zone"); ap.add_argument("--count", type=int, default=10)
     ap.add_argument("--interval", type=float, default=30.0); ap.add_argument("--all", action="store_true")
     ap.add_argument("--bbox", help="override: N,S,W,E (skip the live zones; e.g. an area you know has traffic)")
+    ap.add_argument("--receiver-url", help="local readsb aircraft.json URL (default: app setting)")
     args = ap.parse_args()
+
+    receiver_url = args.receiver_url
+    if not receiver_url:
+        _, status = http_json(f"{API}/api/status")
+        receiver_url = status.get("local_feed_url")
+    if not receiver_url:
+        ap.error("configure a local receiver URL or supply --receiver-url")
 
     key = keychain_fr24()
     if not key:
@@ -152,7 +158,7 @@ def main():
     for i in range(args.count):
         for zid, name, bb in boxes:
             fr, ferr = fr24_fetch(key, bb)
-            ad, aerr = adsb_fetch(bb)
+            ad, aerr = adsb_fetch(bb, receiver_url)
             ts = datetime.now().strftime("%H:%M:%S")
             if fr is None or ad is None:
                 print(f"[{ts}] {zid}: FR24={'ERR ' + ferr if ferr else '?'} "

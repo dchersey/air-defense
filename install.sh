@@ -4,8 +4,8 @@
 #   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/dchersey/air-defense/main/install.sh)"
 #
 # Downloads a self-contained Elixir release (no Elixir/Erlang/Xcode needed),
-# installs it as a per-user LaunchAgent, stores your FlightRadar24 key in the
-# Keychain, and installs the notarized menu-bar app. Apple Silicon, macOS 15+.
+# installs it as a per-user LaunchAgent and installs the notarized menu-bar app.
+# Apple Silicon, macOS 15+.
 set -euo pipefail
 
 REPO="dchersey/air-defense"
@@ -35,9 +35,9 @@ tar -xzf "$tmp/backend.tgz" -C "$BACKEND"
 [ -x "$BACKEND/bin/air_defense" ] || die "Release looks wrong — bin/air_defense missing."
 
 # 2. (No key needed) ---------------------------------------------------------
-# Out of the box Air Defense uses a free ADS-B feed (airplanes.live) — no API key,
-# no credits. You only need a FlightRadar24 key if you switch the provider to FR24
-# in the app's settings, and you enter it there. Nothing to do here.
+# Air Defense defaults to a local ADS-B receiver. Set its URL in Settings.
+# airplanes.live is disabled because its API is suspended. FlightRadar24 is the
+# optional paid provider; enter its key in the app, which stores it in Keychain.
 
 # 3. LaunchAgent -------------------------------------------------------------
 say "Installing the LaunchAgent…"
