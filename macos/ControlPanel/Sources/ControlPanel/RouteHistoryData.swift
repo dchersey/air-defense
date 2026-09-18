@@ -42,21 +42,26 @@ enum RouteTimeline {
   static func blocks(_ intervals: [RouteInterval], day: Date,
                      calendar: Calendar = .current) -> [Block] {
     guard let dayEnd = calendar.date(byAdding: .day, value: 1, to: day) else { return [] }
-    return intervals.flatMap { span -> [Block] in
-      var start = max(day, Date(timeIntervalSince1970: Double(span.startAt)))
-      let end = min(dayEnd, Date(timeIntervalSince1970: Double(span.endAt)))
-      var result: [Block] = []
+    var result: [Block] = []
+    for span in intervals {
+      let spanStart = Date(timeIntervalSince1970: TimeInterval(span.startAt))
+      let spanEnd = Date(timeIntervalSince1970: TimeInterval(span.endAt))
+      var start = max(day, spanStart)
+      let end = min(dayEnd, spanEnd)
       while start < end {
         let transition = calendar.timeZone.nextDaylightSavingTimeTransition(after: start)
         let finish = transition.map { min($0, end) } ?? end
         guard finish > start else { break }
         let c = calendar.dateComponents([.hour, .minute, .second], from: start)
-        let seconds = Double((c.hour ?? 0) * 3600 + (c.minute ?? 0) * 60 + (c.second ?? 0))
-        result.append(Block(route: span.route, start: start, end: finish,
-                            top: seconds / 86400, height: finish.timeIntervalSince(start) / 86400))
+        let hours = Double(c.hour ?? 0) * 3600
+        let minutes = Double(c.minute ?? 0) * 60
+        let seconds = hours + minutes + Double(c.second ?? 0)
+        let top = seconds / 86400.0
+        let height = finish.timeIntervalSince(start) / 86400.0
+        result.append(Block(route: span.route, start: start, end: finish, top: top, height: height))
         start = finish
       }
-      return result
     }
+    return result
   }
 }
