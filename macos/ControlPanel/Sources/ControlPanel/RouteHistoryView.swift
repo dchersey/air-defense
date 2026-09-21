@@ -5,7 +5,7 @@ struct RouteHistoryView: View {
   let onBack: () -> Void
   @State private var hovered: String?
   private let gridHeight: CGFloat = 240
-  private let routes = ["low_approach", "high_approach", "river_approach"]
+  private let routes = ["low_approach", "high_approach", "river_approach", "direct_approach"]
 
   var body: some View {
     TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -154,6 +154,7 @@ struct RouteHistoryView: View {
     switch route {
     case "low_approach": return Palette.inbound
     case "high_approach": return Palette.accent
+    case "direct_approach": return Color.purple
     default: return Palette.go
     }
   }
@@ -162,6 +163,7 @@ struct RouteHistoryView: View {
     switch route {
     case "low_approach": return "Low"
     case "high_approach": return "High"
+    case "direct_approach": return "Direct"
     default: return "River"
     }
   }

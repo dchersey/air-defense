@@ -8,7 +8,7 @@ struct RouteHistoryRenderTests {
     let model = StatusModel(startMonitoring: false)
     model.reachable = true
     let now = Date()
-    let routes = ["low_approach", "high_approach", "river_approach"]
+    let routes = ["low_approach", "high_approach", "river_approach", "direct_approach"]
     let days = RouteTimeline.days(now: now)
     var spans: [RouteInterval] = []
     for (index, day) in days.enumerated() {
@@ -16,7 +16,7 @@ struct RouteHistoryRenderTests {
         let start = day.addingTimeInterval(Double(block * 6 + 1) * 3600)
         let end = min(now, start.addingTimeInterval(Double(3 + index % 3) * 3600))
         if end > start {
-          spans.append(RouteInterval(route: routes[(index + block) % 3],
+          spans.append(RouteInterval(route: routes[(index + block) % routes.count],
                                      startAt: Int(start.timeIntervalSince1970),
                                      endAt: Int(end.timeIntervalSince1970)))
         }

@@ -471,7 +471,7 @@ defmodule LgaPredictor.Poller do
       runway = Approach.runway_from_tracks(Enum.map(tracks, &elem(&1, 1)), runways)
       path = Approach.route(passes, now)
       record_route_observation(path, now)
-      decide_path(path, state, runway)
+      decide_path(path, %{state | route_confirmed: path != nil}, runway)
     else
       _ ->
         record_route_observation(nil, System.os_time(:second))
@@ -541,12 +541,14 @@ defmodule LgaPredictor.Poller do
 
   defp path_from_name("low_approach"), do: :low_approach
   defp path_from_name("high_approach"), do: :high_approach
+  defp path_from_name("direct_approach"), do: :direct_approach
   defp path_from_name("river_approach"), do: :river_approach
   defp path_from_name(_), do: nil
 
-  # The three routings as they are actually experienced from under them.
+  # The four routings as they are actually experienced from under them.
   defp path_label(:low_approach), do: "low approach"
   defp path_label(:high_approach), do: "high approach"
+  defp path_label(:direct_approach), do: "direct approach"
   defp path_label(:river_approach), do: "river approach"
   defp path_label(nil), do: nil
 
@@ -1369,6 +1371,9 @@ defmodule LgaPredictor.Poller do
         }
       end)
 
+    route_current? = state.route_confirmed and is_integer(state.approach_polled_at) and
+      now - state.approach_polled_at <= 90 and not metered?(active_provider(state))
+
     ends = state.sessions |> Map.values() |> Enum.map(& &1.ends_at)
 
     # Soonest still-armed intercept across all zones — drives the inbound banner.
@@ -1402,8 +1407,8 @@ defmodule LgaPredictor.Poller do
       receiver_ok: if(active_provider(state) == :local, do: state.receiver_ok, else: nil),
       # The arrival route in use (a state, shown as a banner), when it began, and when
       # the classifier last looked. All nil on a metered provider, where it never runs.
-      route: if(metered?(active_provider(state)), do: nil, else: path_label(state.active_path)),
-      route_since: if(metered?(active_provider(state)), do: nil, else: state.path_since),
+      route: if(route_current?, do: path_label(state.active_path), else: nil),
+      route_since: if(route_current?, do: state.path_since, else: nil),
       route_polled_at: if(metered?(active_provider(state)), do: nil, else: state.approach_polled_at),
       approx_credits: state.credits,
       feed_ok: feed_ok?(state),
@@ -1475,6 +1480,7 @@ defmodule LgaPredictor.Poller do
       # successful terminal-area fetch, so the banner can show the classifier is alive
       # even while it has nothing to say.
       active_path: restored_route.active_path,
+      route_confirmed: false,
       path_since: restored_route.path_since,
       approach_polled_at: nil,
       active_runway: nil,

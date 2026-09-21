@@ -340,11 +340,11 @@ defmodule LgaPredictor.PollerTest do
 
   # Every install, reboot or rebuild restarts the backend; the banner's "since" must
   # not restart with it, or a routing that began yesterday afternoon reads as today's.
-  test "the route and its start survive a restart" do
+  test "a saved route is not current until confirmed after restart" do
     f = route_file()
     File.write!(f, Jason.encode!(%{route: "river_approach", since: 1_700_000_000}))
     start_with_history(config_fun: with_home(), fetcher: fn _ -> {:ok, []} end, route_path: f)
-    assert %{route: "river approach", route_since: 1_700_000_000} = Poller.status()
+    assert %{route: nil, route_since: nil} = Poller.status()
   end
 
   test "a restart followed by the same route keeps the original start" do
@@ -373,6 +373,22 @@ defmodule LgaPredictor.PollerTest do
     File.write!(f, "not json")
     start_supervised!({Poller, [config_fun: with_home(), fetcher: fn _ -> {:ok, []} end, route_path: f, window_seconds: 90, poll_interval_ms: 30, session_duration_ms: 10_000]})
     assert Poller.status().route == nil
+  end
+
+  test "a stale or unsupported classification is not presented as current" do
+    feed = start_route_test()
+    fly_and_land(feed, ~w(a b c), @home, 3600)
+    assert route() == "high approach"
+    :sys.replace_state(Poller, fn state ->
+      %{state | approach_polled_at: System.os_time(:second) - 91}
+    end)
+    assert route() == nil
+    assert Poller.status().route_since == nil
+    :sys.replace_state(Poller, fn state -> %{state | approach_passes: %{}} end)
+    Agent.update(feed, fn _ -> [] end)
+    send(Poller, :approach)
+    assert route() == nil
+    assert Poller.status().route_polled_at != nil
   end
 
   test "a lull is not reported as a route" do

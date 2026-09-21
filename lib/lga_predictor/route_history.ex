@@ -8,7 +8,7 @@ defmodule LgaPredictor.RouteHistory do
   use GenServer
   require Logger
 
-  @routes ~w(low_approach high_approach river_approach)
+  @routes ~w(low_approach high_approach river_approach direct_approach)
   @window 30 * 86_400
   defp default_path do
     Path.join([

@@ -39,7 +39,7 @@ free public position API in this app; **FlightRadar24 is the optional paid alter
 
 Most development now focuses on my **local ADS-B receiver** and the traffic around
 my apartment in Queens under LaGuardia's flight paths. The local features—including
-low/high/river approach classification, background activity, route history, and
+low/high/river/direct approach classification, background activity, route history, and
 noise timing—are designed and calibrated for this location. Those route names
 and classification thresholds describe what I hear here; they are not a general
 airport-routing model.
@@ -279,16 +279,24 @@ app is Developer ID-signed, notarized, stapled, and accepted by Gatekeeper.
 
 **Route history** opens a seven-column lookback: today and the preceding six local
 calendar days, with time of day running down each column. Amber marks low approaches,
-blue/teal high approaches, and green river approaches. Hover a block for its route and
-time range. The bottom bar shows each route's percentage of **classified time over the
+blue/teal high approaches, green river approaches, and purple direct approaches.
+Hover a block for its route and time range. The bottom bar shows each route's percentage of **classified time over the
 last 30 days**, with recorded hours and coverage alongside it; these are not percentages
 of aircraft. Classification reports the noisiest route in meaningful use, so this is a
 history of the inferred airport routing, not a census of individual flights.
 
 History records in the background from the local receiver, even without an ANC session,
 and survives app/backend restarts. It requires the airport and home coordinates used
-by the existing route classifier. Classification is specific to my apartment and
-LaGuardia; the chart records those local classifications. Blank time is unclassified or unobserved, including
+by the route classifier. The direct category identifies repeated, progressing
+observations along the southwest straight-in corridor through Brooklyn and Queens;
+it is distinct from the low loop even where it passes inside the broad three-mile
+near-home radius. At least three completed aircraft tracks are needed. This is a
+local geometric inference, not an official approach clearance. If evidence is
+insufficient or the classifier has not refreshed for 90 seconds, the banner shows
+“route undetermined” instead of presenting a saved route as current. Historical
+classifications are not rewritten when detection improves. Classification is specific
+to my apartment and LaGuardia; the chart records those local classifications. Blank
+time is unclassified or unobserved, including
 outages and time before this feature was installed. Previous route changes cannot be
 reconstructed from the old single-route state file. Data is retained for 30 days in
 `~/Library/Application Support/air-defense/route-history.json`. The view refreshes once

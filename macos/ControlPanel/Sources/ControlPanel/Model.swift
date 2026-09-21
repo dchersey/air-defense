@@ -84,7 +84,7 @@ struct StatusResponse: Codable {
   let ambient: Bool?
   // false = the local receiver is not answering. nil for providers with no receiver.
   let receiverOk: Bool?
-  // The arrival route in use ("low approach" / "high approach" / "river approach"),
+  // The arrival route in use ("low approach" / "high approach" / "river approach" / "direct approach"),
   // when it began, and when the classifier last polled. A state, shown as a banner —
   // it is the answer to "why is the list quiet". All nil on a metered provider.
   let route: String?

@@ -339,6 +339,53 @@ defmodule LgaPredictor.ApproachTest do
     end
   end
 
+  # Southwest centreline, independently expressed as positions at known distances.
+  defp direct_point(nm) do
+    theta = 32 * :math.pi() / 180
+    {elem(@lga, 0) - nm * :math.cos(theta) / 60,
+     elem(@lga, 1) - nm * :math.sin(theta) / (60 * :math.cos(elem(@lga, 0) * :math.pi() / 180))}
+  end
+
+  defp direct_fleet(opts \\ []) do
+    Enum.reduce([{8, 2800, 0}, {6, 2000, 40}, {2, 600, 120}], %{}, fn {nm, alt, dt}, passes ->
+      fleet = Enum.map(~w(d1 d2 d3), fn hex ->
+        ac = plane(hex, direct_point(nm), alt, -700, opts)
+        %{ac | track_deg: Keyword.get(opts, :track, 32.0), lon: ac.lon + Keyword.get(opts, :east, 0)}
+      end)
+      seen(fleet, passes, @now + dt)
+    end)
+  end
+
+  test "southwest straight-in is direct despite passing inside the broad low radius" do
+    passes = direct_fleet()
+    assert Enum.all?(passes, fn {_, p} -> p.closest_nm < 3 and p.closest_nm > 1 end)
+    assert Approach.route(passes, @now + 241) == :direct_approach
+  end
+
+  test "one corridor sample cannot prove a direct route" do
+    passes = seen(Enum.map(~w(a b c), &plane(&1, direct_point(6), 2000)))
+    passes = seen(Enum.map(~w(a b c), &plane(&1, direct_point(2), 600)), passes, @now + 120)
+    refute Approach.route(passes, @now + 241) == :direct_approach
+  end
+
+  test "wrong-way tracks, fast transits, stale positions and parallel JFK traffic are not direct" do
+    for opts <- [[track: 212], [gs: 260], [pos_age: 30], [east: 0.12]] do
+      refute Approach.route(direct_fleet(opts), @now + 241) == :direct_approach
+    end
+  end
+
+  test "direct evidence never hides meaningful low or high overhead traffic" do
+    direct = direct_fleet()
+    for {alt, route} <- [{1500, :low_approach}, {3600, :high_approach}] do
+      overhead = landed_via(~w(a b c), @over_home, alt)
+      assert Approach.route(Map.merge(direct, overhead), @now + 241) == route
+    end
+    # The same aircraft later actually comes over home: classify its real pass.
+    over = Enum.map(~w(d1 d2 d3), &plane(&1, @over_home, 1500))
+    passes = seen(over, direct, @now + 150)
+    assert Approach.route(passes, @now + 271) == :low_approach
+  end
+
   describe "overhead_band/1" do
     test "band edges" do
       assert Approach.overhead_band(999) == :rotor

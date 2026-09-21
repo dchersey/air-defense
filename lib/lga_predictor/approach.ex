@@ -21,6 +21,8 @@ defmodule LgaPredictor.Approach do
     `:high_approach`  arrivals pass within `@near_home_nm` at 3000-6000 ft — the long
                       loop out to the north-east before turning back in, gear still up,
                       a steady ~3600 ft. Audible only with the windows open.
+    `:direct_approach` observed straight-in southwest corridor through Brooklyn/Queens,
+                      distinct from the near-home loop despite passing within 3 nm.
     `:river_approach` the field is landing and none of it comes near. Quiet — and the
                       reason the flight list is empty. The label is the listener's name
                       for it; strictly it means "whatever they are flying avoids you".
@@ -178,7 +180,8 @@ defmodule LgaPredictor.Approach do
             closest_alt: if(nearer?, do: ac.alt_ft, else: prior.closest_alt),
             last_nm: d,
             bound: prior.bound or bound_here?(ac, airport),
-            last_seen: now
+            last_seen: now,
+            direct: track_direct(Map.get(prior, :direct), ac, airport, now)
           })
       end
     end)
@@ -190,13 +193,14 @@ defmodule LgaPredictor.Approach do
   noisiest routing with at least `@min_landings` recent arrivals on it, or nil when too
   few to say.
   """
-  @spec route(%{String.t() => pass()}, integer()) :: :low_approach | :high_approach | :river_approach | nil
+  @spec route(%{String.t() => pass()}, integer()) :: :low_approach | :high_approach | :river_approach | :direct_approach | nil
   def route(passes, now) when is_map(passes) and is_integer(now) do
     votes =
       for {_k, %{bound: true} = p} <- passes, passed?(p, now), v = vote(p), v != nil, do: v
     low = Enum.count(votes, &(&1 == :low_approach))
     high = Enum.count(votes, &(&1 == :high_approach))
     river = Enum.count(votes, &(&1 == :river_approach))
+    direct = Enum.count(votes, &(&1 == :direct_approach))
 
     # Every route earns its own threshold. River was once the fallback whenever neither
     # noisy route reached three votes, which made it the DEFAULT at low traffic: two
@@ -207,6 +211,7 @@ defmodule LgaPredictor.Approach do
     cond do
       low >= @min_landings -> :low_approach
       high >= @min_landings -> :high_approach
+      direct >= @min_landings and low + high <= @river_max_strays -> :direct_approach
       river >= @min_landings and low + high <= @river_max_strays -> :river_approach
       true -> nil
     end
@@ -224,12 +229,50 @@ defmodule LgaPredictor.Approach do
   # arrival (rotorcraft floor, or an altitude the feed omitted), in which case it abstains
   # rather than being counted as evidence of the quiet routing.
   defp vote(%{closest_nm: d}) when is_nil(d), do: nil
+  # Positive corridor evidence takes precedence over the broad 3 nm noise proxy.
+  # A real close pass still counts as overhead, even if the aircraft joined direct.
+  defp vote(%{closest_nm: d, direct: %{first_at: first, last_at: last,
+              first_nm: start, last_nm: finish}} = pass)
+       when d > 1.0 and last - first >= 20 and start - finish >= 0.8 do
+    if d <= @near_home_nm and overhead_band(pass.closest_alt) == :high_approach,
+      do: :high_approach, else: :direct_approach
+  end
+
   defp vote(%{closest_nm: d}) when d > @near_home_nm, do: :river_approach
 
   defp vote(%{closest_alt: alt}) do
     case overhead_band(alt) do
       band when band in [:low_approach, :high_approach] -> band
       _ -> nil
+    end
+  end
+
+  # Personal LGA calibration, in TRUE degrees from observed receiver tracks.
+  # Require progress along the southwest extended final, well before the last
+  # four miles: seeing the shared final alone cannot distinguish the approach.
+  # Two separated observations prevent a single crossing from becoming a route.
+  @direct_track_deg 32.0
+  defp track_direct(prior, ac, {alat, alon}, now) do
+    north = (alat - ac.lat) * 60.0
+    east = (alon - ac.lon) * 60.0 * :math.cos(rad(alat))
+    heading = rad(@direct_track_deg)
+    along = north * :math.cos(heading) + east * :math.sin(heading)
+    across = abs(east * :math.cos(heading) - north * :math.sin(heading))
+
+    matches = along >= 4.0 and along <= 12.0 and across <= 0.65 and
+      is_number(ac.track_deg) and angular_distance(ac.track_deg, @direct_track_deg) <= 15 and
+      is_number(ac.gspeed_kt) and ac.gspeed_kt >= 100 and ac.gspeed_kt <= 220 and
+      ac.alt_ft <= 4000
+
+    if matches do
+      case prior do
+        %{last_at: last} when now - last <= 90 ->
+          %{prior | last_at: now, last_nm: along}
+        _ ->
+          %{first_at: now, last_at: now, first_nm: along, last_nm: along}
+      end
+    else
+      prior
     end
   end
 

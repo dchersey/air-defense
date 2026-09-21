@@ -49,6 +49,17 @@ defmodule LgaPredictor.RouteHistoryTest do
     assert RouteHistory.snapshot(190).classified_seconds == 60
   end
 
+  test "direct route contributes to duration shares and survives restart", %{path: path} do
+    RouteHistory.observe(:direct_approach, 100)
+    RouteHistory.observe(:direct_approach, 130)
+    assert RouteHistory.snapshot(130).classified_seconds == 30
+    stop_supervised!(RouteHistory)
+    start_supervised!({RouteHistory, path: path})
+    data = RouteHistory.snapshot(130)
+    assert [%{route: "direct_approach", start_at: 100, end_at: 130}] = data.intervals
+    assert %{seconds: 30, percent: 100.0} = Enum.find(data.shares, &(&1.route == "direct_approach"))
+  end
+
   test "clips intervals to exact rolling 30-day boundary and retains no older data" do
     RouteHistory.observe(:low_approach, 100)
     RouteHistory.observe(:low_approach, 160)
