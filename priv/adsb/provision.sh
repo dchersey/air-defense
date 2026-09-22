@@ -178,13 +178,47 @@ notify() {
        --form-string "title=$1" --form-string "message=$2" --form-string "priority=${3:-0}" \
        https://api.pushover.net/1/messages.json >/dev/null
 }
+# A one-shot re-check shortly after a state change, so a transient clears (or is
+# confirmed) in minutes rather than at the next quarter-hour tick. Unique unit name:
+# overlapping rechecks are harmless one-shots, not a conflict.
+recheck() {
+  systemd-run --quiet --on-active="$1" --timer-property=AccuracySec=5s \
+    --unit="adsb-health-recheck-$(date +%s%N)" /usr/local/bin/adsb-health >/dev/null 2>&1 || true
+}
+
+# What readsb has been doing, for a resolve or blip message: when it last started and
+# how many times systemd has restarted it since boot. A wedged SDR makes readsb exit
+# and Restart=always brings it back 15 s later — that is usually the whole story.
+readsb_context() {
+  local started n
+  started=$(systemctl show readsb -p ExecMainStartTimestamp --value 2>/dev/null | awk '{print $3}')
+  n=$(systemctl show readsb -p NRestarts --value 2>/dev/null)
+  printf 'readsb last started %s (systemd restart #%s since boot).' "${started:-?}" "${n:-?}"
+}
+
+# State-change notifier. On the way DOWN it remembers the title and the time, so the
+# resolution can name what it resolves and how long it lasted — the old resolve was a
+# hard-coded title (wrong for the "unreachable" variant) and "Back to normal." with no
+# context. A bad edge also schedules a 2-minute re-check. $4 on an ok edge is extra
+# context appended to the resolution.
 edge() {
-  local key=$1 now=$2 was
+  local key=$1 now=$2 title=$3 was
   was=$(cat "$STATE/$key" 2>/dev/null || echo ok)
   printf '%s' "$now" > "$STATE/$key"
   [ "$now" = "$was" ] && return
-  if [ "$now" = bad ]; then notify "$3" "$4" "${5:-0}"
-  else notify "RESOLVED: $3" "Back to normal." 0; fi
+  if [ "$now" = bad ]; then
+    printf '%s' "$title" > "$STATE/$key.title"
+    date +%s > "$STATE/$key.since"
+    notify "$title" "$4" "${5:-0}"
+    recheck 2min
+  else
+    local alerted since after
+    alerted=$(cat "$STATE/$key.title" 2>/dev/null || echo "$title")
+    since=$(cat "$STATE/$key.since" 2>/dev/null || echo 0)
+    if [ "$since" -gt 0 ]; then after=" after ~$(( ($(date +%s) - since) / 60 )) min"; else after=""; fi
+    notify "RESOLVED: $alerted" "Back to normal${after}. ${4:-}" 0
+    rm -f "$STATE/$key.title" "$STATE/$key.since"
+  fi
 }
 
 case "${1:-}" in
@@ -218,9 +252,21 @@ PREV=$(cat "$STATE/messages" 2>/dev/null || echo "")
 # cure is a restart, so try that ONCE before paging a human. Counting MSG==0 as frozen
 # matters here: readsb zeroes its counter on restart, so a plain "changed since last
 # time" test would read a still-deaf receiver as healthy on the very next check.
+STRIKE=$STATE/deaf-strike
 if [ -z "$MSG" ]; then
-  edge deaf bad "ADS-B: decoder unreachable" "readsb/tar1090 not answering on localhost. Service state: $(systemctl is-active readsb)." 1
+  # aircraft.json not served, or not JSON. readsb exits on a wedged SDR and systemd
+  # restarts it 15 s later, so a single miss is far more often that window than an
+  # outage — on 2026-09-22 this paged at priority 1 for a hiccup that healed itself in
+  # 15 seconds. First miss: note it, re-check in a minute, say nothing. Second: page.
+  logger -t adsb-health "aircraft.json unavailable (readsb $(systemctl is-active readsb))"
+  if [ ! -f "$STRIKE" ]; then
+    date +%s > "$STRIKE"
+    recheck 60s
+  else
+    edge deaf bad "ADS-B: decoder unreachable" "readsb/tar1090 not answering on localhost for over a minute. Service state: $(systemctl is-active readsb)." 1
+  fi
 elif [ "$MSG" = "0" ] || { [ -n "$PREV" ] && [ "$MSG" = "$PREV" ]; }; then
+  rm -f "$STRIKE"
   LAST=$(cat "$STATE/deaf-restart" 2>/dev/null || echo 0)
   NOW=$(date +%s)
   if [ $((NOW - LAST)) -gt 1800 ]; then
@@ -234,7 +280,17 @@ elif [ "$MSG" = "0" ] || { [ -n "$PREV" ] && [ "$MSG" = "$PREV" ]; }; then
   else
     edge deaf bad "ADS-B: receiver is DEAF" "readsb decoded 0 new messages AND a restart in the last 30 min did not fix it. Check the SDR dongle, its USB cable, and the antenna." 1
   fi
-else edge deaf ok "ADS-B: receiver is DEAF"; fi
+else
+  # Healthy. A strike that never became a page is a transient that healed itself —
+  # worth one low-priority line, because repeats mean a failing cable or connector.
+  if [ -f "$STRIKE" ]; then
+    SECS=$(( $(date +%s) - $(cat "$STRIKE") ))
+    rm -f "$STRIKE"
+    [ "$(cat "$STATE/deaf" 2>/dev/null)" = bad ] || notify "ADS-B: decoder blipped — self-healed" \
+      "Unreachable for ~${SECS}s, then back without help. $(readsb_context) No action needed; repeats here mean a failing cable or connector." -1
+  fi
+  edge deaf ok "ADS-B: receiver deaf/unreachable" "$(readsb_context)"
+fi
 
 ## Automatic patching silently stopped.
 if systemctl is-failed --quiet unattended-upgrades.service || systemctl is-failed --quiet apt-daily-upgrade.service; then
