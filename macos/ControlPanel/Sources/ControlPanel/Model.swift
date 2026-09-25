@@ -193,10 +193,8 @@ final class StatusModel {
   // and they can take the headphones off). Re-alerts every 10 min while still quiet.
   @ObservationIgnored private var activeSince: Date?
   @ObservationIgnored private var lastQuietAlertAt: Date?
-  // Last moment a flight was being tracked (inbound/amber or overhead/red). Folded
-  // into the quiet-window reference so the all-clear never fires over an active
-  // target and the clock restarts once it clears — even for a near-miss that tracks
-  // through without engaging (so never lands in `recent`).
+  // Last confirmed overhead activity. An inbound prediction defers playback but
+  // must not restart the quiet clock if it never actually engages ANC.
   @ObservationIgnored private var lastActivityAt: Date?
   @ObservationIgnored private var alertPlayer: AVAudioPlayer?
   private let quietGap: TimeInterval = 600
@@ -350,42 +348,38 @@ final class StatusModel {
   // silence, measured from the later of session start or the last detection. So both
   // "busy, then quiet" AND "activated a monitor but nothing showed" alert the user.
   private func evaluateQuietAlert() {
+    if quietAlertDue(at: Date(), enabled: quietAlertEnabled) { playQuietAlert() }
+  }
+
+  // Separate the clock decision from audio playback for deterministic regression tests.
+  func quietAlertDue(at now: Date, enabled: Bool) -> Bool {
     guard active else {
       activeSince = nil
       lastQuietAlertAt = nil
       lastActivityAt = nil
-      return
+      return false
     }
-    if activeSince == nil { activeSince = Date() }
-    guard let start = activeSince, headphonesConnected, quietAlertEnabled else { return }
+    if activeSince == nil { activeSince = now }
+    guard let start = activeSince, reachable, feedOk, headphonesConnected, enabled else { return false }
 
-    // A flight currently inbound (amber/armed) or overhead (red/engaged) is activity:
-    // never sound the all-clear over it, and stamp the moment so the quiet clock
-    // restarts once it clears (covers near-misses that track through but never engage,
-    // so never appear in `recent`).
-    if phase == .pending || phase == .engaged {
-      lastActivityAt = Date()
-      return
+    if phase == .engaged {
+      lastActivityAt = now
+      return false
     }
+    // A possible inbound plane is not proof of overhead activity. Wait until it
+    // clears, but retain elapsed quiet time when it turns away or misses the zone.
+    if phase == .pending { return false }
 
-    // Quiet window runs from the most recent of: session start, last alert, the last
-    // detection this session, or the last time a flight was being tracked (stale
-    // flights from before `start` are ignored).
     var reference = max(start, lastQuietAlertAt ?? .distantPast)
     if let lastFlight = recent.first.map({ Date(timeIntervalSince1970: TimeInterval($0.at)) }),
       lastFlight > reference {
       reference = lastFlight
     }
     if let activity = lastActivityAt, activity > reference { reference = activity }
-
-    // Measure the gap in MONITORED time only — subtract any headphones-off spans
-    // since the reference, so a long pause doesn't make us fire the instant the buds
-    // come back on.
-    let monitored = Date().timeIntervalSince(reference) - pausedSeconds(since: reference)
-    if monitored >= quietGap {
-      playQuietAlert()
-      lastQuietAlertAt = Date()
-    }
+    let monitored = now.timeIntervalSince(reference) - pausedSeconds(since: reference, now: now)
+    guard monitored >= quietGap else { return false }
+    lastQuietAlertAt = now
+    return true
   }
 
   // Record headphones-off spans (only while a session is active) and prune to the
@@ -406,8 +400,7 @@ final class StatusModel {
   }
 
   // Total headphones-off time after `ref` (completed spans + any open pause to now).
-  private func pausedSeconds(since ref: Date) -> TimeInterval {
-    let now = Date()
+  private func pausedSeconds(since ref: Date, now: Date) -> TimeInterval {
     var total: TimeInterval = 0
     for iv in pauseIntervals {
       let lo = max(iv.start, ref)

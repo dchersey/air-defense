@@ -277,6 +277,14 @@ app is Developer ID-signed, notarized, stapled, and accepted by Gatekeeper.
 
 ## Using it
 
+Quiet-period announcements require ten minutes of monitored time without a confirmed
+overflight. Inbound predictions defer playback while tracked, but near-misses do not
+restart the timer. Actual ANC engagement resets it. Headphone disconnections and
+feed outages do not count toward monitored quiet time. A route change can take longer
+to confirm: the classifier requires three completed tracks and retains votes for
+20 minutes, so a transition may briefly show “route undetermined”.
+
+
 **Route history** opens a seven-column lookback: today and the preceding six local
 calendar days, with time of day running down each column. Amber marks low approaches,
 blue/teal high approaches, green river approaches, and purple direct approaches.
