@@ -65,6 +65,15 @@ enum AncPhase {
   case offline, idle, pending, engaged, disconnected
 }
 
+struct RouteEvidence: Codable {
+  let riverCandidates: Int
+  let riverConfirmed: Int
+  let riverLost: Int
+  var summary: String {
+    "Recent river tracks: \(riverConfirmed) confirmed by a turn toward LGA and descent; \(riverCandidates) inferred, including \(riverLost) no longer received before confirmation."
+  }
+}
+
 struct StatusResponse: Codable {
   let active: Bool
   let mode: String
@@ -88,6 +97,7 @@ struct StatusResponse: Codable {
   // when it began, and when the classifier last polled. A state, shown as a banner —
   // it is the answer to "why is the list quiet". All nil on a metered provider.
   let route: String?
+  let routeEvidence: RouteEvidence?
   let routeSince: Int?
   let routePolledAt: Int?
   let billingResetDay: Int
@@ -157,6 +167,7 @@ final class StatusModel {
   var receiverOk: Bool?
   // Arrival route banner (nil = not yet determined, or a metered provider).
   var route: String?
+  var routeEvidence: RouteEvidence?
   var routeSince: Int?
   var routePolledAt: Int?
   // Day-of-month the FR24 allotment resets (billing anniversary; 1 = calendar month).
@@ -282,6 +293,7 @@ final class StatusModel {
       creditMode = status.creditMode ?? "monthly"
       ambient = status.ambient ?? false
       receiverOk = status.receiverOk
+      routeEvidence = status.routeEvidence
       route = status.route
       routeSince = status.routeSince
       routePolledAt = status.routePolledAt

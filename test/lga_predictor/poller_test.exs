@@ -387,7 +387,7 @@ defmodule LgaPredictor.PollerTest do
     :sys.replace_state(Poller, fn state -> %{state | approach_passes: %{}} end)
     Agent.update(feed, fn _ -> [] end)
     send(Poller, :approach)
-    assert route() == nil
+    assert route() == "high approach", "a fresh empty poll preserves recent established evidence"
     assert Poller.status().route_polled_at != nil
   end
 

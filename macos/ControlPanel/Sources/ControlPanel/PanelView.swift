@@ -909,9 +909,9 @@ private struct ActivityStrip: View {
     if model.routePolledAt != nil || model.route != nil {
       HStack(spacing: 6) {
         Image(systemName: "arrow.triangle.turn.up.right.diamond")
-          .font(.adMono).foregroundStyle(model.route == nil ? Palette.ink3 : Palette.inbound)
+          .font(.adMono).foregroundStyle((model.route == nil || model.route == "no route detected") ? Palette.ink3 : Palette.inbound)
         Text(model.route ?? "route undetermined")
-          .font(.adMono).foregroundStyle(model.route == nil ? Palette.ink3 : Palette.ink)
+          .font(.adMono).foregroundStyle((model.route == nil || model.route == "no route detected") ? Palette.ink3 : Palette.ink)
           .lineLimit(1)
         if let since = model.routeSince {
           Text("since \(clock(since))").font(.adMono).monospacedDigit().foregroundStyle(Palette.ink3)
@@ -922,6 +922,7 @@ private struct ActivityStrip: View {
         }
       }
       .padding(.vertical, 2)
+      .help(model.routeEvidence?.summary ?? "Waiting for arrival route evidence")
     }
   }
 

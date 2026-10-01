@@ -3,12 +3,14 @@ defmodule LgaPredictor.RouteHistory do
   Durable classified-route intervals, independent of ANC sessions. Only adjacent
   observations (at most 90 seconds apart) establish coverage. Restarts, outages,
   and undetermined classifications leave gaps rather than extending an old route.
-  Percentages describe classified time, not aircraft counts.
+  Observed no-route intervals are stored separately and excluded from route shares.
+  Percentages describe classified route time, not aircraft counts.
   """
   use GenServer
   require Logger
 
   @routes ~w(low_approach high_approach river_approach direct_approach)
+  @states @routes ++ ["no_route_detected"]
   @window 30 * 86_400
   defp default_path do
     Path.join([
@@ -36,7 +38,7 @@ defmodule LgaPredictor.RouteHistory do
   @impl true
   def handle_cast({:observe, route, at}, state) do
     route = if route, do: to_string(route)
-    route = if route in @routes, do: route
+    route = if route in @states, do: route
 
     spans =
       case state.previous do
@@ -58,7 +60,8 @@ defmodule LgaPredictor.RouteHistory do
 
     totals =
       Enum.reduce(spans, Map.new(@routes, &{&1, 0}), fn span, acc ->
-        Map.update!(acc, span.route, &(&1 + span.end_at - span.start_at))
+        if span.route in @routes,
+          do: Map.update!(acc, span.route, &(&1 + span.end_at - span.start_at)), else: acc
       end)
 
     covered = totals |> Map.values() |> Enum.sum()
@@ -106,7 +109,7 @@ defmodule LgaPredictor.RouteHistory do
       intervals
       |> Enum.flat_map(fn
         %{"route" => r, "start_at" => s, "end_at" => e}
-        when r in @routes and is_integer(s) and is_integer(e) and e > s ->
+        when r in @states and is_integer(s) and is_integer(e) and e > s ->
           [%{route: r, start_at: s, end_at: e}]
 
         _ ->

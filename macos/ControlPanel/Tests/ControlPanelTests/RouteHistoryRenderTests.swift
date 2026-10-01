@@ -8,7 +8,7 @@ struct RouteHistoryRenderTests {
     let model = StatusModel(startMonitoring: false)
     model.reachable = true
     let now = Date()
-    let routes = ["low_approach", "high_approach", "river_approach", "direct_approach"]
+    let routes = ["low_approach", "high_approach", "river_approach", "direct_approach", "no_route_detected"]
     let days = RouteTimeline.days(now: now)
     var spans: [RouteInterval] = []
     for (index, day) in days.enumerated() {
@@ -25,8 +25,8 @@ struct RouteHistoryRenderTests {
     let seconds = routes.map { route in
       spans.filter { $0.route == route }.reduce(0) { $0 + $1.endAt - $1.startAt }
     }
-    let total = seconds.reduce(0, +)
-    let shares = routes.enumerated().map { i, route in
+    let total = zip(routes, seconds).filter { $0.0 != "no_route_detected" }.reduce(0) { $0 + $1.1 }
+    let shares = routes.enumerated().filter { $0.element != "no_route_detected" }.map { i, route in
       RouteShare(route: route, seconds: seconds[i], percent: Double(seconds[i]) * 100 / Double(total))
     }
     let data = RouteHistoryResponse(asOf: Int(now.timeIntervalSince1970),

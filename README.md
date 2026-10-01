@@ -287,7 +287,7 @@ to confirm: the classifier requires three completed tracks and retains votes for
 
 **Route history** opens a seven-column lookback: today and the preceding six local
 calendar days, with time of day running down each column. Amber marks low approaches,
-blue/teal high approaches, green river approaches, and purple direct approaches.
+blue/teal high approaches, green river approaches, and purple direct approaches. Gray marks observed periods with no route detected.
 Hover a block for its route and time range. The bottom bar shows each route's percentage of **classified time over the
 last 30 days**, with recorded hours and coverage alongside it; these are not percentages
 of aircraft. Classification reports the noisiest route in meaningful use, so this is a
@@ -299,9 +299,22 @@ by the route classifier. The direct category identifies repeated, progressing
 observations along the southwest straight-in corridor through Brooklyn and Queens;
 it is distinct from the low loop even where it passes inside the broad three-mile
 near-home radius. At least three completed aircraft tracks are needed. This is a
-local geometric inference, not an official approach clearance. If evidence is
-insufficient or the classifier has not refreshed for 90 seconds, the banner shows
-“route undetermined” instead of presenting a saved route as current. Historical
+local geometric inference, not an official approach clearance. Hudson river traffic
+can establish arrival evidence through sustained northbound progress even when it
+levels above the inner-airport altitude gate before making a long northern loop.
+The same aircraft is followed afterward: a turn toward LGA plus a descent confirms
+the inference. Hover the route banner for confirmed, inferred, and lost-before-confirmation
+track counts. Losing reception alone never confirms that an aircraft turned or landed.
+Once established, a route carries across short gaps for up to 20 minutes from the
+last corroborating aircraft, provided observations continue and no newer conflicting
+route evidence appears. Old votes do not renew that clock by themselves.
+
+After 20 minutes of uninterrupted healthy observation without a qualifying arrival,
+the banner and gray history blocks say “no route detected”. This describes receiver
+evidence, not proof that LGA has no traffic. Gray time is excluded from the four route
+percentages. Ambiguous evidence remains “route undetermined”; feed outages remain
+blank and cannot establish a quiet period. A classifier refresh older than 90 seconds
+also hides the route. Historical
 classifications are not rewritten when detection improves. Classification is specific
 to my apartment and LaGuardia; the chart records those local classifications. Blank
 time is unclassified or unobserved, including

@@ -20,7 +20,7 @@ struct RouteHistoryView: View {
         Text("Arrival routes · time of day")
           .font(.adMono).foregroundStyle(Palette.ink2)
         chart(now: context.date)
-        Text(hovered ?? "Local time · blank = unclassified or unobserved")
+        Text(hovered ?? "Gray = no route detected · blank = unknown")
           .font(.adMono).foregroundStyle(Palette.ink2)
           .frame(height: 30, alignment: .topLeading)
         Divider().overlay(Palette.hairline)
@@ -28,7 +28,7 @@ struct RouteHistoryView: View {
         if model.routeHistoryError || !model.reachable {
           Text("History unavailable · showing last saved view")
             .font(.adMono).foregroundStyle(Palette.inbound)
-        } else if let data = model.routeHistory, data.classifiedSeconds == 0 {
+        } else if let data = model.routeHistory, data.classifiedSeconds == 0, data.intervals.isEmpty {
           Text("History starts as routes are classified. Earlier days will stay blank.")
             .font(.adMono).foregroundStyle(Palette.ink2)
         } else if model.routeHistory == nil {
@@ -154,6 +154,7 @@ struct RouteHistoryView: View {
     switch route {
     case "low_approach": return Palette.inbound
     case "high_approach": return Palette.accent
+    case "no_route_detected": return Palette.ink3
     case "direct_approach": return Color.purple
     default: return Palette.go
     }
@@ -163,6 +164,7 @@ struct RouteHistoryView: View {
     switch route {
     case "low_approach": return "Low"
     case "high_approach": return "High"
+    case "no_route_detected": return "No route detected"
     case "direct_approach": return "Direct"
     default: return "River"
     }

@@ -386,6 +386,48 @@ defmodule LgaPredictor.ApproachTest do
     assert Approach.route(passes, @now + 271) == :low_approach
   end
 
+  test "level Hudson airliners earn river votes through sustained northward progress" do
+    fleet = fn point, opts -> Enum.map(~w(r1 r2 r3), &plane(&1, point, 3850, 0, opts)) end
+    first = fleet.({40.71, -74.023}, gs: 270) |> Enum.map(&%{&1 | track_deg: 7})
+    second = fleet.({40.76, -74.01}, gs: 270) |> Enum.map(&%{&1 | track_deg: 25})
+    passes = seen(first)
+    refute Enum.any?(passes, fn {_, p} -> p.bound end)
+    passes = seen(second, passes, @now + 40)
+    assert Enum.all?(passes, fn {_, p} -> p.bound end)
+    assert Approach.route(passes, @now + 161) == :river_approach
+  end
+
+  test "Hudson evidence rejects stale, climbing, wrong-way and slow non-airliner tracks" do
+    for {type, speed, climb, heading, age} <- [
+      {"B06", 90, 0, 7, 0}, {"A320", 270, 1500, 7, 0},
+      {"A320", 270, 0, 187, 0}, {"A320", 270, 0, 7, 30}
+    ] do
+      make = fn point -> %{plane("r", point, 3850, climb, type: type, gs: speed, pos_age: age) | track_deg: heading} end
+      p = seen([make.({40.71, -74.023})])
+      p = seen([make.({40.76, -74.01})], p, @now + 40)
+      refute Enum.any?(p, fn {_, pass} -> pass.bound end)
+    end
+  end
+
+  test "follows a river aircraft around the long loop and confirms its turn and descent" do
+    first = %{plane("river", {40.71, -74.023}, 3850, 0, gs: 270) | track_deg: 7}
+    second = %{first | lat: 40.76, lon: -74.01, track_deg: 25}
+    passes = seen([first]) |> then(&seen([second], &1, @now + 40))
+    assert %{river_candidates: 1, river_confirmed: 0, river_lost: 1} = Approach.evidence(passes, @now + 200)
+    # Nine minutes later, same aircraft northeast of LGA on a descending return leg.
+    final = %{first | lat: 40.90, lon: -73.80, alt_ft: 2800, track_deg: 210, vspeed_fpm: -700}
+    confirmed = seen([final], passes, @now + 600)
+    assert %{river_candidates: 0, river_confirmed: 1, river_lost: 0} = Approach.evidence(confirmed, @now + 600)
+    # A different ICAO aircraft on final cannot confirm the missing one.
+    other = seen([%{final | hex: "other"}], passes, @now + 600)
+    assert %{river_confirmed: 0} = Approach.evidence(other, @now + 600)
+    # Neither level flight nor a stale position proves the descent.
+    for ac <- [%{final | vspeed_fpm: 0}, %{final | pos_age_s: 60}] do
+      state = seen([ac], passes, @now + 600)
+      assert %{river_confirmed: 0} = Approach.evidence(state, @now + 600)
+    end
+  end
+
   describe "overhead_band/1" do
     test "band edges" do
       assert Approach.overhead_band(999) == :rotor

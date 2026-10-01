@@ -242,6 +242,7 @@ defmodule LgaPredictor.API.Router do
       receiver_ok: Map.get(status, :receiver_ok),
       # Arrival route banner: the route in use, since when, and the classifier's last poll.
       route: Map.get(status, :route),
+      route_evidence: Map.get(status, :route_evidence),
       route_since: Map.get(status, :route_since),
       route_polled_at: Map.get(status, :route_polled_at),
       approx_credits: status.approx_credits,

@@ -173,14 +173,16 @@ defmodule LgaPredictor.Approach do
           prior =
             Map.get(acc, key, %{closest_nm: nil, closest_alt: nil, last_nm: nil, bound: false, last_seen: now})
 
+          river = track_river(Map.get(prior, :river), ac, now) |> confirm_river(ac, airport)
           nearer? = is_nil(prior.closest_nm) or d < prior.closest_nm
 
           Map.put(acc, key, %{
             closest_nm: if(nearer?, do: d, else: prior.closest_nm),
             closest_alt: if(nearer?, do: ac.alt_ft, else: prior.closest_alt),
             last_nm: d,
-            bound: prior.bound or bound_here?(ac, airport),
+            bound: prior.bound or bound_here?(ac, airport) or river_progress?(river),
             last_seen: now,
+            river: river,
             direct: track_direct(Map.get(prior, :direct), ac, airport, now)
           })
       end
@@ -195,8 +197,7 @@ defmodule LgaPredictor.Approach do
   """
   @spec route(%{String.t() => pass()}, integer()) :: :low_approach | :high_approach | :river_approach | :direct_approach | nil
   def route(passes, now) when is_map(passes) and is_integer(now) do
-    votes =
-      for {_k, %{bound: true} = p} <- passes, passed?(p, now), v = vote(p), v != nil, do: v
+    votes = Enum.map(evidence(passes, now).votes, & &1.route)
     low = Enum.count(votes, &(&1 == :low_approach))
     high = Enum.count(votes, &(&1 == :high_approach))
     river = Enum.count(votes, &(&1 == :river_approach))
@@ -216,6 +217,57 @@ defmodule LgaPredictor.Approach do
       true -> nil
     end
   end
+
+  @doc "Recent completed route votes and most recent detected arrival, for continuity."
+  def evidence(passes, now) do
+    bound = Enum.filter(passes, fn {_, p} -> p.bound and p.last_seen > now - @retention_seconds end)
+    votes = for {hex, p} <- bound, passed?(p, now), route = vote(p), route != nil,
+      do: %{hex: hex, route: route, at: p.last_seen}
+    river = Enum.filter(bound, fn {_, p} -> river_progress?(Map.get(p, :river)) end)
+    confirmed = Enum.count(river, fn {_, p} -> Map.get(p.river, :confirmed, false) end)
+    lost = Enum.count(river, fn {_, p} -> not Map.get(p.river, :confirmed, false) and now - p.last_seen > @gone_seconds end)
+    %{votes: votes, river_candidates: length(river) - confirmed,
+      river_confirmed: confirmed, river_lost: lost, last_arrival_at: bound |> Enum.map(fn {_, p} -> p.last_seen end) |> Enum.max(fn -> nil end)}
+  end
+
+  # Hudson corridor calibration for this apartment/LGA. These airliners often level
+  # at 3,800–4,000 ft and disappear before turning toward LGA, so the generic core /
+  # descending-toward-airport gates miss them. Require sustained northward progress,
+  # not a single position, and retain the normal airliner/freshness/climb filters.
+  defp track_river(prior, ac, now) do
+    centre_lon = if ac.lat < 40.73, do: -74.025, else: -74.025 + (ac.lat - 40.73) * 0.40
+    matches = ac.lat >= 40.65 and ac.lat <= 40.88 and
+      abs(ac.lon - centre_lon) * 60 * :math.cos(rad(ac.lat)) <= 0.65 and
+      ac.alt_ft >= 2500 and ac.alt_ft <= 5000 and
+      is_number(ac.gspeed_kt) and ac.gspeed_kt >= 160 and ac.gspeed_kt <= 320 and
+      is_number(ac.track_deg) and angular_distance(ac.track_deg, 15) <= 30
+
+    if matches do
+      case prior do
+        %{last_at: last} when now - last <= 90 -> %{prior | last_at: now, last_lat: ac.lat}
+        _ -> %{first_at: now, last_at: now, first_lat: ac.lat, last_lat: ac.lat, first_alt: ac.alt_ft, first_track: ac.track_deg, confirmed: false}
+      end
+    else
+      prior
+    end
+  end
+
+  # Keep following the same ICAO identity after it leaves the Hudson corridor.
+  # A fresh return leg must turn toward the field and lose altitude; disappearance
+  # alone is never a turn/descent confirmation. Candidate evidence can still support
+  # an inferred route when this receiver cannot see the far side of the loop.
+  defp confirm_river(nil, _ac, _airport), do: nil
+  defp confirm_river(river, ac, airport) do
+    confirmed = river_progress?(river) and closing_on?(ac, airport) and
+      is_number(ac.track_deg) and angular_distance(ac.track_deg, river.first_track) >= 45 and
+      (ac.vspeed_fpm || 0) < @descent_fpm and ac.alt_ft <= river.first_alt - 300 and
+      distance_nm(ac.lat, ac.lon, elem(airport, 0), elem(airport, 1)) <= @closing_radius_nm
+    Map.put(river, :confirmed, Map.get(river, :confirmed, false) or confirmed)
+  end
+
+  defp river_progress?(%{first_at: a, last_at: b, first_lat: x, last_lat: y}),
+    do: b - a >= 20 and (y - x) * 60 >= 0.8
+  defp river_progress?(_), do: false
 
   # Moving away from home again, or not seen for a while (this antenna loses every
   # arrival before it lands, so "gone" is how a completed pass usually looks).

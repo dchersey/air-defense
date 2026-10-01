@@ -60,6 +60,18 @@ defmodule LgaPredictor.RouteHistoryTest do
     assert %{seconds: 30, percent: 100.0} = Enum.find(data.shares, &(&1.route == "direct_approach"))
   end
 
+  test "observed no-route intervals persist but do not dilute classified route shares", %{path: path} do
+    RouteHistory.observe(:river_approach, 100)
+    RouteHistory.observe(:no_route_detected, 130)
+    RouteHistory.observe(:no_route_detected, 160)
+    data = RouteHistory.snapshot(160)
+    assert data.classified_seconds == 30
+    assert Enum.find(data.shares, &(&1.route == "river_approach")).percent == 100.0
+    stop_supervised!(RouteHistory)
+    start_supervised!({RouteHistory, path: path})
+    assert List.last(RouteHistory.snapshot(160).intervals).route == "no_route_detected"
+  end
+
   test "clips intervals to exact rolling 30-day boundary and retains no older data" do
     RouteHistory.observe(:low_approach, 100)
     RouteHistory.observe(:low_approach, 160)
