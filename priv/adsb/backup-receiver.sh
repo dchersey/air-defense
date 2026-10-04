@@ -39,6 +39,11 @@ for f in /usr/local/share/airplanes/airplanes-uuid \
          /etc/systemd/system/adsb-netwatch.timer \
          /usr/local/bin/adsb-netwatch \
          /etc/systemd/journald.conf.d/50-persistent.conf \
+         /usr/local/bin/adsb-pending \
+         /etc/update-motd.d/95-air-defense \
+         /etc/systemd/system/adsb-pending.service \
+         /etc/systemd/system/adsb-pending.timer \
+         /etc/apt/apt.conf.d/53air-defense-pending \
          /etc/needrestart/conf.d/50-local.conf \
          /etc/ssh/sshd_config.d/99-hardening.conf \
          /etc/lighttpd/lighttpd.conf; do

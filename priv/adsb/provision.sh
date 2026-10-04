@@ -506,6 +506,74 @@ if [ -r /etc/adsb-health.conf ] && ! grep -q '^EXPECTED_GATEWAY=' /etc/adsb-heal
   else warn "no default route — wrong-network detection stays off until EXPECTED_GATEWAY is set"; fi
 fi
 
+# --- Login banner: what needs a human ---------------------------------------------
+# The Pushover digest says "updates pending"; this says the same thing, with the exact
+# commands, at the moment you log in to act on it. The slow part (an apt simulation)
+# is cached by adsb-pending so login stays instant.
+cat > /usr/local/bin/adsb-pending <<'PENDING'
+#!/bin/bash
+# Work out what this box needs a human for, and cache it for the login banner.
+#
+# The banner itself (/etc/update-motd.d/95-air-defense) only prints this file: pam_motd
+# runs its scripts synchronously at login, and an apt simulation takes several seconds
+# on a 3B+. So the slow part runs here — hourly, at boot, and after every apt run — and
+# login stays instant. Prints nothing when nothing is needed.
+set -uo pipefail
+OUT=${ADSB_PENDING_OUT:-/var/lib/adsb-health/motd}
+mkdir -p "$(dirname "$OUT")"
+TMP=$(mktemp "$OUT.XXXXXX")
+
+# Raspberry Pi Foundation packages are excluded from unattended upgrades on purpose
+# (kernel/firmware want a deliberate run), so they are what accumulates.
+SIM=$(apt-get -s -o Debug::NoLocking=true dist-upgrade 2>/dev/null | grep '^Inst ' || true)
+N=$(printf '%s' "$SIM" | grep -c . || true)
+NRPI=$(printf '%s' "$SIM" | grep -c 'Raspberry Pi Foundation' || true)
+KERNEL=$(printf '%s\n' "$SIM" | awk '/^Inst linux-image-rpi/{print $2; exit}')
+
+# Reboot needed: the Debian flag file, or needrestart seeing a newer installed kernel
+# (KSTA 2/3) — Pi OS kernel packages do not always drop the flag file.
+REBOOT=""
+[ -f /run/reboot-required ] && REBOOT="flagged by a package"
+NR=$(/usr/sbin/needrestart -b 2>/dev/null || true)
+KSTA=$(printf '%s\n' "$NR" | awk -F': ' '/^NEEDRESTART-KSTA/{print $2}')
+if [ "${KSTA:-1}" -gt 1 ] 2>/dev/null; then
+  REBOOT="running kernel $(printf '%s\n' "$NR" | awk -F': ' '/^NEEDRESTART-KCUR/{print $2}'), installed $(printf '%s\n' "$NR" | awk -F': ' '/^NEEDRESTART-KEXP/{print $2}')"
+fi
+SVC=$(printf '%s\n' "$NR" | grep -c '^NEEDRESTART-SVC' || true)
+
+{
+  if [ "${N:-0}" -gt 0 ] || [ -n "$REBOOT" ] || [ "${SVC:-0}" -gt 0 ]; then
+    echo
+    echo "  -- ADS-B receiver: action needed ----------------------------------"
+    if [ "${N:-0}" -gt 0 ]; then
+      echo "  * $N update(s) pending ($NRPI from the Raspberry Pi repo, which is never auto-installed)${KERNEL:+, incl. $KERNEL}"
+      echo "        sudo apt update && sudo apt full-upgrade"
+    fi
+    if [ -n "$REBOOT" ]; then
+      echo "  * Reboot required ($REBOOT)"
+      echo "        sudo reboot"
+    elif [ "${SVC:-0}" -gt 0 ]; then
+      echo "  * $SVC service(s) running on replaced libraries - a reboot is the clean fix"
+      echo "        sudo reboot"
+    fi
+    echo "  (checked $(date '+%a %H:%M'))"
+    echo
+  fi
+} > "$TMP"
+chmod 644 "$TMP"; mv "$TMP" "$OUT"
+PENDING
+chmod 755 /usr/local/bin/adsb-pending
+printf '#!/bin/sh\n# Air Defense receiver: pending updates / reboot, cached by adsb-pending.\n[ -r /var/lib/adsb-health/motd ] && cat /var/lib/adsb-health/motd\nexit 0\n' > /etc/update-motd.d/95-air-defense
+chmod 755 /etc/update-motd.d/95-air-defense
+printf '[Unit]\nDescription=Refresh the Air Defense login banner (pending updates / reboot)\n[Service]\nType=oneshot\nTimeoutStartSec=300\nExecStart=/usr/local/bin/adsb-pending\n' > /etc/systemd/system/adsb-pending.service
+printf '[Unit]\nDescription=Refresh the Air Defense login banner hourly\n[Timer]\nOnBootSec=2min\nOnUnitActiveSec=1h\nAccuracySec=1min\n[Install]\nWantedBy=timers.target\n' > /etc/systemd/system/adsb-pending.timer
+# Refresh right after any apt run, without holding apt up: the banner should clear the
+# moment the upgrade finishes, not an hour later.
+printf 'DPkg::Post-Invoke { "systemctl start --no-block adsb-pending.service 2>/dev/null || true"; };\nAPT::Update::Post-Invoke-Success { "systemctl start --no-block adsb-pending.service 2>/dev/null || true"; };\n' > /etc/apt/apt.conf.d/53air-defense-pending
+systemctl daemon-reload
+systemctl enable --now adsb-pending.timer >/dev/null 2>&1
+ok "login banner installed (pending updates / reboot)"
+
 systemctl daemon-reload
 systemctl enable --now adsb-health.timer >/dev/null 2>&1 && ok "timer armed (15 min)"
 systemctl enable --now adsb-netwatch.timer >/dev/null 2>&1 && ok "network watchdog armed (2 min)"
