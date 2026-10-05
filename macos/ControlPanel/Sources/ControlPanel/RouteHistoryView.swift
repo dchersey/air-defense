@@ -151,13 +151,7 @@ struct RouteHistoryView: View {
   }
 
   private func color(_ route: String) -> Color {
-    switch route {
-    case "low_approach": return Palette.inbound
-    case "high_approach": return Palette.accent
-    case "no_route_detected": return Palette.ink3
-    case "direct_approach": return Color.purple
-    default: return Palette.go
-    }
+    Palette.route(route)
   }
 
   private func label(_ route: String) -> String {

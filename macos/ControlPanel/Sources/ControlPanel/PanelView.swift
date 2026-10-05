@@ -74,6 +74,17 @@ enum Palette {
   // Text on an accent fill: white on the light blue Start button, dark on cyan.
   static let onAccent = Color.theme(light: 0xFFFFFF, dark: 0x04221E)
 
+  // Shared by the live route indicator, timeline, legend, and monthly shares.
+  static func route(_ name: String?) -> Color {
+    switch name?.replacingOccurrences(of: " ", with: "_") {
+    case "low_approach": return stop
+    case "high_approach": return inbound
+    case "river_approach": return Color.theme(light: 0x3F7CC4, dark: 0x64ACFF)
+    case "direct_approach": return go
+    default: return ink3
+    }
+  }
+
   // Subtle ~168° diagonal so the whole surface reads less flat.
   static let gradient = LinearGradient(
     colors: [panelTop, panelBottom], startPoint: .topLeading, endPoint: .bottomTrailing)
@@ -909,7 +920,7 @@ private struct ActivityStrip: View {
     if model.routePolledAt != nil || model.route != nil {
       HStack(spacing: 6) {
         Image(systemName: "arrow.triangle.turn.up.right.diamond")
-          .font(.adMono).foregroundStyle((model.route == nil || model.route == "no route detected") ? Palette.ink3 : Palette.inbound)
+          .font(.adMono).foregroundStyle(Palette.route(model.route))
         Text(model.route ?? "route undetermined")
           .font(.adMono).foregroundStyle((model.route == nil || model.route == "no route detected") ? Palette.ink3 : Palette.ink)
           .lineLimit(1)
