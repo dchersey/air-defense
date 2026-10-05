@@ -300,6 +300,12 @@ observations along the southwest straight-in corridor through Brooklyn and Queen
 it is distinct from the low loop even where it passes inside the broad three-mile
 near-home radius. At least three completed aircraft tracks are needed. This is a
 local geometric inference, not an official approach clearance. Hudson river traffic
+and high-loop traffic can remain level above the 3,500-foot inner-airport gate.
+The high loop is also recognized from sustained northeast travel near home and LGA
+at 3,000–5,000 feet, with matching heading, speed, and altitude continuity. This
+allows the observed 3,950-foot passes to count without requiring a later descent
+that the receiver may never see. One position alone is insufficient.
+Hudson river traffic
 can establish arrival evidence through sustained northbound progress even when it
 levels above the inner-airport altitude gate before making a long northern loop.
 The same aircraft is followed afterward: a turn toward LGA plus a descent confirms

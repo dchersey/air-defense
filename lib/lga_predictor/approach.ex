@@ -28,8 +28,9 @@ defmodule LgaPredictor.Approach do
                       for it; strictly it means "whatever they are flying avoids you".
 
   A local receiver sees the entire arrival stream, so the stream is what gets measured:
-  every aircraft in the terminal area is followed, and only those that demonstrably LAND
-  at this field get a vote. The route reported is the noisiest one in meaningful use —
+  every aircraft in the terminal area is followed, and only those with evidence of
+  this field's arrival routing get a vote. This is an inference, not proof of landing.
+  The route reported is the noisiest one in meaningful use —
   not a majority. During a high-approach period only some arrivals fly the loop while the
   rest come straight in from the other side; a majority would have called that "river"
   while seven aircraft in thirteen minutes went over the listener at 3600 ft.
@@ -102,11 +103,13 @@ defmodule LgaPredictor.Approach do
   # and simply never reaches it. A gate that waits for the last mile waits forever
   # (it confirmed one landing in thirty-four).
   #
-  # Two things ARE observable and are unambiguously this field's traffic:
+  # These observations support an inference of this field's traffic:
   #   (a) anything under the ceiling inside the terminal core — nothing else flies that
   #       low that close, in any direction, at any speed. The loop leg lives here.
   #   (b) a descent outside the core that is closing on the field. A neighbouring
   #       airport's arrivals descend through this box too, but heading away.
+  #   (c) sustained progress on the personally calibrated river/high-loop tracks
+  #       below, when those routes stay level above the core ceiling.
   @core_radius_nm 4.0
   @core_ceiling_ft 3500
   @closing_radius_nm 10.0
@@ -174,21 +177,55 @@ defmodule LgaPredictor.Approach do
             Map.get(acc, key, %{closest_nm: nil, closest_alt: nil, last_nm: nil, bound: false, last_seen: now})
 
           river = track_river(Map.get(prior, :river), ac, now) |> confirm_river(ac, airport)
+          high = track_high(Map.get(prior, :high), ac, airport, {hlat, hlon}, now)
           nearer? = is_nil(prior.closest_nm) or d < prior.closest_nm
 
           Map.put(acc, key, %{
             closest_nm: if(nearer?, do: d, else: prior.closest_nm),
             closest_alt: if(nearer?, do: ac.alt_ft, else: prior.closest_alt),
             last_nm: d,
-            bound: prior.bound or bound_here?(ac, airport) or river_progress?(river),
+            bound: prior.bound or bound_here?(ac, airport) or river_progress?(river) or high_progress?(high),
             last_seen: now,
             river: river,
+            high: high,
             direct: track_direct(Map.get(prior, :direct), ac, airport, now)
           })
       end
     end)
     |> Map.filter(fn {_k, p} -> p.last_seen > now - @retention_seconds end)
   end
+
+  # The high loop can stay level at 3,950 ft until it leaves receiver coverage.
+  # It never enters the low terminal core or descends toward the airport. Recognise
+  # sustained northeast progress near home instead of raising the core's ceiling
+  # for every direction. Personal calibration: observed 063 true, 263–267 kt.
+  defp track_high(prior, ac, {alat, alon}, {hlat, hlon}, now) do
+    matches = ac.alt_ft >= @final_ceiling_ft and ac.alt_ft <= 5000 and
+      distance_nm(ac.lat, ac.lon, alat, alon) <= @core_radius_nm and
+      distance_nm(ac.lat, ac.lon, hlat, hlon) <= @near_home_nm and
+      is_number(ac.gspeed_kt) and ac.gspeed_kt >= 180 and ac.gspeed_kt <= 320 and
+      is_number(ac.track_deg) and angular_distance(ac.track_deg, 60) <= 25
+
+    if matches do
+      along = (ac.lat - hlat) * 60 * :math.cos(rad(60)) +
+        (ac.lon - hlon) * 60 * :math.cos(rad(hlat)) * :math.sin(rad(60))
+
+      case prior do
+        %{last_at: last, first_alt: alt} when now - last <= 90 and abs(ac.alt_ft - alt) <= 500 ->
+          %{prior | last_at: now, last_nm: along}
+        _ ->
+          %{first_at: now, last_at: now, first_nm: along, last_nm: along, first_alt: ac.alt_ft}
+      end
+    else
+      # A fresh incompatible observation breaks the sequence; a missing poll is
+      # tolerated for at most 90 seconds by the timestamp check above.
+      nil
+    end
+  end
+
+  defp high_progress?(%{first_at: a, last_at: b, first_nm: x, last_nm: y}),
+    do: b - a >= 20 and y - x >= 0.8
+  defp high_progress?(_), do: false
 
   @doc """
   The route in use, from the aircraft bound for this field whose pass is complete: the

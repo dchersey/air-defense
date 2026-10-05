@@ -136,6 +136,40 @@ defmodule LgaPredictor.ApproachTest do
     do: Approach.track_passes(passes, fleet, @lga, @home, at)
 
   describe "track_passes/5" do
+    test "level 3950-foot northeast loops establish high approach without entering the low core" do
+      # Local receiver trace, 5 October: EDV5334 remained above the old 3500-ft
+      # gate throughout reception. Three distinct flights must still complete.
+      first = for hex <- ~w(a b c), do:
+        %{plane(hex, {40.746460, -73.862305}, 3950, 64, gs: 262.5) | track_deg: 63.04}
+      last = for hex <- ~w(a b c), do:
+        %{plane(hex, {40.761795, -73.822815}, 3975, -128, gs: 267.4) | track_deg: 62.86}
+      initial = seen(first)
+      refute Enum.any?(initial, fn {_, p} -> p.bound end)
+      passes = seen(last, initial, @now + 35)
+      assert Enum.all?(passes, fn {_, p} -> p.bound end)
+      assert Approach.route(passes, @now + 35) == :high_approach
+      assert Approach.route(Map.delete(passes, "c"), @done) == nil
+    end
+
+    test "high loop evidence needs fresh sustained progress in the local direction and altitude band" do
+      first = %{plane("a", {40.746460, -73.862305}, 3950, 0, gs: 263) | track_deg: 63}
+      last = %{first | lat: 40.761795, lon: -73.822815}
+      refute seen([last], seen([first]), @now + 10)["a"].bound
+      refute seen([last], seen([first]), @now + 91)["a"].bound
+      refute seen([first], seen([first]), @now + 30)["a"].bound
+
+      for changes <- [%{track_deg: 240}, %{track_deg: nil}, %{gspeed_kt: 150},
+                      %{alt_ft: 5500}, %{type: "C172"}, %{pos_age_s: 30}, %{vspeed_fpm: 1200}] do
+        passes = seen([Map.merge(first, changes)])
+          |> then(&seen([Map.merge(last, changes)], &1, @now + 35))
+        refute Enum.any?(passes, fn {_, p} -> p.bound end), inspect(changes)
+      end
+
+      changed = seen([%{first | track_deg: 240}], seen([first]), @now + 15)
+      refute seen([last], changed, @now + 35)["a"].bound
+      refute seen([%{last | alt_ft: 4600}], seen([first]), @now + 35)["a"].bound
+    end
+
     test "remembers each aircraft's closest pass to home and the altitude there" do
       passes = seen([plane("a", @far_final, 2000)]) |> then(&seen([plane("a", @over_home, 3600, 0)], &1))
       assert %{"a" => %{closest_nm: d, closest_alt: 3600.0}} = passes
