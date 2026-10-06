@@ -5,6 +5,7 @@ defmodule LgaPredictor.Sources do
   `LgaPredictor.FR24.Aircraft` structs.
 
     :local          → local ADS-B receiver (no key, no credits)
+    :airplanes_live → free IP-authorized feeder fallback
     :fr24           → FlightRadar24 (API key, billed per flight)
   """
 
@@ -20,7 +21,6 @@ defmodule LgaPredictor.Sources do
     ADSB.Client.positions(bounds, Keyword.put(opts, :provider, :local))
   end
 
-  # Retain an explicit error for legacy callers; never contact the suspended API.
-  def positions(_bounds, :airplanes_live, _opts),
-    do: {:error, {:provider_disabled, :airplanes_live}}
+  def positions(bounds, :airplanes_live, _opts),
+    do: ADSB.Fallback.positions(bounds)
 end

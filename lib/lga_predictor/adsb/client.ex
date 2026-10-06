@@ -2,7 +2,7 @@ defmodule LgaPredictor.ADSB.Client do
   @moduledoc """
   Local readsb/dump1090 receiver client. Fetches the receiver's full aircraft
   snapshot and trims it to the requested box, returning the same Aircraft structs
-  as FR24. The suspended airplanes.live provider is explicitly disabled.
+  as FR24. The airplanes.live feeder API uses the same aircraft format.
   """
 
   alias LgaPredictor.FR24.Aircraft
@@ -17,7 +17,33 @@ defmodule LgaPredictor.ADSB.Client do
   def positions(bounds, opts \\ []) do
     case Keyword.get(opts, :provider, :local) do
       :local -> local_positions(bounds, opts)
+      :airplanes_live -> airplanes_positions(bounds, opts)
       provider -> {:error, {:provider_disabled, provider}}
+    end
+  end
+
+  # Deliberately ignore :url here: default_fetch supplies the LOCAL receiver URL.
+  # The fallback must always contact the remote API, never retry that same receiver.
+  defp airplanes_positions({north, south, west, east} = bounds, opts) do
+    lat = (north + south) / 2
+    lon = (west + east) / 2
+    radius = ceil(:math.sqrt(:math.pow((north - south) * 30, 2) +
+      :math.pow((east - west) * 30, 2))) + 1
+
+    if radius > 250 do
+      {:error, :bounds_too_large}
+    else
+      req = Req.new(url: "https://api.airplanes.live/v2/point/#{lat}/#{lon}/#{radius}",
+        headers: [{"Accept", "application/json"}, {"User-Agent", "air-defense"}],
+        receive_timeout: 4000, retry: false)
+
+      case Req.get(Req.merge(req, Keyword.get(opts, :req, []))) do
+        {:ok, %{status: 200, body: %{"ac" => records} = body}} when is_list(records) ->
+          {:ok, parse(body, bounds)}
+        {:ok, %{status: 200}} -> {:error, :invalid_airplanes_response}
+        {:ok, %{status: status, body: body}} -> {:error, {:http_error, status, body}}
+        {:error, exception} -> {:error, exception}
+      end
     end
   end
 

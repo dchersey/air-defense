@@ -47,7 +47,7 @@ defmodule LgaPredictor.ConfigStoreTest do
     assert {:error, _} = ConfigStore.put(name, %{"provider" => "skynet"})
     assert {:error, _} = ConfigStore.put(name, %{"provider" => "adsb_lol"})
     assert {:error, message} = ConfigStore.put(name, %{"provider" => "airplanes_live"})
-    assert message =~ "API suspended"
+    assert message =~ "automatic fallback only"
     assert ConfigStore.get(name).provider == :local
   end
 

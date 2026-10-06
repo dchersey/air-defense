@@ -322,7 +322,7 @@ defmodule LgaPredictor.ConfigStore do
         {:error, "credit_mode must be one of #{Enum.join(@credit_modes, ", ")}"}
 
       raw["provider"] == "airplanes_live" ->
-        {:error, "airplanes.live is disabled: API suspended; use local or fr24"}
+        {:error, "airplanes.live is available as automatic fallback only; select local or fr24"}
 
       raw["provider"] not in @providers ->
         {:error, "provider must be one of #{Enum.join(@providers, ", ")}"}

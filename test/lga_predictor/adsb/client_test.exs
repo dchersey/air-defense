@@ -7,12 +7,31 @@ defmodule LgaPredictor.ADSB.ClientTest do
   # bounds {north, south, west, east}
   @box {40.80, 40.75, -73.92, -73.84}
 
-  test "suspended provider cannot issue requests, even with an explicit URL" do
-    opts = [provider: :airplanes_live, url: "http://example.test/",
-            req: [plug: fn _ -> flunk("disabled provider attempted HTTP") end]]
-    assert {:error, {:provider_disabled, :airplanes_live}} = Client.positions(@box, opts)
-    assert {:error, {:provider_disabled, :airplanes_live}} =
-             LgaPredictor.Sources.positions(@box, :airplanes_live, opts)
+  test "feeder API uses a remote point query and trims to the requested box" do
+    response = %{"ac" => [%{"hex" => "inbox", "lat" => 40.76, "lon" => -73.87},
+                           %{"hex" => "outside", "lat" => 41.2, "lon" => -73.87}]}
+    opts = [provider: :airplanes_live, url: "http://broken-local.test/",
+      req: [plug: fn conn ->
+        assert conn.host == "api.airplanes.live"
+        assert conn.request_path =~ "/v2/point/"
+        assert Plug.Conn.get_req_header(conn, "authorization") == []
+        conn |> Plug.Conn.put_resp_content_type("application/json")
+             |> Plug.Conn.send_resp(200, Jason.encode!(response))
+      end]]
+    assert {:ok, [%Aircraft{hex: "inbox"}]} = Client.positions(@box, opts)
+  end
+
+  test "feeder authorization and malformed responses are failures, not empty skies" do
+    for {status, body, error} <- [{403, %{"error" => "not a feeder"}, :http_error},
+                                  {429, %{}, :http_error}, {200, %{}, :invalid_airplanes_response}] do
+      result = Client.positions(@box, provider: :airplanes_live, req: [plug: fn conn ->
+        conn |> Plug.Conn.put_resp_content_type("application/json")
+             |> Plug.Conn.send_resp(status, Jason.encode!(body))
+      end])
+      if error == :http_error,
+        do: assert(result == {:error, {:http_error, status, body}}),
+        else: assert(result == {:error, error})
+    end
   end
 
   test "default provider fetches the configured local receiver" do

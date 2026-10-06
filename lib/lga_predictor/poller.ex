@@ -765,7 +765,7 @@ defmodule LgaPredictor.Poller do
   end
 
   @doc false
-  # A failed local receiver can fall back to FR24 when a key is configured. Re-check
+  # A failed local receiver falls back to the free feeder API. Re-check
   # the receiver every 30 seconds and on session start; report the actual provider.
   defp maybe_failover(state, id, reason) do
     configured = Map.get(state.config_fun.(), :provider, :local)
@@ -774,22 +774,19 @@ defmodule LgaPredictor.Poller do
       state.provider_override != nil ->
         state
 
-      configured == :fr24 ->
+      configured != :local ->
         state
 
       Map.get(state.fetch_errors, id, 0) < @feed_down_threshold ->
         state
 
-      not LgaPredictor.FR24.Client.key_present?() ->
-        state
-
       true ->
         Logger.warning(
-          "[poller] #{configured} is failing (#{inspect(reason)}) — falling back to FR24 " <>
+          "[poller] #{configured} is failing (#{inspect(reason)}) — falling back to airplanes.live " <>
             "while retrying the local receiver every 30 seconds."
         )
 
-        %{state | provider_override: :fr24, provider_fallback_reason: describe(reason)}
+        %{state | provider_override: :airplanes_live, provider_fallback_reason: describe(reason)}
     end
   end
 
@@ -799,7 +796,7 @@ defmodule LgaPredictor.Poller do
   defp retry_local_receiver(state) do
     config = state.config_fun.()
 
-    if state.provider_override == :fr24 and Map.get(config, :provider, :local) == :local do
+    if state.provider_override == :airplanes_live and Map.get(config, :provider, :local) == :local do
       case List.first(config.zonesets) do
         nil ->
           state
@@ -809,7 +806,7 @@ defmodule LgaPredictor.Poller do
 
           case fetch(local, query_box(zoneset)) do
             {:ok, _aircraft} ->
-              Logger.info("[poller] local receiver recovered — leaving FR24 fallback")
+              Logger.info("[poller] local receiver recovered — leaving airplanes.live fallback")
 
               # Preserve session deadlines, credits, dedupe and ANC holds. Resume
               # each zone promptly; poll_tick still respects pause and lock-on.
@@ -853,7 +850,7 @@ defmodule LgaPredictor.Poller do
 
   # Feed each poll's spend into the month-to-date self-tally (skipped in tests,
   # where the ledger isn't started).
-  # airplanes.live was free; FR24 bills per aircraft returned.
+  # Local and airplanes.live feeder positions are free; FR24 bills per aircraft returned.
   defp metered?(:fr24), do: true
   defp metered?(_), do: false
 

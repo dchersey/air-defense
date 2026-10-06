@@ -695,16 +695,11 @@ defmodule LgaPredictor.PollerTest do
     assert is_integer(status.overhead_at)
   end
 
-  test "a failed local receiver falls back to FR24 once, and a new session re-checks it" do
-    # A failing local receiver may fall back to a configured FR24 key; report
+  test "a failed local receiver falls back to airplanes.live once, and a new session re-checks it" do
+    # A failing local receiver falls back to the IP-authorized feeder API; report
     # which feed is actually in use.
     # The 2-arity fetcher receives the provider the poller resolved.
     {:ok, seen} = Agent.start_link(fn -> [] end)
-
-    # Failover requires an FR24 key. Use the env fallback so this doesn't depend on
-    # whatever happens to be in the developer's Keychain (and works on CI).
-    System.put_env("FR24_API_KEY", "test-key")
-    on_exit(fn -> System.delete_env("FR24_API_KEY") end)
 
     start(
       config_fun: fn -> config(trigger: :assume) |> Map.put(:provider, :local) end,
@@ -721,9 +716,11 @@ defmodule LgaPredictor.PollerTest do
     Process.sleep(120)
 
     status = Poller.status()
-    assert status.provider_active == "fr24", "failed over to FR24 after repeated receiver errors"
+    assert status.provider_active == "airplanes_live", "failed over to airplanes.live after repeated receiver errors"
     assert status.provider_fallback_reason == "HTTP 503", "reports why it switched"
-    assert :fr24 in Agent.get(seen, & &1), "actually fetched from the fallback"
+    assert :airplanes_live in Agent.get(seen, & &1), "actually fetched from the fallback"
+    refute :fr24 in Agent.get(seen, & &1)
+    assert status.approx_credits == 0
 
     # A fresh session re-checks the configured provider (the receiver may have recovered).
     :ok = Poller.stop_session()
@@ -732,18 +729,9 @@ defmodule LgaPredictor.PollerTest do
            "next session starts back on the configured provider"
   end
 
-  for fallback_result <- [{:ok, []}, {:error, {:http_error, 402, %{}}}] do
+  for fallback_result <- [{:ok, []}, {:error, {:http_error, 403, %{}}}] do
     @fallback_result fallback_result
     test "local recovery preserves a session with fallback #{inspect(fallback_result)}" do
-      previous_key = System.get_env("FR24_API_KEY")
-      System.put_env("FR24_API_KEY", "test-key")
-
-      on_exit(fn ->
-        if previous_key,
-          do: System.put_env("FR24_API_KEY", previous_key),
-          else: System.delete_env("FR24_API_KEY")
-      end)
-
       {:ok, healthy} = Agent.start_link(fn -> false end)
       test_pid = self()
       fallback = @fallback_result
@@ -756,21 +744,21 @@ defmodule LgaPredictor.PollerTest do
 
           case provider do
             :local -> if Agent.get(healthy, & &1), do: {:ok, []}, else: {:error, :closed}
-            :fr24 -> fallback
+            :airplanes_live -> fallback
           end
         end
       )
 
       :ok = Poller.start_session()
       send(Poller, {:poll, "z1"})
-      assert Poller.status().provider_active == "fr24"
+      assert Poller.status().provider_active == "airplanes_live"
       send(Poller, {:poll, "z1"})
       before = :sys.get_state(Poller)
-      assert_receive {:recovery_fetch, :fr24}
+      assert_receive {:recovery_fetch, :airplanes_live}
 
       # Failed local probe cannot clear the warning or disturb the session.
       send(Poller, :approach)
-      assert Poller.status().provider_active == "fr24"
+      assert Poller.status().provider_active == "airplanes_live"
       assert Poller.status().provider_fallback_reason != nil
       assert :sys.get_state(Poller).sessions == before.sessions
 
@@ -808,7 +796,7 @@ defmodule LgaPredictor.PollerTest do
       if idle, do: Poller.stop_session()
 
       :sys.replace_state(Poller, fn state ->
-        %{state | provider_override: :fr24, provider_fallback_reason: "closed"}
+        %{state | provider_override: :airplanes_live, provider_fallback_reason: "closed"}
       end)
 
       send(Poller, :approach)

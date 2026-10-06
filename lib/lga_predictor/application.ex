@@ -22,6 +22,7 @@ defmodule LgaPredictor.Application do
           LgaPredictor.RouteHistory,
           LgaPredictor.Routes,
           LgaPredictor.CreditLedger,
+          LgaPredictor.ADSB.Fallback,
           LgaPredictor.Poller,
           {Bandit, plug: LgaPredictor.API.Router, scheme: :http, ip: {127, 0, 0, 1}, port: port}
         ]

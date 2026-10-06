@@ -30,12 +30,13 @@ time, every time.
 
 ## Current scope and data sources
 
-**The airplanes.live API has been suspended and is disabled in Air Defense.** It is
-no longer offered in Settings, and requests through that provider are rejected.
-Existing configurations using airplanes.live (or the previously retired adsb.lol)
-migrate to **Local receiver**, preserving the configured receiver URL and zones.
-Set that URL to a working receiver before expecting traffic. There is no supported
-free public position API in this app; **FlightRadar24 is the optional paid alternative**.
+**Local receiver first; free airplanes.live feeder API as fallback.** Feeder access
+was verified on October 6, 2026 from the same public IP as my receiver. Check
+[My Feed](https://airplanes.live/myfeed/) on your feeding network. Access depends on
+feeder authorization and may stop if the feeder disconnects or your public IP changes.
+**FlightRadar24 remains an explicitly selected paid alternative**, but automatic
+fallback never uses it. Legacy airplanes.live/adsb.lol primary-source configurations
+still migrate to Local receiver, preserving receiver settings and zones.
 
 Most development now focuses on my **local ADS-B receiver** and the traffic around
 my apartment in Queens under LaGuardia's flight paths. The local features—including
@@ -333,7 +334,7 @@ hour stays blank); duration percentages use actual elapsed time.
 
 - **Data source** picker: `Local receiver` (default) or `FlightRadar24` (paid).
   Set the receiver URL, or paste an FR24 key (stored in the macOS Keychain).
-  Applies to all zones. airplanes.live is disabled because its API is suspended.
+  Applies to all zones. Local receiver uses airplanes.live as its free feeder fallback.
 - **Start / Stop** per zone from the menu — each zone runs its own session.
 - **Edit zones** inline: paste GeoJSON, or "Open in geojson.io" to draw a box over
   the map and bring it back. Set a per-zone poll interval.
@@ -353,9 +354,12 @@ readsb/dump1090 receiver, typically at
 This is the source used for background activity, route classification, and route
 history. See the [receiver guide](priv/adsb/README.md) for provisioning and diagnostics.
 
-**Disabled: airplanes.live.** Its public API has been suspended. Air Defense no
-longer selects or calls that provider. Older configurations migrate to Local receiver;
-users without a receiver can explicitly choose the paid FR24 alternative.
+**Free fallback: airplanes.live feeder API.** Requests use
+`https://api.airplanes.live/v2/point/{latitude}/{longitude}/{radius_nm}` with access
+based on the feeder's public IP, without an API key. Shared regional responses are
+cached for two seconds across zones and route classification, then trimmed to each
+requested area. Cached position ages advance with time; failed or malformed
+responses are errors, never empty skies. See the [API documentation](https://airplanes.live/api-docs/).
 
 **Optional paid source: FlightRadar24.** Obtain an API key from
 [FlightRadar24's API portal](https://fr24api.flightradar24.com/) and paste it in
@@ -363,15 +367,14 @@ Settings. The key is stored in the macOS Keychain (service `air-defense-fr24`,
 `FR24_API_KEY` environment fallback), never in the repository or launchd plist.
 The `light` position feed is billed per flight returned, so small query areas matter.
 
-If a local receiver repeatedly fails and an FR24 key is stored, the current app can
-fall back to FR24 temporarily. The panel identifies the active provider and the
-reason for the switch. During fallback, it probes the local receiver every 30 seconds
-and switches back after a successful response, without restarting monitoring or
-resetting session timers. Failed probes leave fallback in place; these local checks
-spend no credits and continue while monitoring is paused or idle. Starting another
-session also rechecks the receiver. This fallback
-spends FR24 credits; background classification and activity collection pause while it
-is in use.
+If local receiver polls repeatedly fail during monitoring, the app falls back to
+**airplanes.live**, even without an FR24 key. The panel identifies the active provider
+and the reason for the switch. It probes the local receiver every 30 seconds and
+switches back after a successful response without resetting session timers. Local
+recovery probes continue while paused or idle; starting another session also rechecks
+local. Background classification and activity collection can continue on this free
+fallback. If feeder access is denied or both feeds fail, the app reports the failure
+and keeps retrying local; it never silently escalates to paid FR24.
 
 > The credit bar is a **self-tally**: Air Defense counts every credit it spends and you
 > periodically Sync it to the dashboard number. It rolls over on your billing
@@ -419,7 +422,7 @@ test/                   ExUnit tests (TDD)
 - The normal ANC switch uses private CoreBluetooth APIs and may depend on macOS
   behavior. Its Control Center fallback needs Accessibility and Sound pinned to
   the menu bar.
-- airplanes.live is disabled. Use a local receiver or paid FR24 positions.
+- airplanes.live fallback requires feeder access from the feeding public IP. FR24 is optional and explicitly selected.
 
 ## Why this license?
 

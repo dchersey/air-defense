@@ -444,8 +444,9 @@ private struct StatusBanner: View {
         icon: "arrow.triangle.2.circlepath", tint: Palette.inbound, bg: Palette.inboundSoft,
         strong: "\(providerLabel(model.provider)) is failing"
           + (model.providerFallbackReason.map { " (\($0))" } ?? "") + ".",
-        rest: " Using \(providerLabel(live)) for this session; "
-          + "the next session you start re-checks \(providerLabel(model.provider)).")
+        rest: model.feedOk
+          ? " Using \(providerLabel(live)); retrying the local receiver every 30 seconds."
+          : " \(providerLabel(live)) is also unavailable. Retrying the local receiver every 30 seconds.")
     } else if model.active && model.reachable && !model.feedOk {
       banner(
         icon: "antenna.radiowaves.left.and.right.slash", tint: Palette.inbound,
@@ -1191,7 +1192,7 @@ private struct DataSource: View {
         Text("Your own ADS-B receiver — no API, no credits, lowest latency.")
           .font(.adMono).foregroundStyle(Palette.ink2)
       }
-      Text("airplanes.live disabled — API suspended.")
+      Text("Free fallback: airplanes.live, authorized by your feeder’s public IP.")
         .font(.adMono).foregroundStyle(Palette.ink3)
     }
     .onAppear { urlText = model.localFeedURL ?? "" }
