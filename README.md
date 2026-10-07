@@ -288,7 +288,7 @@ to confirm: the classifier requires three completed tracks and retains votes for
 
 **Route history** opens a seven-column lookback: today and the preceding six local
 calendar days, with time of day running down each column. Red marks low approaches,
-amber high approaches, blue river approaches, and green direct approaches. Gray marks observed periods with no route detected.
+blue high approaches, and green river and direct approaches. Gray marks observed periods with no route detected.
 Hover a block for its route and time range. The bottom bar shows each route's percentage of **classified time over the
 last 30 days**, with recorded hours and coverage alongside it; these are not percentages
 of aircraft. Classification reports the noisiest route in meaningful use, so this is a
