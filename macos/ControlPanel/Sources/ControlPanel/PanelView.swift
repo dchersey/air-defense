@@ -80,7 +80,7 @@ enum Palette {
     case "low_approach": return stop
     case "high_approach": return Color.theme(light: 0x3F7CC4, dark: 0x64ACFF)
     case "river_approach": return go
-    case "direct_approach": return go
+    case "direct_approach": return Color.purple
     default: return ink3
     }
   }
