@@ -111,8 +111,8 @@ defmodule LgaPredictor.Poller do
   sessions keep their timers running but PAUSE polling (no FR24 credits) and
   resume automatically when they reconnect.
   """
-  def set_headphones(connected) when is_boolean(connected),
-    do: GenServer.call(__MODULE__, {:set_headphones, connected})
+  def set_headphones(connected, audio_output \\ nil) when is_boolean(connected),
+    do: GenServer.call(__MODULE__, {:set_headphones, connected, if(is_nil(audio_output), do: connected, else: audio_output)})
 
   ## Server
 
@@ -142,9 +142,9 @@ defmodule LgaPredictor.Poller do
 
   def handle_call(:status, _from, state), do: {:reply, status_of(state), state}
 
-  def handle_call({:set_headphones, connected}, _from, state) do
+  def handle_call({:set_headphones, connected, audio_output}, _from, state) do
     state =
-      if connected != state.headphones_connected do
+      if connected != state.headphones_connected or audio_output != state.headphones_audio_output do
         Logger.info(
           "[poller] headphones #{if connected, do: "connected — resuming", else: "disconnected — pausing"}"
         )
@@ -152,7 +152,7 @@ defmodule LgaPredictor.Poller do
         unless connected, do: Actuator.reset()
         # Release our keep-alive hold while the buds are gone (let the route idle)
         # and re-acquire it on reconnect.
-        reconcile_keep_alive(%{state | headphones_connected: connected})
+        reconcile_keep_alive(%{state | headphones_connected: connected, headphones_audio_output: audio_output})
       else
         state
       end
@@ -254,11 +254,11 @@ defmodule LgaPredictor.Poller do
   end
 
   # Push/pop our single keep-alive hold so it's held exactly while a session is
-  # active AND the AirPods are connected: when the buds disconnect we release the
+  # active AND the AirPods are this Mac's audio output: on transfer we release the
   # hold (let the route idle) and re-acquire it on reconnect. `keep_alive_held`
   # guards the LIFO so we never double-push or double-pop.
   defp reconcile_keep_alive(state) do
-    want = map_size(state.sessions) > 0 and state.headphones_connected
+    want = map_size(state.sessions) > 0 and state.headphones_connected and state.headphones_audio_output
 
     cond do
       want and not state.keep_alive_held ->
@@ -1502,6 +1502,7 @@ defmodule LgaPredictor.Poller do
       receiver_ok: true,
       receiver_misses: 0,
       headphones_connected: true,
+      headphones_audio_output: true,
       keep_alive_held: false,
       actioned: MapSet.new(),
       # Set only while a failover is active; cleared when a session starts so the

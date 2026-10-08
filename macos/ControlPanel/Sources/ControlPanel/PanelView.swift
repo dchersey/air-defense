@@ -322,6 +322,11 @@ struct PanelView: View {
     HStack(spacing: 4) {
       FooterButton(title: "Settings", icon: "gearshape") { showSettings = true }
       FooterButton(title: "Edit zones", icon: "map") { showEditor = true }
+      if model.headphonesConnected && !model.headphonesAreMacOutput {
+        FooterButton(title: "Reclaim", icon: "headphones") { model.reclaimAirPods() }
+          .disabled(model.reclaiming)
+          .help("ANC control is available. Bring audio playback back to this Mac only if wanted.")
+      }
       Spacer()
       FooterButton(title: "Quit", icon: "power", hoverTint: Palette.stop) {
         NSApplication.shared.terminate(nil)

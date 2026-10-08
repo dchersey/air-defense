@@ -62,8 +62,8 @@ adapt them for other locations, or make them more general, are welcome; see
   filters it locally.
 - **Tracks activity outside ANC sessions**, classifies my local arrival routes,
   and records seven-day route timelines and rolling 30-day route shares.
-- **Pauses ANC monitoring when the AirPods are no longer the active output** and
-  resumes when they return. Background local-receiver observations continue.
+- **Controls ANC while AirPods play from an iPhone**, if their Bluetooth control
+  link to the Mac remains available. Monitoring pauses when that link is lost.
 - **Supports FlightRadar24** as a paid position source, with credit accounting.
   Background traffic and route classification are disabled on that metered feed.
 - **Stays out of the way.** No Dock icon—amber for inbound traffic, red while
@@ -148,10 +148,20 @@ panels still belong to Control Center. Air Defense searches the new host first
 and retains the older Control Center lookup for earlier macOS versions. This
 change does not itself require regranting Accessibility permission.
 
-When an iPhone answers a call it takes the AirPods, and macOS often doesn't hand them
-back when the call ends — the usual fix is taking the headphones off and putting them
-back on. Air Defense notices (monitoring pauses, "AirPods not connected") and offers a
-**Reclaim** button right in that banner to pull them back to the Mac.
+Air Defense can control noise cancellation while the AirPods play audio from an
+**iPhone**, provided a Bluetooth control link to this Mac remains reachable. This
+was tested with AirPods Max and Spotify on iPhone: ANC engaged, playback continued,
+and Adaptive mode was restored afterward. Other models/connections may differ.
+
+The app distinguishes control availability from Mac audio output. It continues
+monitoring over Bluetooth, captures the prior listening mode, and restores that
+same pair afterward. It does not use the Mac audio keep-alive or play quiet-period
+announcements while audio belongs to another device. If multiple pairs are reachable,
+it prefers the Mac output or last-used pair; otherwise it pauses rather than guesses.
+
+**Starting a session never reclaims audio automatically.** Use **Reclaim** explicitly
+to bring playback back to the Mac. It appears in the footer while Bluetooth-only
+control is available, or in the disconnected banner when control is unavailable.
 
 It opens **Control Center**, expands the **Sound** tile, and presses the AirPods row —
 so it carries the same sub-second keyboard blip described above. It deliberately does
@@ -171,11 +181,6 @@ The obvious cleaner routes don't work, and they fail in ways that *look* like su
 That also makes CoreAudio presence — not the Bluetooth connection state — the only
 reliable signal for "the phone has them".
 
-The same thing happens **automatically when you start a session**, so beginning a watch
-while your AirPods are still on your phone doesn't just drop you straight into the paused
-state. Nothing is grabbed if they're already on the Mac, if they're sitting in their case,
-or if two live pairs make the choice ambiguous — in that last case use the button, which
-prefers whichever pair you used here last.
 
 Detection falls out of the same list: Control Center shows exactly the AirPods that are
 **powered on and reachable**, so a pair in its case is simply absent, and `v=1` marks
@@ -417,8 +422,8 @@ test/                   ExUnit tests (TDD)
 - Local features are tuned for *my* apartment under *LaGuardia's* paths. I do not
   plan to develop location-adaptation tooling; contributions are welcome. The
   zone editor alone does not adapt route classification or acoustic assumptions.
-- It can only switch a device that's currently your active output and connected;
-  pair it with Keep Sound Alive so the AirPods don't nap mid-session.
+- Bluetooth-only ANC requires a reachable paired AirPods control link;
+  Keep Sound Alive is used only while AirPods are the Mac audio output.
 - The normal ANC switch uses private CoreBluetooth APIs and may depend on macOS
   behavior. Its Control Center fallback needs Accessibility and Sound pinned to
   the menu bar.

@@ -11,6 +11,14 @@ struct QuietAlertTests {
     return model
   }
 
+  @MainActor @Test func phonePlaybackDoesNotPlayMacQuietAlert() {
+    let m = model()
+    let start = Date(timeIntervalSince1970: 10000)
+    m.headphonesAreMacOutput = false
+    #expect(!m.quietAlertDue(at: start, enabled: true))
+    #expect(!m.quietAlertDue(at: start.addingTimeInterval(1800), enabled: true))
+  }
+
   @MainActor @Test func repeatedNearMissesDeferButDoNotResetQuietTime() {
     let m = model()
     let start = Date(timeIntervalSince1970: 10000)

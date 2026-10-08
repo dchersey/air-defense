@@ -37,7 +37,8 @@ defmodule LgaPredictor.API.Router do
   end
 
   post "/api/headphones" do
-    Poller.set_headphones(conn.body_params["connected"] == true)
+    connected = conn.body_params["connected"] == true
+    Poller.set_headphones(connected, Map.get(conn.body_params, "audio_output", connected) == true)
     send_json(conn, 200, %{ok: true})
   end
 

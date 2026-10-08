@@ -4,20 +4,9 @@ import ApplicationServices
 import CoreAudio
 import IOBluetooth
 
-/// Drives AirPods Max noise control by automating the macOS Control Center Sound
-/// popover via the Accessibility API. This is the ONLY mechanism confirmed to
-/// actually change the listening mode on macOS 26 (Tahoe) — Shortcuts, the private
-/// AVFoundation/IOBluetooth APIs, and AirBuddy's synthetic hotkey all failed.
-///
-/// The Sound popover becomes the key window (it grabs the keyboard) but does NOT
-/// change the active application — so `set(_:)` dismisses it by pressing the same
-/// menu-bar item again, which toggles it shut and returns the keyboard to the
-/// still-frontmost app the user was working in. (App-activation APIs don't help:
-/// the active app never changed, and they're ignored for a background agent under
-/// macOS 14+ cooperative activation anyway.)
-///
-/// Requires Accessibility permission, the Sound module pinned to the menu bar
-/// (com.apple.menuextra.sound), and AirPods connected as output.
+/// Controls AirPods noise mode through their Bluetooth control link, including
+/// while another device owns audio playback. Control Center is a fallback only
+/// when the target pair is this Mac's active output; Reclaim is always explicit.
 enum AncController {
   enum Mode: String {
     case anc = "Noise Cancellation"
@@ -57,6 +46,35 @@ enum AncController {
       let paired = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice]
     else { return nil }
     return paired.first { ($0.name ?? "") == name }?.addressString
+  }
+
+  struct ControlTarget: Equatable {
+    let name: String
+    let address: String
+    let isMacOutput: Bool
+  }
+
+  // Prefer the current output, then the last-used pair. With multiple other live
+  // pairs, abstain rather than changing somebody else's listening mode.
+  static func selectTarget(_ candidates: [ControlTarget], preferred: String?) -> ControlTarget? {
+    if let output = candidates.first(where: { $0.isMacOutput }) { return output }
+    if let preferred, let match = candidates.first(where: { $0.name == preferred }) { return match }
+    return candidates.count == 1 ? candidates.first : nil
+  }
+
+  static func controlTarget(preferring preferred: String?) -> ControlTarget? {
+    warmUpFastPath()
+    let output = airPodsOutputName()
+    let paired = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] ?? []
+    let candidates = paired.compactMap { device -> ControlTarget? in
+      guard let name = device.name, name.localizedCaseInsensitiveContains("airpods"),
+        device.isConnected(), let address = device.addressString else { return nil }
+      let isOutput = name == output
+      guard isOutput || Mode(aap: ADListeningMode.shared.currentMode(forAddress: address)) != nil
+        else { return nil }
+      return ControlTarget(name: name, address: address, isMacOutput: isOutput)
+    }
+    return selectTarget(candidates, preferred: preferred)
   }
 
   /// Whether AirPods are the current default audio output. The Control Center
@@ -261,16 +279,27 @@ enum AncController {
   /// `previous` to restore the user's own mode (Transparency, Adaptive, or even
   /// already-ANC) after an overflight instead of forcing Transparency.
   @discardableResult
-  static func set(_ mode: Mode) -> (ok: Bool, previous: Mode?) {
+  static func set(_ mode: Mode, target: ControlTarget? = nil) -> (ok: Bool, previous: Mode?) {
+    if let target {
+      let paired = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] ?? []
+      guard paired.contains(where: { $0.addressString == target.address && $0.isConnected() })
+        else { return (false, nil) }
+    }
     // Fast path: ask bluetoothd directly via private CoreBluetooth. No popover, so no
     // keyboard blip, and it reads the true previous mode instead of inferring it from
     // the UI. Private API, so any failure silently falls through to the automation below.
-    if let address = airPodsAddress() {
+    if let address = target?.address ?? airPodsAddress() {
       let before = Mode(aap: ADListeningMode.shared.currentMode(forAddress: address))
       if ADListeningMode.shared.setMode(mode.aap, forAddress: address) {
         Log.line("set(\(mode.rawValue)) via CoreBluetooth — previous=\(before?.rawValue ?? "?")")
         return (true, before)
       }
+    }
+
+    // UI fallback can only address the Mac output. Never reclaim phone audio or
+    // accidentally change another pair when the requested Bluetooth target fails.
+    guard airPodsAreOutput(), target == nil || target?.name == airPodsOutputName() else {
+      return (false, nil)
     }
 
     guard let cc = controlCenterApp(), let soundItem = soundMenuBarItem() else {

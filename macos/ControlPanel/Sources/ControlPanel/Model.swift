@@ -184,9 +184,13 @@ final class StatusModel {
   // AeroAPI key (real-time flight routes for the recent-flights list).
   var aeroapiKeyPresent = false
 
-  // AirPods presence (the active output), checked locally via CoreAudio.
+  // Availability for noise control is independent of who owns audio playback.
   var headphonesConnected = true
   private var lastSentHeadphones: Bool?
+  private var lastSentMacOutput: Bool?
+  var headphonesAreMacOutput = true
+  private var controlTarget: AncController.ControlTarget?
+  private var engagedTarget: AncController.ControlTarget?
   // Last-known AirPods kind: true = Pro, false = Max/other. Sticky across a
   // disconnect so the disconnected/engaged glyph matches what was just in use;
   // updated whenever AirPods are the active output (e.g. switch Pro → Max).
@@ -372,7 +376,7 @@ final class StatusModel {
       return false
     }
     if activeSince == nil { activeSince = now }
-    guard let start = activeSince, reachable, feedOk, headphonesConnected, enabled else { return false }
+    guard let start = activeSince, reachable, feedOk, headphonesConnected, headphonesAreMacOutput, enabled else { return false }
 
     if phase == .engaged {
       lastActivityAt = now
@@ -490,28 +494,28 @@ final class StatusModel {
     menuPulse = 1.0
   }
 
-  /// Detect whether AirPods are the active output; push the state to the service
-  /// when it changes so it can pause/resume monitoring.
+  /// Report control reachability separately from Mac audio ownership.
   private func updateHeadphones() {
-    let connected = AncController.airPodsAreOutput()
+    headphonesAreMacOutput = AncController.airPodsAreOutput()
+    controlTarget = AncController.controlTarget(preferring: engagedTarget?.name ?? lastAirPodsName)
+    // Finish restoring the pair we engaged before selecting another pair.
+    if let engagedTarget, controlTarget?.address != engagedTarget.address { controlTarget = nil }
+    let connected = controlTarget != nil
     headphonesConnected = connected
-    // Remember the kind while connected (sticky across the next disconnect).
-    if let pro = AncController.airPodsOutputIsPro() { headphonesArePro = pro }
-    // ...and the exact name, so a later reclaim targets the pair that was in use.
-    if let name = AncController.airPodsOutputName() { lastAirPodsName = name }
-    // Bring the no-UI mode-switch path up in the background the first time AirPods
-    // appear, so the first overflight doesn't pay its setup cost.
-    if connected { AncController.warmUpFastPath() }
-
-    guard connected != lastSentHeadphones else { return }
+    if let target = controlTarget {
+      lastAirPodsName = target.name
+      headphonesArePro = target.name.localizedCaseInsensitiveContains("pro")
+    }
+    guard connected != lastSentHeadphones || headphonesAreMacOutput != lastSentMacOutput else { return }
     lastSentHeadphones = connected
-    Log.line("headphones \(connected ? "connected" : "disconnected") -> notifying service")
+    lastSentMacOutput = headphonesAreMacOutput
+    Log.line("headphones control=\(connected) macOutput=\(headphonesAreMacOutput) -> notifying service")
 
     guard let url = URL(string: "\(base)/api/headphones") else { return }
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.httpBody = try? JSONSerialization.data(withJSONObject: ["connected": connected])
+    request.httpBody = try? JSONSerialization.data(withJSONObject: ["connected": connected, "audio_output": headphonesAreMacOutput])
     Task { _ = try? await URLSession.shared.data(for: request) }
   }
 
@@ -562,8 +566,7 @@ final class StatusModel {
   /// Control Center "set mode" is idempotent and absolute, so if a previous apply
   /// failed we retry next poll (appliedMode only advances on success).
   private func applyModeIfChanged(_ desired: String) {
-    // Nothing to switch if AirPods aren't the active output — leave appliedMode
-    // pending so the desired mode applies the instant they reconnect.
+    // Leave the desired change pending while no AirPods control link is available.
     guard headphonesConnected else { return }
     guard desired != appliedMode else { return }
     guard !isApplying else {
@@ -578,8 +581,10 @@ final class StatusModel {
       // Engaging: switch to ANC and capture the mode that was active first, so we can
       // put it back on release. If the user was already in ANC, `previous` is .anc and
       // release becomes a no-op — exactly what we want.
-      let (ok, previous) = AncController.set(.anc)
+      guard let target = controlTarget else { return }
+      let (ok, previous) = AncController.set(.anc, target: target)
       if ok {
+        engagedTarget = target
         restoreMode = previous ?? .transparency
         appliedMode = "anc"
         Log.line("applyMode engage ANC ok; will restore \(restoreMode?.rawValue ?? "transparency")")
@@ -588,21 +593,18 @@ final class StatusModel {
       // Releasing: restore whatever the user had before we engaged (Transparency,
       // Adaptive, or ANC). Defaults to Transparency if we never captured one.
       let target = restoreMode ?? .transparency
-      let (ok, _) = AncController.set(target)
+      let (ok, _) = AncController.set(target, target: engagedTarget ?? controlTarget)
       if ok {
+        engagedTarget = nil
         appliedMode = "transparency"
         Log.line("applyMode release → restored \(target.rawValue)")
       }
     }
   }
 
-  /// Begin a session. If the AirPods are parked on a phone we grab them back at the same
-  /// time, so starting doesn't just land in the paused state — the backend un-pauses by
-  /// itself once `updateHeadphones` reports them. Fired alongside the start rather than
-  /// before it, so the session clock isn't held up by ~3 s of Control Center automation.
+  /// Starting monitoring never takes playback away from another device.
   func start(_ zoneset: String) {
     post("/api/session/start", body: ["zoneset": zoneset])
-    if !headphonesConnected { reclaimAirPods(reason: "session start") }
   }
   func stop(_ zoneset: String) { post("/api/session/stop", body: ["zoneset": zoneset]) }
 

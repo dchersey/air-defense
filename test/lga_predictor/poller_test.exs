@@ -1080,6 +1080,23 @@ defmodule LgaPredictor.PollerTest do
     assert status.active?
   end
 
+  test "phone playback keeps monitoring available without holding Mac audio" do
+    parent = self()
+    start(fetcher: fn _ -> {:ok, []} end,
+      keep_alive_fun: fn mode -> send(parent, {:audio_hold, mode}) end)
+    :ok = Poller.set_headphones(true, false)
+    :ok = Poller.start_session()
+    assert Poller.status().headphones_connected
+    assert Poller.status().polls > 0
+    refute_receive {:audio_hold, :on}, 50
+    :ok = Poller.set_headphones(true, true)
+    assert_receive {:audio_hold, :on}
+    :ok = Poller.set_headphones(true, false)
+    assert_receive {:audio_hold, :off}
+    assert Poller.status().active?
+    assert Poller.status().headphones_connected
+  end
+
   test "keep-alive: on at first session start, off at last session end, once each" do
     test_pid = self()
 
