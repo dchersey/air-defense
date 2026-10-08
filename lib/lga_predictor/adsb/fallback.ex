@@ -4,7 +4,7 @@ defmodule LgaPredictor.ADSB.Fallback do
 
   # All zones and the classifier share a response. Never reuse success after a
   # failed refresh, and age positions while cached so freshness gates stay honest.
-  @interval_ms 2000
+  @interval_ms 5000
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end

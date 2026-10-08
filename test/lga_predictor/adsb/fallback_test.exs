@@ -19,6 +19,20 @@ defmodule LgaPredictor.ADSB.FallbackTest do
     refute_receive {:fetch, _}
   end
 
+  test "requests for different regions are globally spaced at least five seconds apart" do
+    parent = self()
+    server = start_supervised!({Fallback, name: Module.concat(__MODULE__, Rate), fetcher: fn _ ->
+      send(parent, {:requested_at, System.monotonic_time(:millisecond)})
+      {:ok, []}
+    end})
+    assert {:ok, []} = Fallback.positions(@box, server)
+    assert_receive {:requested_at, first}
+    # This cannot use the cached region, but still shares the provider-wide limit.
+    assert {:ok, []} = Fallback.positions({42.0, 41.9, -74.0, -73.9}, server)
+    assert_receive {:requested_at, second}
+    assert second - first >= 5000
+  end
+
   test "a failed refresh replaces cached success and errors are also rate limited" do
     {:ok, mode} = Agent.start_link(fn -> :ok end)
     parent = self()
@@ -32,7 +46,7 @@ defmodule LgaPredictor.ADSB.FallbackTest do
     assert {:ok, [_]} = Fallback.positions(@box, server)
     assert_receive :fetch
     Agent.update(mode, fn _ -> :error end)
-    :sys.replace_state(server, &%{&1 | at: System.monotonic_time(:millisecond) - 2100})
+    :sys.replace_state(server, &%{&1 | at: System.monotonic_time(:millisecond) - 5100})
     assert {:error, {:http_error, 403, %{}}} = Fallback.positions(@box, server)
     assert_receive :fetch
     assert {:error, {:http_error, 403, %{}}} = Fallback.positions(@box, server)

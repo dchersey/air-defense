@@ -362,7 +362,8 @@ history. See the [receiver guide](priv/adsb/README.md) for provisioning and diag
 **Free fallback: airplanes.live feeder API.** Requests use
 `https://api.airplanes.live/v2/point/{latitude}/{longitude}/{radius_nm}` with access
 based on the feeder's public IP, without an API key. Shared regional responses are
-cached for two seconds across zones and route classification, then trimmed to each
+cached for five seconds across zones and route classification, with at most one
+request every five seconds even across different query regions, then trimmed to each
 requested area. Cached position ages advance with time; failed or malformed
 responses are errors, never empty skies. See the [API documentation](https://airplanes.live/api-docs/).
 
