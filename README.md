@@ -87,7 +87,10 @@ Timing offsets can be set globally or per zone.
   the zone dwell when listener geometry is unavailable. Predicting the release is
   important here: the antenna often loses aircraft after they pass the building.
 - **Departures:** climbing and banking aircraft are tracked through the zone.
-  Successive observations keep ANC engaged while the aircraft is overhead; it
+  Once a departure is detected approaching the ANC zone, local receiver sampling
+  increases to once per second and stays there while ANC is engaged, following
+  acceleration and turns. The free fallback retains its shared five-second API
+  limit. Successive observations keep ANC engaged while the aircraft is overhead; it
   releases when those holds expire after exit or loss of tracking.
 
 Both show amber while inbound and red while ANC is engaged. The arrival banner

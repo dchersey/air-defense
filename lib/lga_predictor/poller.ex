@@ -70,6 +70,7 @@ defmodule LgaPredictor.Poller do
   # within `arrival_ramp_seconds/1` (ETA) of the ANC zone, so we catch its actual entry.
   # ETA decides WHEN to ramp; the fast poll then drives the engage.
   @ramp_poll_interval_ms 3000
+  @departure_local_poll_interval_ms 1000
 
   # How far out arrivals arm, in ETA seconds. On a metered feed every armed poll costs
   # credits, so we arm late and lean harder on the ETA estimate. On a free feed (a local
@@ -622,6 +623,8 @@ defmodule LgaPredictor.Poller do
         delay =
           cond do
             suppressed?(state, id) -> suppress_delay_ms(state, id)
+            local_departure_tracking?(state, id, zoneset) ->
+              min(@departure_local_poll_interval_ms, interval_ms(state, zoneset))
             # An armed (approaching) flight → sleep until just before its predicted
             # engage, then sample fast to catch the ACTUAL zone entry.
             # ETA decides when arming begins (consider_arrival).
@@ -651,6 +654,16 @@ defmodule LgaPredictor.Poller do
   end
 
   defp interval_ms(state, zoneset), do: zoneset.poll_interval_ms || state.poll_interval
+
+  # Acceleration and banking make departure ETAs short-lived. Sample the local
+  # receiver every second from arming through exit, including engaged legs. Keep
+  # the existing hold duration independent of this cadence so release stays stable.
+  # Remote feeds retain their existing cadence and shared API rate limiter.
+  defp local_departure_tracking?(state, id, zoneset) do
+    now = System.os_time(:second)
+    zoneset.type == :departure and active_provider(state) == :local and
+      Enum.any?(Map.get(state.intercepts, id, []), &(&1.exits_at > now))
+  end
 
   # How long to wait while a flight is armed. Far from the zone the ETA already tells us
   # when to look, so a constant fast ramp just burns credits (and, on a metered feed,

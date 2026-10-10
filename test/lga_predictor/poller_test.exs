@@ -704,6 +704,37 @@ defmodule LgaPredictor.PollerTest do
     assert hd(Poller.status().zonesets).phase == "monitoring"
   end
 
+  test "local departures sample each second while armed and engaged, then return to idle cadence" do
+    approaching = %{inbound() | lat: 40.712}
+    {:ok, frame} = Agent.start_link(fn -> [approaching] end)
+    start(config_fun: fn -> config(type: :departure, zone_interval: 30_000) end,
+      fetcher: fn _ -> {:ok, Agent.get(frame, & &1)} end)
+    :ok = Poller.start_session()
+
+    for {aircraft, phase, max_delay} <- [
+      {[approaching], "armed", 1000},
+      {[inbound()], "engaged", 1000},
+      {[], "monitoring", 30_000}
+    ] do
+      Agent.update(frame, fn _ -> aircraft end)
+      send(Poller, {:poll, "z1"})
+      assert hd(Poller.status().zonesets).phase == phase
+      remaining = Process.read_timer(:sys.get_state(Poller).poll_timers["z1"])
+      assert remaining > max_delay - 500
+      assert remaining <= max_delay
+    end
+  end
+
+  test "fallback departures do not use the one-second local cadence" do
+    start(config_fun: fn -> Map.put(config(type: :departure, zone_interval: 30_000),
+      :provider, :airplanes_live) end)
+    :ok = Poller.start_session()
+    send(Poller, {:poll, "z1"})
+    assert hd(Poller.status().zonesets).phase == "engaged"
+    remaining = Process.read_timer(:sys.get_state(Poller).poll_timers["z1"])
+    assert remaining > 29_500
+  end
+
   test "departure overhead exposes live-tracking (no clear-by time)" do
     start(config_fun: fn -> config(type: :departure) end, fetcher: fn _ -> {:ok, [inbound()]} end)
     :ok = Poller.start_session()
