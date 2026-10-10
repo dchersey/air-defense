@@ -246,6 +246,8 @@ defmodule LgaPredictor.API.Router do
       route_evidence: Map.get(status, :route_evidence),
       route_since: Map.get(status, :route_since),
       route_polled_at: Map.get(status, :route_polled_at),
+      departure: Map.get(status, :departure),
+      departure_polled_at: Map.get(status, :departure_polled_at),
       approx_credits: status.approx_credits,
       zonesets: status.zonesets,
       inbound_at: status.inbound_at,

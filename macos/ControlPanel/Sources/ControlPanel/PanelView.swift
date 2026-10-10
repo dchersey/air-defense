@@ -653,6 +653,7 @@ private struct ActivityStrip: View {
 
         bars
 
+        departureBanner
         routeBanner
 
         if !model.recent.isEmpty {
@@ -922,6 +923,37 @@ private struct ActivityStrip: View {
   // when the classifier last looked, so a quiet list reads as "river approach since
   // 11:20, still checking" instead of as a dead feed. Absent on a metered provider,
   // where the classifier never runs.
+  @ViewBuilder private var departureBanner: some View {
+    if model.departurePolledAt != nil {
+      HStack(spacing: 6) {
+        Image(systemName: "airplane.departure").foregroundStyle(Palette.inbound)
+        if let departure = model.departure, let track = departure.track {
+          Text("departures \(track)").foregroundStyle(Palette.ink)
+          Spacer(minLength: 4)
+          if let distance = departure.closestNm {
+            Text("\(distance.formatted(.number.precision(.fractionLength(1)))) nm closest")
+              .foregroundStyle(Palette.ink2)
+          }
+        } else {
+          Text(model.departure == nil ? "departure feed unavailable" : (model.departure?.count == 0 ? "no departure track detected" : "departure track undetermined"))
+            .foregroundStyle(Palette.ink3)
+          Spacer()
+        }
+      }
+      .font(.adMono).lineLimit(1).padding(.vertical, 2)
+      .help(departureHelp)
+    }
+  }
+
+  private var departureHelp: String {
+    guard let d = model.departure else { return "Waiting for fresh departure observations" }
+    var text = "\(d.count) completed southbound departures with an observed eastward turn in the last 20 minutes. Closest observed distance to home; tighter turns are the same track."
+    if let flight = d.callsign, let altitude = d.closestAltFt {
+      text += " Nearest: \(flight), \(Int(altitude)) ft at closest pass."
+    }
+    return text
+  }
+
   @ViewBuilder private var routeBanner: some View {
     if model.routePolledAt != nil || model.route != nil {
       HStack(spacing: 6) {

@@ -74,6 +74,14 @@ struct RouteEvidence: Codable {
   }
 }
 
+struct DepartureSummary: Codable {
+  let track: String?
+  let count: Int
+  let closestNm: Double?
+  let closestAltFt: Double?
+  let callsign: String?
+}
+
 struct StatusResponse: Codable {
   let active: Bool
   let mode: String
@@ -96,6 +104,8 @@ struct StatusResponse: Codable {
   // The arrival route in use ("low approach" / "high approach" / "river approach" / "direct approach"),
   // when it began, and when the classifier last polled. A state, shown as a banner —
   // it is the answer to "why is the list quiet". All nil on a metered provider.
+  let departure: DepartureSummary?
+  let departurePolledAt: Int?
   let route: String?
   let routeEvidence: RouteEvidence?
   let routeSince: Int?
@@ -166,6 +176,8 @@ final class StatusModel {
   // nil until known; false means the receiver has stopped answering.
   var receiverOk: Bool?
   // Arrival route banner (nil = not yet determined, or a metered provider).
+  var departure: DepartureSummary?
+  var departurePolledAt: Int?
   var route: String?
   var routeEvidence: RouteEvidence?
   var routeSince: Int?
@@ -297,6 +309,8 @@ final class StatusModel {
       creditMode = status.creditMode ?? "monthly"
       ambient = status.ambient ?? false
       receiverOk = status.receiverOk
+      departure = status.departure
+      departurePolledAt = status.departurePolledAt
       routeEvidence = status.routeEvidence
       route = status.route
       routeSince = status.routeSince

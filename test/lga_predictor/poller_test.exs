@@ -83,6 +83,37 @@ defmodule LgaPredictor.PollerTest do
     start_supervised!({Poller, Keyword.merge(defaults, opts)})
   end
 
+  test "background departure inference is independent of arrival routing and ANC" do
+    {:ok, frame} = Agent.start_link(fn -> [] end)
+    start(config_fun: fn -> Map.merge(config(), %{airport_coords: {40.7772,-73.8726},
+      home_coords: {40.722832,-73.857549}}) end,
+      fetcher: fn _ -> {:ok, Agent.get(frame, & &1)} end)
+    now = System.os_time(:second)
+    :sys.replace_state(Poller, &%{&1 | active_path: :river_approach,
+      route_confirmed: true, approach_polled_at: now})
+    launch = for hex <- ["one", "two"], do:
+      %{inbound() | hex: hex, type: "E75L", lat: 40.767, lon: -73.885,
+        alt_ft: 600, track_deg: 220, vspeed_fpm: 1400, gspeed_kt: 200}
+    Agent.update(frame, fn _ -> launch end)
+    send(Poller, :ambient)
+    assert Poller.status().departure.count == 0
+    :sys.replace_state(Poller, fn state ->
+      %{state | departure_passes: Map.new(state.departure_passes, fn {k,p} ->
+        {k, %{p | first_at: now - 10}}
+      end)}
+    end)
+    Agent.update(frame, fn _ -> Enum.map(launch, &%{&1 | lat: 40.728, lon: -73.86, alt_ft: 2400, track_deg: 80}) end)
+    send(Poller, :ambient)
+    _ = Poller.status()
+    Agent.update(frame, fn _ -> Enum.map(launch, &%{&1 | lat: 40.75, lon: -73.80, alt_ft: 4000, track_deg: 60}) end)
+    send(Poller, :ambient)
+    assert Poller.status().departure.track == "south → east"
+    assert Poller.status().route == "river approach"
+    assert Actuator.mode() == :transparency
+    :sys.replace_state(Poller, &%{&1 | departure_polled_at: now - 31})
+    assert Poller.status().departure == nil
+  end
+
   # --- Ambient tracking (graph continues while ANC is off) --------------------------
   # The 60s timer is far too slow for a test, so drive the tick directly — that also
   # exercises the real handle_info clause rather than a test-only path.

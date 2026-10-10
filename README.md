@@ -140,6 +140,24 @@ Routes that do *not* work on macOS 26, all verified rather than assumed: the **S
 L2CAP** directly (macOS refuses third-party L2CAP channels on every PSM, signed or not —
 bluetoothd owns that link, which is why you ask it instead of bypassing it).
 
+## Departure track indicator
+
+The panel shows a departure-track line above the arrival approach. These are
+independent: river arrivals can coexist with departures passing near home.
+The personal LGA detector follows fresh airliner positions every five seconds on
+free feeds. It requires a climbing southbound launch within two nautical miles of
+LGA, followed by an observed eastward turn and altitude gain. Two completed tracks
+within 20 minutes establish **south → east**; an early tight turn and a later wide
+turn count as the same track.
+
+The line reports the closest **observed** distance to home among those completed
+tracks. Hover for the aircraft and altitude at that pass. This is a proximity
+measurement, not an aircraft-weight or loudness estimate, and sparse reception may
+miss the true closest point. Evidence expires after 20 minutes; stale feed data is
+marked unavailable. Departure inference does not change arrival history, icon
+altitude rules, or ANC activation, and does not run on metered FR24. The free fallback
+still shares its five-second API rate limit across all observers.
+
 ## Reclaiming AirPods after a phone call
 
 On **macOS 27**, Apple moved the Sound and Control Center menu items into

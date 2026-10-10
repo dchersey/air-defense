@@ -162,7 +162,7 @@ defmodule LgaPredictor.Poller do
 
   @impl true
   def handle_info(:ambient, state) do
-    {:noreply, state |> ambient_tick() |> schedule_ambient()}
+    {:noreply, state |> ambient_tick() |> departure_tick() |> schedule_ambient()}
   end
 
   def handle_info(:approach, state) do
@@ -446,6 +446,25 @@ defmodule LgaPredictor.Poller do
   # Runway samples older than this stop counting, so a genuine change is reflected
   # within roughly this long rather than being outvoted by stale observations forever.
   @approach_window_seconds 900
+
+  # Observe the takeoff and turn at the free feed's five-second ambient cadence.
+  # This is descriptive only: it never changes arrival classification or ANC.
+  defp departure_tick(state) do
+    config = state.config_fun.()
+    if metered?(active_provider(state)) do
+      state
+    else
+      with {_, _} = airport <- Map.get(config, :airport_coords),
+           {_, _} = home <- Map.get(config, :home_coords),
+           {:ok, aircraft} <- fetch(state, terminal_box(airport)) do
+        now = System.os_time(:second)
+        passes = LgaPredictor.DepartureTrack.observe(state.departure_passes, aircraft, airport, home, now)
+        %{state | departure_passes: passes, departure_polled_at: now}
+      else
+        _ -> state
+      end
+    end
+  end
 
   defp check_approach(state, config) do
     # Runways are optional: they only sharpen the log line. The route itself is measured
@@ -1409,6 +1428,10 @@ defmodule LgaPredictor.Poller do
       receiver_ok: if(active_provider(state) == :local, do: state.receiver_ok, else: nil),
       # The arrival route in use (a state, shown as a banner), when it began, and when
       # the classifier last looked. All nil on a metered provider, where it never runs.
+      departure: if(not metered?(active_provider(state)) and state.departure_polled_at != nil and
+        now - state.departure_polled_at <= 30,
+        do: LgaPredictor.DepartureTrack.summary(state.departure_passes, now), else: nil),
+      departure_polled_at: if(metered?(active_provider(state)), do: nil, else: state.departure_polled_at),
       route_evidence: if(metered?(active_provider(state)), do: nil, else: state.route_evidence),
       route: if(route_current?, do: path_label(state.active_path), else: nil),
       route_since: if(route_current?, do: state.path_since, else: nil),
@@ -1474,6 +1497,8 @@ defmodule LgaPredictor.Poller do
       # last seen in zone, which drives the amber idle icon.
       ambient_timer: nil,
       approach_timer: nil,
+      departure_passes: %{},
+      departure_polled_at: nil,
       ambient_seen: %{},
       ambient_low_at: nil,
       # Last classified arrival route, when it began, and the runway behind it. A route
