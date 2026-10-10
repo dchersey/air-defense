@@ -462,7 +462,7 @@ defmodule LgaPredictor.Poller do
         passes = LgaPredictor.DepartureTrack.observe(state.departure_passes, aircraft, airport, home, now)
         if Process.whereis(LgaPredictor.RouteHistory) do
           summary = LgaPredictor.DepartureTrack.summary(passes, now)
-          route = if summary.track != nil, do: :south_then_east
+          route = if :south_then_east in summary.confirmed_routes, do: :south_then_east
           LgaPredictor.RouteHistory.observe_departure(route, now)
         end
         %{state | departure_passes: passes, departure_polled_at: now}

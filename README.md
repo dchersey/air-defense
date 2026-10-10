@@ -149,13 +149,16 @@ The seven-day route chart also shows confirmed south-then-east departures as a
 narrow yellow strip at the right edge of each day. Departure history starts when
 this version is installed; it does not change the 30-day arrival percentages.
 
-The panel shows a departure-track line above the arrival approach. These are
+The panel shows a departure-track line above the arrival approach, recognizing
+south-then-east and north-then-west launches. Each requires two observed climbing
+departures with the corresponding turn; the most recently confirmed flow is shown.
+Only south-then-east activity appears in the yellow history strip. These are
 independent: river arrivals can coexist with departures passing near home.
 The personal LGA detector follows fresh airliner positions every five seconds on
-free feeds. It requires a climbing southbound launch within two nautical miles of
-LGA, followed by an observed eastward turn and altitude gain. Two completed tracks
-within 20 minutes establish **south → east**; an early tight turn and a later wide
-turn count as the same track.
+free feeds. It requires a climbing launch within two nautical miles of LGA,
+followed by the corresponding turn and altitude gain. Two completed tracks of
+the same route within 20 minutes establish that route; an early tight turn and
+a later wide turn count as the same track.
 
 The line reports the closest **observed** distance to home among those completed
 tracks. Hover for the aircraft and altitude at that pass. This is a proximity

@@ -21,6 +21,25 @@ defmodule LgaPredictor.DepartureTrackTest do
     assert D.summary(Map.delete(p,"tight"),180).track == nil
     assert D.summary(p,1380).track == nil
   end
+  test "northbound climbing launches must turn west, and cannot pool votes with south departures" do
+    north = observe(%{}, [ac("n1",40.79,-73.86,600,40), ac("n2",40.79,-73.86,600,40)], 200)
+    assert D.summary(north, 200).track == nil
+    north = observe(north, [ac("n1",40.81,-73.88,1800,280), ac("n2",40.81,-73.88,1800,280)], 220)
+    assert %{track: "north → west", count: 2} = D.summary(north, 255)
+    mixed = Map.merge(tracks(), north)
+    summary = D.summary(mixed, 255)
+    assert summary.track == "north → west"
+    assert Enum.sort(summary.confirmed_routes) == [:north_then_west, :south_then_east]
+    assert D.summary(Map.take(mixed, ["wide", "n1"]), 255).track == nil
+    assert D.summary(north, 1420).track == nil
+  end
+
+  test "northbound flight turning east is not labeled north then west" do
+    p = observe(%{}, [ac("n",40.79,-73.86,600,40)], 100)
+      |> observe([ac("n",40.81,-73.84,1800,80)], 120)
+    assert D.summary(p,160).count == 0
+  end
+
   test "requires a climbing launch near LGA followed by an observed eastward turn" do
     for a <- [ac("x",40.767,-73.885,600,220,-700), ac("x",40.70,-73.98,600,220),
               ac("x",40.767,-73.885,600,60), %{ac("x",40.767,-73.885,600,220) | pos_age_s: 30},
