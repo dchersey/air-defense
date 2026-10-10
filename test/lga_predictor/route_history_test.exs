@@ -9,10 +9,30 @@ defmodule LgaPredictor.RouteHistoryTest do
     on_exit(fn ->
       File.rm(path)
       File.rm(path <> ".tmp")
+      File.rm(path <> ".departures")
     end)
 
     start_supervised!({RouteHistory, path: path})
     %{path: path}
+  end
+
+  test "departure coverage persists independently without changing arrival shares", %{path: path} do
+    RouteHistory.observe(:river_approach, 100)
+    RouteHistory.observe(:river_approach, 160)
+    RouteHistory.observe_departure(:south_then_east, 100)
+    RouteHistory.observe_departure(:south_then_east, 130)
+    RouteHistory.observe_departure(nil, 160)
+    RouteHistory.observe_departure(:south_then_east, 1000)
+    RouteHistory.observe_departure(:south_then_east, 1030)
+    data = RouteHistory.snapshot(1030)
+    assert data.classified_seconds == 60
+    assert [%{start_at: 100, end_at: 160}, %{start_at: 1000, end_at: 1030}] = data.departure_intervals
+    stop_supervised!(RouteHistory)
+    start_supervised!({RouteHistory, path: path})
+    assert RouteHistory.snapshot(1030).departure_intervals == data.departure_intervals
+    RouteHistory.observe_departure(:south_then_east, 1060)
+    assert RouteHistory.snapshot(1060).departure_intervals == data.departure_intervals
+    assert RouteHistory.snapshot(9 * 86_400).departure_intervals == []
   end
 
   test "merges observations and calculates duration shares across route changes" do

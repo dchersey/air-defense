@@ -145,6 +145,10 @@ bluetoothd owns that link, which is why you ask it instead of bypassing it).
 
 ## Departure track indicator
 
+The seven-day route chart also shows confirmed south-then-east departures as a
+narrow yellow strip at the right edge of each day. Departure history starts when
+this version is installed; it does not change the 30-day arrival percentages.
+
 The panel shows a departure-track line above the arrival approach. These are
 independent: river arrivals can coexist with departures passing near home.
 The personal LGA detector follows fresh airliner positions every five seconds on

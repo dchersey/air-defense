@@ -17,7 +17,7 @@ struct RouteHistoryView: View {
           Spacer()
           Text("7 DAYS").font(.adMono).foregroundStyle(Palette.ink3)
         }
-        Text("Arrival routes · time of day")
+        Text("Routes · yellow edge = south → east departures")
           .font(.adMono).foregroundStyle(Palette.ink2)
         chart(now: context.date)
         Text(hovered ?? "Gray = no route detected · blank = unknown")
@@ -69,13 +69,20 @@ struct RouteHistoryView: View {
 
   private func dayColumn(_ day: Date, now: Date) -> some View {
     let blocks = RouteTimeline.blocks(model.routeHistory?.intervals ?? [], day: day)
-    return GeometryReader { _ in
+    let departures = RouteTimeline.blocks(model.routeHistory?.departureIntervals ?? [], day: day)
+    return GeometryReader { geo in
       ZStack(alignment: .topLeading) {
         Rectangle().fill(Palette.fill)
         ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
           Rectangle().fill(color(block.route).opacity(0.8))
             .frame(height: max(0.5, gridHeight * block.height))
             .offset(y: gridHeight * block.top)
+            .accessibilityLabel(description(block))
+        }
+        ForEach(Array(departures.enumerated()), id: \.offset) { _, block in
+          Rectangle().fill(Color.yellow)
+            .frame(width: 4, height: max(0.5, gridHeight * block.height))
+            .offset(x: max(0, geo.size.width - 4), y: gridHeight * block.top)
             .accessibilityLabel(description(block))
         }
         ForEach([0, 6, 12, 18, 24], id: \.self) { hour in
@@ -95,7 +102,8 @@ struct RouteHistoryView: View {
         switch phase {
         case .active(let point):
           let fraction = point.y / gridHeight
-          if let block = blocks.last(where: { fraction >= $0.top && fraction < $0.top + $0.height }) {
+          let candidates = point.x >= geo.size.width - 4 ? departures : blocks
+          if let block = candidates.last(where: { fraction >= $0.top && fraction < $0.top + $0.height }) {
             hovered = description(block)
           } else {
             hovered = "\(day.formatted(.dateTime.month(.abbreviated).day())) · no classification"
@@ -156,6 +164,7 @@ struct RouteHistoryView: View {
 
   private func label(_ route: String) -> String {
     switch route {
+    case "south_then_east": return "Departures south → east"
     case "low_approach": return "Low"
     case "high_approach": return "High"
     case "no_route_detected": return "No route detected"

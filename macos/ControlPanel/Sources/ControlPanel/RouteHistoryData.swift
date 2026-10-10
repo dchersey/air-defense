@@ -17,6 +17,7 @@ struct RouteHistoryResponse: Codable {
   let asOf: Int
   let windowStart: Int
   let intervals: [RouteInterval]
+  var departureIntervals: [RouteInterval]? = nil
   let shares: [RouteShare]
   let classifiedSeconds: Int
   let windowSeconds: Int

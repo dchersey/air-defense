@@ -460,6 +460,11 @@ defmodule LgaPredictor.Poller do
            {:ok, aircraft} <- fetch(state, terminal_box(airport)) do
         now = System.os_time(:second)
         passes = LgaPredictor.DepartureTrack.observe(state.departure_passes, aircraft, airport, home, now)
+        if Process.whereis(LgaPredictor.RouteHistory) do
+          summary = LgaPredictor.DepartureTrack.summary(passes, now)
+          route = if summary.track != nil, do: :south_then_east
+          LgaPredictor.RouteHistory.observe_departure(route, now)
+        end
         %{state | departure_passes: passes, departure_polled_at: now}
       else
         _ -> state

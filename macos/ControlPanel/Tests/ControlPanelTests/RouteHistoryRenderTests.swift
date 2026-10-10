@@ -31,6 +31,9 @@ struct RouteHistoryRenderTests {
     }
     let data = RouteHistoryResponse(asOf: Int(now.timeIntervalSince1970),
       windowStart: Int(now.timeIntervalSince1970) - 30 * 86400, intervals: spans,
+      departureIntervals: spans.enumerated().filter { $0.offset % 2 == 0 }.map { _, span in
+        RouteInterval(route: "south_then_east", startAt: span.startAt, endAt: span.endAt)
+      },
       shares: shares, classifiedSeconds: total, windowSeconds: 30 * 86400)
     for variant in ["light", "dark", "empty"] {
       model.routeHistory = variant == "empty"

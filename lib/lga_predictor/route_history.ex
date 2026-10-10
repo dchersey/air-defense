@@ -27,12 +27,18 @@ defmodule LgaPredictor.RouteHistory do
   def observe(route, at \\ System.os_time(:second)),
     do: GenServer.cast(__MODULE__, {:observe, route, at})
 
+  def observe_departure(route, at \\ System.os_time(:second)),
+    do: GenServer.cast(__MODULE__, {:departure, route, at})
+
   def snapshot(now \\ System.os_time(:second)), do: GenServer.call(__MODULE__, {:snapshot, now})
 
   @impl true
   def init(opts) do
     path = Keyword.get_lazy(opts, :path, &default_path/0)
-    {:ok, %{path: path, spans: load(path), previous: nil}}
+    departure_path = if path, do: path <> ".departures"
+    {:ok, %{path: path, spans: load(path), previous: nil,
+      departure_path: departure_path,
+      departures: load(departure_path, ["south_then_east"]), departure_previous: nil}}
   end
 
   @impl true
@@ -52,6 +58,19 @@ defmodule LgaPredictor.RouteHistory do
 
     if spans != state.spans, do: persist(state.path, spans)
     {:noreply, %{state | spans: spans, previous: {route, at}}}
+  end
+
+  def handle_cast({:departure, route, at}, state) do
+    route = if route == :south_then_east, do: "south_then_east"
+    spans = case state.departure_previous do
+      {previous, start} when not is_nil(previous) and at > start and at - start <= 90 ->
+        extend(state.departures, previous, start, at)
+      _ -> state.departures
+    end
+    # Eight elapsed days cover seven local calendar lanes even across autumn DST.
+    |> clip(at - 8 * 86_400, at)
+    if spans != state.departures, do: persist(state.departure_path, spans)
+    {:noreply, %{state | departures: spans, departure_previous: {route, at}}}
   end
 
   @impl true
@@ -82,6 +101,7 @@ defmodule LgaPredictor.RouteHistory do
        as_of: now,
        window_start: now - @window,
        intervals: Enum.reverse(spans),
+       departure_intervals: state.departures |> clip(now - 8 * 86_400, now) |> Enum.reverse(),
        shares: shares,
        classified_seconds: covered,
        window_seconds: @window
@@ -100,17 +120,18 @@ defmodule LgaPredictor.RouteHistory do
     |> Enum.map(&%{&1 | start_at: max(&1.start_at, start), end_at: min(&1.end_at, finish)})
   end
 
-  defp load(nil), do: []
+  defp load(path, states \\ @states)
+  defp load(nil, _states), do: []
 
-  defp load(path) do
+  defp load(path, states) do
     with {:ok, data} <- File.read(path),
          {:ok, %{"version" => 1, "intervals" => intervals}} when is_list(intervals) <-
            Jason.decode(data) do
       intervals
       |> Enum.flat_map(fn
         %{"route" => r, "start_at" => s, "end_at" => e}
-        when r in @states and is_integer(s) and is_integer(e) and e > s ->
-          [%{route: r, start_at: s, end_at: e}]
+        when is_integer(s) and is_integer(e) and e > s ->
+          if r in states, do: [%{route: r, start_at: s, end_at: e}], else: []
 
         _ ->
           []
