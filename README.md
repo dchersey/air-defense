@@ -93,7 +93,8 @@ Timing offsets can be set globally or per zone.
   limit. Successive observations keep ANC engaged while the aircraft is overhead; it
   releases when those holds expire after exit or loss of tracking.
 
-Both show amber while inbound and red while ANC is engaged. The arrival banner
+Both show amber while inbound and red while ANC is engaged. With no session active,
+a freshly detected high approach colors the menu bar airplane sky blue. The arrival banner
 has a clear-by countdown; live-tracked departures show a radar mark.
 
 [`config.example.json`](config.example.json) contains my two zone geometries as an

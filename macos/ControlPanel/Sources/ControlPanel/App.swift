@@ -58,6 +58,8 @@ struct ControlPanelApp: App {
   // Bright amber-gold for the "locked-on" inbound mark (luminous so it reads).
   private let lockedOnAmber = NSColor(srgbRed: 1.0, green: 0.74, blue: 0.22, alpha: 1)
 
+  private let passiveSkyBlue = NSColor(srgbRed: 0.39, green: 0.67, blue: 1.0, alpha: 1)
+
   // Bold green radar mark at the current pulse alpha (reading model.menuPulse
   // re-renders the label each timer tick → the soft pulse).
   private var monitoringImage: NSImage {
@@ -97,9 +99,14 @@ struct ControlPanelApp: App {
     case .engaged: return symbol(earpieceEngaged, tint: .systemRed)
     // Inbound = "locked on": the radar mark in bold amber, static (no pulse).
     case .pending: return symbol("dot.radiowaves.up.forward", tint: lockedOnAmber, bold: true)
-    // No session. Amber when low traffic has crossed the zone in the last 10 minutes:
-    // ANC is off and the sky says you would want it on. Plain template glyph otherwise.
+    // Passive high-approach observation uses the route's sky blue. Receiver/feed
+    // warnings and active ANC phases above retain priority.
     case .idle:
+      if !model.active, model.route == "high approach",
+         let polled = model.routePolledAt,
+         (0...90).contains(Int(Date().timeIntervalSince1970) - polled) {
+        return symbol("airplane", tint: passiveSkyBlue, bold: true)
+      }
       return symbol("airplane", tint: model.ambient ? lockedOnAmber : nil, bold: model.ambient)
     }
   }
