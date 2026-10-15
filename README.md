@@ -165,7 +165,8 @@ The line reports the closest **observed** distance to home among those completed
 tracks. Hover for the aircraft and altitude at that pass. This is a proximity
 measurement, not an aircraft-weight or loudness estimate, and sparse reception may
 miss the true closest point. Evidence expires after 20 minutes; stale feed data is
-marked unavailable. Departure inference does not change arrival history, icon
+marked unavailable. Observed climbs near LGA are remembered so departures that briefly level off
+cannot be mistaken for low arrivals. Departure inference does not change arrival history, icon
 altitude rules, or ANC activation, and does not run on metered FR24. The free fallback
 still shares its five-second API rate limit across all observers.
 

@@ -194,7 +194,7 @@ defmodule LgaPredictor.ApproachTest do
     # Departures climb out through the same airspace. Without the climb-rate gate a
     # departure passing over home at 1500 ft would look exactly like the low approach.
     test "ignores departures" do
-      assert seen([plane("dep", @over_home, 1500, 2400)]) == %{}
+      refute seen([plane("dep", @over_home, 1500, 2400)])["dep"].bound
     end
 
     # The loop's outbound leg — 250+ kt, descending through 3000 ft, 2-3 nm from the
@@ -388,6 +388,17 @@ defmodule LgaPredictor.ApproachTest do
       end)
       seen(fleet, passes, @now + dt)
     end)
+  end
+
+  test "departures leveling near LGA cannot become low arrival votes" do
+    # Observed DAL2321: climb then eastward turn, momentarily level at 2200 ft.
+    p = seen(Enum.map(~w(x y z), &plane(&1, {40.747467,-73.840576}, 1775, 1344)))
+    p = seen(Enum.map(~w(x y z), &plane(&1, {40.739685,-73.811584}, 2200, -64)), p, @now + 36)
+    assert Approach.evidence(p, @now + 200).votes == []
+    assert Approach.route(Map.merge(direct_fleet(), p), @now + 241) == :direct_approach
+    # Exclusion expires, so a later arrival by the same aircraft can vote.
+    p = seen(Enum.map(~w(x y z), &plane(&1, @over_home, 1500)), p, @now + 1500)
+    assert Approach.route(p, @now + 1700) == :low_approach
   end
 
   test "southwest straight-in is direct despite passing inside the broad low radius" do

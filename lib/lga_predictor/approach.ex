@@ -164,6 +164,18 @@ defmodule LgaPredictor.Approach do
           %{String.t() => pass()}
   def track_passes(passes, aircraft, airport, {hlat, hlon} = _home, now)
       when is_map(passes) and is_list(aircraft) do
+    # Remember a positively observed climb near the field. Dropping only that
+    # sample lets the same departure vote as an arrival as soon as it levels off.
+    passes = Enum.reduce(aircraft, passes, fn ac, acc ->
+      key = ac.hex || ac.callsign
+      if key && airliner?(ac) && departure_climb?(ac, airport) do
+        Map.put(acc, key, %{departure: true, closest_nm: nil, closest_alt: nil,
+          last_nm: nil, bound: false, last_seen: now})
+      else
+        acc
+      end
+    end)
+
     aircraft
     |> Enum.filter(&(airliner?(&1) and terminal?(&1, airport)))
     |> Enum.reduce(passes, fn ac, acc ->
@@ -176,20 +188,24 @@ defmodule LgaPredictor.Approach do
           prior =
             Map.get(acc, key, %{closest_nm: nil, closest_alt: nil, last_nm: nil, bound: false, last_seen: now})
 
-          river = track_river(Map.get(prior, :river), ac, now) |> confirm_river(ac, airport)
-          high = track_high(Map.get(prior, :high), ac, airport, {hlat, hlon}, now)
-          nearer? = is_nil(prior.closest_nm) or d < prior.closest_nm
+          if Map.get(prior, :departure, false) and now - prior.last_seen < @retention_seconds do
+            Map.put(acc, key, %{prior | last_seen: now})
+          else
+            river = track_river(Map.get(prior, :river), ac, now) |> confirm_river(ac, airport)
+            high = track_high(Map.get(prior, :high), ac, airport, {hlat, hlon}, now)
+            nearer? = is_nil(prior.closest_nm) or d < prior.closest_nm
 
-          Map.put(acc, key, %{
-            closest_nm: if(nearer?, do: d, else: prior.closest_nm),
-            closest_alt: if(nearer?, do: ac.alt_ft, else: prior.closest_alt),
-            last_nm: d,
-            bound: prior.bound or bound_here?(ac, airport) or river_progress?(river) or high_progress?(high),
-            last_seen: now,
-            river: river,
-            high: high,
-            direct: track_direct(Map.get(prior, :direct), ac, airport, now)
-          })
+            Map.put(acc, key, %{
+              closest_nm: if(nearer?, do: d, else: prior.closest_nm),
+              closest_alt: if(nearer?, do: ac.alt_ft, else: prior.closest_alt),
+              last_nm: d,
+              bound: prior.bound or bound_here?(ac, airport) or river_progress?(river) or high_progress?(high),
+              last_seen: now,
+              river: river,
+              high: high,
+              direct: track_direct(Map.get(prior, :direct), ac, airport, now)
+            })
+          end
       end
     end)
     |> Map.filter(fn {_k, p} -> p.last_seen > now - @retention_seconds end)
@@ -370,6 +386,13 @@ defmodule LgaPredictor.Approach do
     do: Enum.any?(@airliner_type_prefixes, &String.starts_with?(t, &1))
 
   def airliner?(_ac), do: false
+
+  defp departure_climb?(ac, {alat, alon}) do
+    is_number(ac.lat) and is_number(ac.lon) and is_number(ac.alt_ft) and
+      fresh_position?(ac) and ac.alt_ft > 0 and ac.alt_ft < @core_ceiling_ft and
+      (ac.vspeed_fpm || 0) >= @climbing_fpm and
+      distance_nm(ac.lat, ac.lon, alat, alon) <= @core_radius_nm
+  end
 
   defp terminal?(ac, {alat, alon}) do
     is_number(ac.lat) and is_number(ac.lon) and is_number(ac.alt_ft) and
