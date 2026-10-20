@@ -23,9 +23,10 @@ defmodule LgaPredictor.Poller do
   """
 
   use GenServer
+  alias LgaPredictor.Customizations.LGA
   require Logger
 
-  alias LgaPredictor.{Actuator, Approach, ConfigStore, Geo, History, KeepAlive, Predictor}
+  alias LgaPredictor.{Actuator, ConfigStore, Geo, History, KeepAlive, Predictor}
 
   @credits_per_aircraft 6
 
@@ -106,6 +107,7 @@ defmodule LgaPredictor.Poller do
 
   @doc "Session status: active?, per-zoneset session state, polls, credits."
   def status, do: GenServer.call(__MODULE__, :status)
+  def reset_customization, do: GenServer.call(__MODULE__, :reset_customization)
 
   def quiet_check, do: GenServer.call(__MODULE__, :quiet_check, 15_000)
 
@@ -145,10 +147,21 @@ defmodule LgaPredictor.Poller do
 
   def handle_call(:status, _from, state), do: {:reply, status_of(state), state}
 
+  def handle_call(:reset_customization, _from, state) do
+    now = System.os_time(:second)
+    record_route_observation(nil, now)
+    if Process.whereis(LgaPredictor.RouteHistory), do: LgaPredictor.RouteHistory.observe_departure(nil, now)
+    {:reply, :ok, %{state | approach_samples: [], approach_passes: %{},
+      approach_polled_at: nil, departure_passes: %{}, departure_polled_at: nil,
+      route_confirmed: false, route_evidence: nil, active_path: nil, path_since: nil, active_runway: nil,
+      route_continuity: LgaPredictor.RouteContinuity.new()}}
+  end
+
+
   def handle_call(:quiet_check, _from, state) do
     config = state.config_fun.()
     zones = Enum.filter(config.zonesets, &Map.has_key?(state.sessions, &1.id))
-    direct = state.route_confirmed and state.active_path == :direct_approach
+    direct = LGA.enabled?(config) and state.route_confirmed and state.active_path == :direct_approach
     clear = zones != [] and state.headphones_connected and
       Enum.all?(status_of(state).zonesets, &(&1.phase != "engaged" and (direct or &1.phase != "armed"))) and
       Enum.all?(zones, fn zone ->
@@ -372,7 +385,7 @@ defmodule LgaPredictor.Poller do
   # the whole terminal area, which would be a credit sink on a paid feed.
   defp approach_tick(state) do
     config = state.config_fun.()
-    if metered?(active_provider(state)) do
+    if not LGA.enabled?(config) or metered?(active_provider(state)) do
       record_route_observation(nil, System.os_time(:second))
       state
     else
@@ -454,14 +467,14 @@ defmodule LgaPredictor.Poller do
       %{
         state
         | ambient_seen: Map.put(state.ambient_seen, key, now),
-          ambient_low_at: if(alert_altitude?(ac.alt_ft), do: now, else: state.ambient_low_at)
+          ambient_low_at: if((not LGA.enabled?(state.config_fun.()) and is_number(ac.alt_ft)) or alert_altitude?(ac.alt_ft), do: now, else: state.ambient_low_at)
       }
     end
   end
 
   # Unknown altitude never raises the flag — an absent reading is not evidence, and
   # `overhead_band/1` returns nil for it rather than guessing a band.
-  defp alert_altitude?(alt), do: Approach.overhead_band(alt) == :low_approach
+  defp alert_altitude?(alt), do: LGA.low_overhead?(alt)
 
   # Which arrival route the airport is using, recorded only when it CHANGES.
   #
@@ -490,16 +503,16 @@ defmodule LgaPredictor.Poller do
   # This is descriptive only: it never changes arrival classification or ANC.
   defp departure_tick(state) do
     config = state.config_fun.()
-    if metered?(active_provider(state)) do
+    if not LGA.enabled?(config) or metered?(active_provider(state)) do
       state
     else
       with {_, _} = airport <- Map.get(config, :airport_coords),
            {_, _} = home <- Map.get(config, :home_coords),
            {:ok, aircraft} <- fetch(state, terminal_box(airport)) do
         now = System.os_time(:second)
-        passes = LgaPredictor.DepartureTrack.observe(state.departure_passes, aircraft, airport, home, now)
+        passes = LGA.observe_departures(state.departure_passes, aircraft, airport, home, now)
         if Process.whereis(LgaPredictor.RouteHistory) do
-          summary = LgaPredictor.DepartureTrack.summary(passes, now)
+          summary = LGA.departure_summary(passes, now)
           route = if :south_then_east in summary.confirmed_routes, do: :south_then_east
           LgaPredictor.RouteHistory.observe_departure(route, now)
         end
@@ -523,18 +536,18 @@ defmodule LgaPredictor.Poller do
       flying = Enum.reject(aircraft, &ramp?/1)
 
       tracks =
-        (flying |> Approach.arrival_tracks({alat, alon}) |> Enum.map(&{now, &1})) ++
+        (flying |> LGA.arrival_tracks({alat, alon}) |> Enum.map(&{now, &1})) ++
           state.approach_samples
         |> Enum.filter(fn {t, _} -> t > cutoff end)
         |> Enum.take(60)
 
-      passes = Approach.track_passes(state.approach_passes, flying, {alat, alon}, home, now)
+      passes = LGA.track_passes(state.approach_passes, flying, {alat, alon}, home, now)
       state = %{state | approach_samples: tracks, approach_passes: passes, approach_polled_at: now}
 
-      runway = Approach.runway_from_tracks(Enum.map(tracks, &elem(&1, 1)), runways)
-      evidence = Approach.evidence(passes, now)
+      runway = LGA.runway_from_tracks(Enum.map(tracks, &elem(&1, 1)), runways)
+      evidence = LGA.evidence(passes, now)
       {path, continuity} = LgaPredictor.RouteContinuity.observe(
-        state.route_continuity, Approach.route(passes, now), evidence, now)
+        state.route_continuity, LGA.route(passes, now), evidence, now)
       state = %{state | route_continuity: continuity, route_evidence: Map.drop(evidence, [:votes])}
       record_route_observation(path, now)
       decide_path(path, %{state | route_confirmed: path != nil}, runway)
@@ -946,7 +959,6 @@ defmodule LgaPredictor.Poller do
   # ANC ramps up over its latency as the plane proceeds toward the louder overhead
   # centre). Departures: 6, tuned on-aircraft. The slider sits at 0 and shifts both.
   @arrival_engage_bias 0
-  @departure_engage_bias 6
 
   # Effective ANC timing offsets: a zoneset's own offset overrides the global one
   # (nil → global). Arrival and departure zones have different geometry, so a single
@@ -1149,7 +1161,7 @@ defmodule LgaPredictor.Poller do
     # NEGATIVE (engage_delta > latency means "engage that many seconds AFTER the plane
     # reaches the zone" — a deliberate late engage the user tuned for arrivals).
     lead =
-      (config.anc_latency_seconds || 0.0) - engage_delta(zoneset, config) - @departure_engage_bias
+      (config.anc_latency_seconds || 0.0) - engage_delta(zoneset, config) - if(LGA.enabled?(config), do: LGA.departure_engage_bias(), else: 0)
 
     zones = zoneset.anc_zones
 
@@ -1460,7 +1472,7 @@ defmodule LgaPredictor.Poller do
         }
       end)
 
-    route_current? = state.route_confirmed and is_integer(state.approach_polled_at) and
+    route_current? = LGA.enabled?(config) and state.route_confirmed and is_integer(state.approach_polled_at) and
       now - state.approach_polled_at <= 90 and not metered?(active_provider(state))
 
     ends = state.sessions |> Map.values() |> Enum.map(& &1.ends_at)
@@ -1488,6 +1500,7 @@ defmodule LgaPredictor.Poller do
       |> Enum.min_by(& &1.exits_at, fn -> nil end)
 
     %{
+      route_profile: if(LGA.enabled?(config), do: "lga_personal", else: "basic"),
       active?: map_size(state.sessions) > 0,
       polls: state.polls,
       # Low traffic seen over the ANC zone recently while ANC was NOT running.
@@ -1496,14 +1509,14 @@ defmodule LgaPredictor.Poller do
       receiver_ok: if(active_provider(state) == :local, do: state.receiver_ok, else: nil),
       # The arrival route in use (a state, shown as a banner), when it began, and when
       # the classifier last looked. All nil on a metered provider, where it never runs.
-      departure: if(not metered?(active_provider(state)) and state.departure_polled_at != nil and
+      departure: if(LGA.enabled?(config) and not metered?(active_provider(state)) and state.departure_polled_at != nil and
         now - state.departure_polled_at <= 30,
-        do: LgaPredictor.DepartureTrack.summary(state.departure_passes, now), else: nil),
-      departure_polled_at: if(metered?(active_provider(state)), do: nil, else: state.departure_polled_at),
-      route_evidence: if(metered?(active_provider(state)), do: nil, else: state.route_evidence),
+        do: LGA.departure_summary(state.departure_passes, now), else: nil),
+      departure_polled_at: if(not LGA.enabled?(config) or metered?(active_provider(state)), do: nil, else: state.departure_polled_at),
+      route_evidence: if(not LGA.enabled?(config) or metered?(active_provider(state)), do: nil, else: state.route_evidence),
       route: if(route_current?, do: path_label(state.active_path), else: nil),
       route_since: if(route_current?, do: state.path_since, else: nil),
-      route_polled_at: if(metered?(active_provider(state)), do: nil, else: state.approach_polled_at),
+      route_polled_at: if(not LGA.enabled?(config) or metered?(active_provider(state)), do: nil, else: state.approach_polled_at),
       approx_credits: state.credits,
       feed_ok: feed_ok?(state),
       # What we're actually fetching from, and why it differs from the configured

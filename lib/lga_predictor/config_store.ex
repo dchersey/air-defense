@@ -17,6 +17,7 @@ defmodule LgaPredictor.ConfigStore do
   alias LgaPredictor.Geo
 
   @global_defaults %{
+    "route_profile" => "basic",
     "global_ceiling_ft" => 6000,
     "anc_latency_seconds" => 2.0,
     "max_dwell_seconds" => 30,
@@ -94,6 +95,9 @@ defmodule LgaPredictor.ConfigStore do
   """
   def put(name \\ __MODULE__, raw) when is_map(raw), do: GenServer.call(name, {:put, raw})
 
+  def export(name \\ __MODULE__), do: LgaPredictor.SettingsTransfer.export(raw(name))
+  def import_settings(name \\ __MODULE__, packet), do: GenServer.call(name, {:import, packet})
+
   @doc "Raw zonesets (string keys, original GeoJSON) — for listing + copy-out."
   def list_zonesets(name \\ __MODULE__), do: GenServer.call(name, :list_zonesets)
 
@@ -142,6 +146,21 @@ defmodule LgaPredictor.ConfigStore do
 
       {:error, _} = err ->
         {:reply, err, state}
+    end
+  end
+
+  def handle_call({:import, packet}, _from, state) do
+    with {:ok, incoming} <- LgaPredictor.SettingsTransfer.decode(packet),
+         merged = Map.merge(state.raw, Map.merge(LgaPredictor.SettingsTransfer.export(@global_defaults).settings, normalize_keys(incoming))),
+         :ok <- validate(merged) do
+      # Derive before committing so malformed geometry cannot leave a broken file.
+      merged = Map.put(merged, "version", state.raw["version"] + 1)
+      derived = derive(merged)
+      write!(state.path <> ".before-import", state.raw)
+      write!(state.path, merged)
+      {:reply, {:ok, derived}, %{state | raw: merged}}
+    else
+      {:error, _} = error -> {:reply, error, state}
     end
   end
 
@@ -197,9 +216,18 @@ defmodule LgaPredictor.ConfigStore do
   defp load_or_default(path) do
     case File.read(path) do
       {:ok, body} ->
-        raw = Map.merge(@global_defaults, Jason.decode!(body))
+        saved = Jason.decode!(body)
+        original = saved
+        # Preserve the original personal installation, not arbitrary new locations.
+        saved = if not Map.has_key?(saved, "route_profile") and
+          is_number(saved["home_lat"]) and abs(saved["home_lat"] - 40.722832) < 0.01 and
+          is_number(saved["home_lon"]) and abs(saved["home_lon"] + 73.857549) < 0.01 and
+          is_number(saved["airport_lat"]) and abs(saved["airport_lat"] - 40.7772) < 0.01 and
+          is_number(saved["airport_lon"]) and abs(saved["airport_lon"] + 73.8726) < 0.01,
+          do: Map.put(saved, "route_profile", "lga_personal"), else: saved
+        raw = Map.merge(@global_defaults, saved)
         migrated = migrate_legacy(raw)
-        if migrated != raw, do: write!(path, migrated)
+        if migrated != original, do: write!(path, migrated)
         migrated
 
       {:error, _} ->
@@ -259,6 +287,7 @@ defmodule LgaPredictor.ConfigStore do
   # Accept only the keys we manage; ignore unknown top-level keys.
   defp normalize_keys(incoming) do
     Map.take(incoming, [
+      "route_profile",
       "global_ceiling_ft",
       "anc_latency_seconds",
       "max_dwell_seconds",
@@ -282,6 +311,11 @@ defmodule LgaPredictor.ConfigStore do
 
   defp validate(raw) do
     cond do
+      raw["route_profile"] not in ["basic", "lga_personal"] ->
+        {:error, "route_profile must be basic or lga_personal"}
+      is_nil(raw["home_lat"]) != is_nil(raw["home_lon"]) or
+        is_nil(raw["airport_lat"]) != is_nil(raw["airport_lon"]) ->
+        {:error, "Provide both latitude and longitude, or leave both blank"}
       not is_number(raw["global_ceiling_ft"]) ->
         {:error, "global_ceiling_ft must be a number"}
 
@@ -333,8 +367,18 @@ defmodule LgaPredictor.ConfigStore do
       raw["provider"] == "local" and not String.starts_with?(raw["local_feed_url"], "http") ->
         {:error, "local_feed_url must be an http(s) URL"}
 
+      Enum.any?(["global_ceiling_ft", "anc_latency_seconds", "max_dwell_seconds", "acoustic_decay_seconds"],
+        fn key -> not is_number(raw[key]) or raw[key] < 0 end) ->
+        {:error, "Altitude and duration settings must be non-negative numbers"}
+
       not is_list(raw["zonesets"]) ->
         {:error, "zonesets must be a list"}
+
+      Enum.any?(raw["zonesets"], &(not is_map(&1))) ->
+        {:error, "Each zoneset must be an object"}
+
+      length(Enum.uniq_by(raw["zonesets"], & &1["id"])) != length(raw["zonesets"]) ->
+        {:error, "Zone IDs must be unique"}
 
       true ->
         Enum.reduce_while(raw["zonesets"], :ok, fn zs, _ ->
@@ -346,10 +390,21 @@ defmodule LgaPredictor.ConfigStore do
     end
   end
 
+  defp validate_zoneset(zs) when not is_map(zs), do: {:error, "zoneset must be an object"}
   defp validate_zoneset(zs) do
     cond do
-      not is_binary(zs["id"]) ->
+      not is_binary(zs["id"]) or zs["id"] == "" ->
         {:error, "zoneset.id required"}
+
+      not is_nil(zs["enabled"]) and not is_boolean(zs["enabled"]) ->
+        {:error, "zoneset.enabled must be true or false"}
+
+      Enum.any?(["assume_delay_seconds", "assume_duration_seconds", "altitude_ceiling_ft", "min_gspeed_kt", "accel_kt_s"],
+        fn key -> zs[key] != nil and (not is_number(zs[key]) or zs[key] < 0) end) ->
+        {:error, "Zone altitude, speed and duration values must be non-negative numbers"}
+
+      zs["poll_interval_ms"] != nil and (not is_number(zs["poll_interval_ms"]) or zs["poll_interval_ms"] < 100) ->
+        {:error, "Zone polling interval must be at least 100 ms"}
 
       not is_binary(zs["name"]) ->
         {:error, "zoneset.name required"}
@@ -390,7 +445,13 @@ defmodule LgaPredictor.ConfigStore do
   end
 
   defp valid_geojson?(feature) do
-    match?({:polygon, [_ | _]}, to_polygon(feature))
+    case to_polygon(feature) do
+      {:polygon, points} when length(points) >= 3 ->
+        Enum.all?(points, fn {lat, lon} ->
+          is_number(lat) and is_number(lon) and abs(lat) <= 90 and abs(lon) <= 180
+        end)
+      _ -> false
+    end
   rescue
     _ -> false
   end
@@ -399,6 +460,7 @@ defmodule LgaPredictor.ConfigStore do
 
   defp derive(raw) do
     %{
+      route_profile: if(raw["route_profile"] == "lga_personal", do: :lga_personal, else: :basic),
       global_ceiling_ft: raw["global_ceiling_ft"],
       anc_latency_seconds: raw["anc_latency_seconds"],
       max_dwell_seconds: raw["max_dwell_seconds"],

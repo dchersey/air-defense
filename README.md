@@ -484,3 +484,15 @@ have a commercial use in mind, get in touch and we can sort something out.
 ## License
 
 Source-available under the **MIT License with the Commons Clause** — free to use, modify, and redistribute for any **noncommercial** purpose; you may not sell the software. See [LICENSE](LICENSE).
+
+## Monitoring setup and customizations
+
+New installations use **Basic monitoring**: configure your receiver, home location,
+noise timing and detection/ANC zones without enabling personal LGA route recognition.
+Settings → Monitoring setup also provides a reviewed settings import and credential-free
+export. The existing receiver and zone editors remain available.
+
+**LGA / Rego Park** is an optional source-level customization, isolated under
+`lib/lga_predictor/customizations/`. Adapt it directly or with AI assistance; contributions
+are welcome. See [customization and portable-settings guide](docs/customizations.md)
+for boundaries, migration, validation, backup and extension details.

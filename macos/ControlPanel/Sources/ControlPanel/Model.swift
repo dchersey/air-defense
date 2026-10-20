@@ -108,6 +108,7 @@ struct StatusResponse: Codable {
   let departure: DepartureSummary?
   let departurePolledAt: Int?
   let route: String?
+  var routeProfile: String? = nil
   let routeEvidence: RouteEvidence?
   let routeSince: Int?
   let routePolledAt: Int?
@@ -180,6 +181,7 @@ final class StatusModel {
   var departure: DepartureSummary?
   var departurePolledAt: Int?
   var route: String?
+  var routeProfile = "basic"
   var routeEvidence: RouteEvidence?
   var routeSince: Int?
   var routePolledAt: Int?
@@ -313,6 +315,7 @@ final class StatusModel {
       departure = status.departure
       departurePolledAt = status.departurePolledAt
       routeEvidence = status.routeEvidence
+      routeProfile = status.routeProfile ?? "basic"
       route = status.route
       routeSince = status.routeSince
       routePolledAt = status.routePolledAt

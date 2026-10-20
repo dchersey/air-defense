@@ -290,11 +290,13 @@ struct PanelView: View {
       StatusBanner(model: model)
       watchZones
       ActivityStrip(model: model)
+      if model.routeProfile != "basic" {
       Button { showRouteHistory = true } label: {
         Label("Route history · 7 days", systemImage: "calendar")
           .font(.adMono).foregroundStyle(Palette.accent)
       }
       .buttonStyle(.plain)
+      }
       Divider().overlay(Palette.hairline)
       footer
     }
@@ -302,7 +304,7 @@ struct PanelView: View {
 
   private var watchZones: some View {
     VStack(alignment: .leading, spacing: 0) {
-      sectionLabel("Watch zones · LGA")
+      sectionLabel(model.routeProfile == "lga_personal" ? "Watch zones · LGA" : "Watch zones")
         .padding(.bottom, 4)
 
       if !model.reachable {
@@ -486,7 +488,7 @@ private struct StatusBanner: View {
       // and stops polling, so the model goes static and a refresh-driven countdown
       // would freeze (the amber phase only churns because it's fast-polling).
       TimelineView(.periodic(from: .now, by: 1)) { _ in
-        let route = model.inboundRoute ?? "LGA traffic"
+        let route = model.inboundRoute ?? "Aircraft"
         let eta =
           model.inboundAt.map { " Cancellation engages in \(mmss($0))." }
           ?? " Cancellation arming."
@@ -499,7 +501,7 @@ private struct StatusBanner: View {
       // are live-tracked (no reliable exit prediction) → a radar mark instead. Same
       // 1 s timeline so the clear-by countdown ticks down through the lock-on hold.
       TimelineView(.periodic(from: .now, by: 1)) { _ in
-        let route = model.overheadRoute ?? "LGA traffic"
+        let route = model.overheadRoute ?? "Aircraft"
         if let at = model.overheadAt {
           banner(
             icon: "headphones", tint: Palette.stop, bg: Palette.stopSoft,
@@ -1073,10 +1075,13 @@ private struct SettingsScreen: View {
   }
 
   var body: some View {
+    ScrollView {
     VStack(alignment: .leading, spacing: 14) {
       ScreenHeader(title: "Settings", onBack: onBack)
       Divider().overlay(Palette.hairline)
 
+      MonitoringSetup(model: model)
+      Divider().overlay(Palette.hairline)
       TimingOffsets(model: model)
       Divider().overlay(Palette.hairline)
 
@@ -1114,6 +1119,7 @@ private struct SettingsScreen: View {
         }
       }
     }
+    }.frame(maxHeight: 620)
   }
 
   private func toggleRow(_ title: String, subtitle: String, isOn: Binding<Bool>) -> some View {

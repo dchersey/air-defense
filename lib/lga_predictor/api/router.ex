@@ -116,13 +116,34 @@ defmodule LgaPredictor.API.Router do
     end
   end
 
+  get "/api/settings/export" do
+    send_json(conn, 200, ConfigStore.export())
+  end
+
+  post "/api/settings/import" do
+    if Poller.status().active? do
+      send_json(conn, 409, %{error: "Stop monitoring before importing settings"})
+    else
+      case ConfigStore.import_settings(conn.body_params) do
+        {:ok, _} ->
+          Poller.reset_customization()
+          send_json(conn, 200, %{ok: true})
+        {:error, reason} -> send_json(conn, 422, %{error: to_string(reason)})
+      end
+    end
+  end
+
   get "/api/config" do
     send_json(conn, 200, config_payload())
   end
 
   put "/api/config" do
+    before = ConfigStore.get()
     case ConfigStore.put(conn.body_params) do
-      {:ok, _derived} -> send_json(conn, 200, %{ok: true, config: config_payload()})
+      {:ok, derived} ->
+        if before.route_profile != derived.route_profile or before.home_coords != derived.home_coords or
+          before.airport_coords != derived.airport_coords, do: Poller.reset_customization()
+        send_json(conn, 200, %{ok: true, config: config_payload()})
       {:error, reason} -> send_json(conn, 422, %{error: to_string(reason)})
     end
   end
@@ -246,6 +267,7 @@ defmodule LgaPredictor.API.Router do
       ambient: Map.get(status, :ambient, false),
       receiver_ok: Map.get(status, :receiver_ok),
       # Arrival route banner: the route in use, since when, and the classifier's last poll.
+      route_profile: Map.get(status, :route_profile, "basic"),
       route: Map.get(status, :route),
       route_evidence: Map.get(status, :route_evidence),
       route_since: Map.get(status, :route_since),

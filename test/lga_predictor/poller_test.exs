@@ -28,6 +28,7 @@ defmodule LgaPredictor.PollerTest do
   # One enabled zoneset, engine-shaped (as ConfigStore.get would return).
   defp config(opts \\ []) do
     %{
+      route_profile: :lga_personal,
       global_ceiling_ft: Keyword.get(opts, :ceiling, 6000),
       anc_latency_seconds: Keyword.get(opts, :latency, 0.0),
       max_dwell_seconds: Keyword.get(opts, :max_dwell, 30),
@@ -81,6 +82,23 @@ defmodule LgaPredictor.PollerTest do
     ]
 
     start_supervised!({Poller, Keyword.merge(defaults, opts)})
+  end
+
+  test "basic monitoring keeps ANC but disables personal route observers and stale labels" do
+    start(config_fun: fn -> Map.put(config(trigger: :assume), :route_profile, :basic) end)
+    :sys.replace_state(Poller, &%{&1 | route_confirmed: true, active_path: :low_approach,
+      approach_polled_at: System.os_time(:second), departure_polled_at: System.os_time(:second)})
+    :ok = Poller.start_session()
+    assert Actuator.mode() == :anc
+    send(Poller, :approach)
+    send(Poller, :ambient)
+    status = Poller.status()
+    assert status.route_profile == "basic"
+    assert status.route == nil
+    assert status.route_polled_at == nil
+    assert status.departure == nil
+    assert status.departure_polled_at == nil
+    assert :sys.get_state(Poller).approach_passes == %{}
   end
 
   test "confirmed direct near-misses may clear an armed alert only with fresh safe trajectories" do
