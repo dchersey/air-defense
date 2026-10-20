@@ -250,7 +250,11 @@ defmodule LgaPredictor.Approach do
   """
   @spec route(%{String.t() => pass()}, integer()) :: :low_approach | :high_approach | :river_approach | :direct_approach | nil
   def route(passes, now) when is_map(passes) and is_integer(now) do
-    votes = Enum.map(evidence(passes, now).votes, & &1.route)
+    evidence = evidence(passes, now).votes
+    votes = Enum.map(evidence, & &1.route)
+    latest_noisy = evidence |> Enum.filter(&(&1.route in [:low_approach, :high_approach]))
+      |> Enum.map(& &1.at) |> Enum.max(fn -> -1 end)
+    newer_direct = Enum.count(evidence, &(&1.route == :direct_approach and &1.at > latest_noisy))
     low = Enum.count(votes, &(&1 == :low_approach))
     high = Enum.count(votes, &(&1 == :high_approach))
     river = Enum.count(votes, &(&1 == :river_approach))
@@ -263,6 +267,9 @@ defmodule LgaPredictor.Approach do
     # them, with at most one stray near-home pass. Two near-home passes alongside three
     # river ones is a changeover in progress, and the honest answer is not yet.
     cond do
+      # A new bank of direct arrivals supersedes older noisy passes still retained
+      # in the twenty-minute evidence window. Concurrent overhead traffic still wins.
+      newer_direct >= @min_landings and now - latest_noisy >= 300 -> :direct_approach
       low >= @min_landings -> :low_approach
       high >= @min_landings -> :high_approach
       direct >= @min_landings and low + high <= @river_max_strays -> :direct_approach
@@ -364,7 +371,11 @@ defmodule LgaPredictor.Approach do
     along = north * :math.cos(heading) + east * :math.sin(heading)
     across = abs(east * :math.cos(heading) - north * :math.sin(heading))
 
-    matches = along >= 4.0 and along <= 12.0 and across <= 0.65 and
+    # Seed outside the shared final, then follow it inward. Otherwise a late
+    # first sighting at 4.2 nm can never gain its second confirming observation.
+    continuing = prior != nil and now - prior.last_at <= 90
+    minimum_along = if continuing, do: 1.5, else: 4.0
+    matches = along >= minimum_along and along <= 12.0 and across <= 0.65 and
       is_number(ac.track_deg) and angular_distance(ac.track_deg, @direct_track_deg) <= 15 and
       is_number(ac.gspeed_kt) and ac.gspeed_kt >= 100 and ac.gspeed_kt <= 220 and
       ac.alt_ft <= 4000

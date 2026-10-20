@@ -407,6 +407,20 @@ defmodule LgaPredictor.ApproachTest do
     assert Approach.route(passes, @now + 241) == :direct_approach
   end
 
+  test "direct tracks first seen near four miles can confirm while continuing northeast" do
+    p = seen(Enum.map(~w(a b c), &%{plane(&1, direct_point(4.2), 1500) | track_deg: 32}))
+    p = seen(Enum.map(~w(a b c), &%{plane(&1, direct_point(3.2), 1200) | track_deg: 32}), p, @now + 30)
+    assert Approach.route(p, @now + 200) == :direct_approach
+  end
+
+  test "three newer direct passes replace an older low bank, but not concurrent low traffic" do
+    low = landed_via(~w(a b c), @over_home, 1500)
+    direct = direct_fleet() |> Map.new(fn {k,p} -> {k, %{p | last_seen: @now + 300}} end)
+    assert Approach.route(Map.merge(low, direct), @now + 450) == :direct_approach
+    concurrent = low |> Map.new(fn {k,p} -> {k, %{p | last_seen: @now + 310}} end)
+    assert Approach.route(Map.merge(concurrent, direct), @now + 450) == :low_approach
+  end
+
   test "one corridor sample cannot prove a direct route" do
     passes = seen(Enum.map(~w(a b c), &plane(&1, direct_point(6), 2000)))
     passes = seen(Enum.map(~w(a b c), &plane(&1, direct_point(2), 600)), passes, @now + 120)

@@ -33,6 +33,20 @@ struct QuietAlertTests {
     #expect(m.quietAlertDue(at: start.addingTimeInterval(1802), enabled: true))
   }
 
+  @MainActor @Test func confirmedDirectPendingCanRequestFreshCheckWithoutConsumingAlert() {
+    let m = model()
+    let start = Date(timeIntervalSince1970: 10000)
+    #expect(!m.quietAlertDue(at: start, enabled: true))
+    m.ancPhase = "armed"
+    m.route = "direct approach"
+    let now = start.addingTimeInterval(901)
+    #expect(!m.quietAlertDue(at: now, enabled: true))
+    #expect(m.quietAlertDue(at: now, enabled: true, markAlert: false, allowDirectPending: true))
+    #expect(m.quietAlertDue(at: now, enabled: true, markAlert: false, allowDirectPending: true))
+    m.route = "low approach"
+    #expect(!m.quietAlertDue(at: now, enabled: true, markAlert: false, allowDirectPending: true))
+  }
+
   @MainActor @Test func actualEngagementRestartsQuietWindow() {
     let m = model()
     let start = Date(timeIntervalSince1970: 10000)

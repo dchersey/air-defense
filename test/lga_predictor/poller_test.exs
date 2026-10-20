@@ -83,6 +83,22 @@ defmodule LgaPredictor.PollerTest do
     start_supervised!({Poller, Keyword.merge(defaults, opts)})
   end
 
+  test "confirmed direct near-misses may clear an armed alert only with fresh safe trajectories" do
+    incoming = %{inbound() | lat: 40.712}
+    {:ok, frame} = Agent.start_link(fn -> [incoming] end)
+    start(config_fun: fn -> config(trigger: :assume, zone_interval: 30_000) end,
+      fetcher: fn _ -> {:ok, Agent.get(frame, & &1)} end)
+    :ok = Poller.start_session()
+    :sys.replace_state(Poller, &%{&1 | route_confirmed: true, active_path: :direct_approach})
+    refute Poller.quiet_check().clear
+    Agent.update(frame, fn _ -> [%{incoming | track_deg: 180, pos_age_s: 1}] end)
+    assert Poller.quiet_check().clear
+    Agent.update(frame, fn _ -> [] end)
+    refute Poller.quiet_check().clear
+    Agent.update(frame, fn _ -> [%{incoming | track_deg: 180, pos_age_s: 60}] end)
+    refute Poller.quiet_check().clear
+  end
+
   test "quiet announcement checks fresh traffic beyond the normal arming window and fails closed" do
     {:ok, result} = Agent.start_link(fn -> {:ok, []} end)
     start(config_fun: fn -> config(trigger: :assume, zone_interval: 30_000) end,

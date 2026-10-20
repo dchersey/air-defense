@@ -148,8 +148,9 @@ defmodule LgaPredictor.Poller do
   def handle_call(:quiet_check, _from, state) do
     config = state.config_fun.()
     zones = Enum.filter(config.zonesets, &Map.has_key?(state.sessions, &1.id))
+    direct = state.route_confirmed and state.active_path == :direct_approach
     clear = zones != [] and state.headphones_connected and
-      Enum.all?(status_of(state).zonesets, &(&1.phase not in ["armed", "engaged"])) and
+      Enum.all?(status_of(state).zonesets, &(&1.phase != "engaged" and (direct or &1.phase != "armed"))) and
       Enum.all?(zones, fn zone ->
         # Look beyond the normal trigger box before announcing a lull. This is
         # read-only and shares the fallback's five-second request limiter.
@@ -159,7 +160,15 @@ defmodule LgaPredictor.Poller do
         end
         case fetch(state, box) do
           {:ok, aircraft} ->
-            not Enum.any?(aircraft, fn ac ->
+            # An armed direct-route near miss can defer unnecessarily. Only waive
+            # that stale prediction if its aircraft is freshly seen and the new
+            # projection below still misses the noise zone.
+            pending = Map.get(state.intercepts, zone.id, []) |> Enum.filter(&Map.get(&1, :approaching, false))
+            observed = Enum.all?(pending, fn leg ->
+              Enum.any?(aircraft, fn ac -> (ac.hex || ac.callsign) == leg.key and
+                (ac.pos_age_s || 0) <= 15 end)
+            end)
+            observed and not Enum.any?(aircraft, fn ac ->
               not ramp?(ac) and (ac.alt_ft || 0) < (zone.altitude_ceiling_ft || config.global_ceiling_ft) and
                 (ac.gspeed_kt || 0) >= (zone.min_gspeed_kt || 0) and
                 (in_any_zone?(zone.anc_zones, {ac.lat, ac.lon}) or

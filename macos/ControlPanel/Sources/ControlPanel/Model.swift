@@ -384,7 +384,7 @@ final class StatusModel {
   private func evaluateQuietAlert() {
     let now = Date()
     guard !checkingQuietAlert, now.timeIntervalSince(lastQuietCheckAt) >= 30,
-      quietAlertDue(at: now, enabled: quietAlertEnabled, markAlert: false),
+      quietAlertDue(at: now, enabled: quietAlertEnabled, markAlert: false, allowDirectPending: true),
       let url = URL(string: "\(base)/api/quiet_check") else { return }
     checkingQuietAlert = true
     lastQuietCheckAt = now
@@ -399,7 +399,7 @@ final class StatusModel {
         guard (response as? HTTPURLResponse)?.statusCode == 200,
           try JSONDecoder().decode(Check.self, from: data).clear,
           Date().timeIntervalSince(now) < 10,
-          quietAlertDue(at: Date(), enabled: quietAlertEnabled, markAlert: false) else { return }
+          quietAlertDue(at: Date(), enabled: quietAlertEnabled, markAlert: false, allowDirectPending: true) else { return }
         playQuietAlert()
         lastQuietAlertAt = Date()
       } catch {
@@ -409,7 +409,7 @@ final class StatusModel {
   }
 
   // Separate the clock decision from audio playback for deterministic regression tests.
-  func quietAlertDue(at now: Date, enabled: Bool, markAlert: Bool = true) -> Bool {
+  func quietAlertDue(at now: Date, enabled: Bool, markAlert: Bool = true, allowDirectPending: Bool = false) -> Bool {
     guard active else {
       activeSince = nil
       lastQuietAlertAt = nil
@@ -425,7 +425,7 @@ final class StatusModel {
     }
     // A possible inbound plane is not proof of overhead activity. Wait until it
     // clears, but retain elapsed quiet time when it turns away or misses the zone.
-    if phase == .pending { return false }
+    if phase == .pending && !(allowDirectPending && route == "direct approach") { return false }
 
     var reference = max(start, lastQuietAlertAt ?? .distantPast)
     if let lastFlight = recent.first.map({ Date(timeIntervalSince1970: TimeInterval($0.at)) }),

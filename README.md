@@ -320,7 +320,11 @@ app is Developer ID-signed, notarized, stapled, and accepted by Gatekeeper.
 Quiet-period announcements require fifteen minutes of monitored time without a confirmed
 overflight. Just before playback, a fresh traffic check looks for aircraft in the
 noise zone or projected to enter within five minutes; a failed check defers the
-announcement. Inbound predictions defer playback while tracked, but near-misses do not
+announcement. Once direct routing is confirmed, an armed near-miss can pass this
+check only when that aircraft is freshly observed and its projected path misses
+the noise zone. Three newer completed direct arrivals replace older low-route
+evidence after at least five minutes without a noisy-route sighting; the common final alone cannot establish direct routing. Other inbound
+predictions defer playback while tracked, but near-misses do not
 restart the timer. Actual ANC engagement resets it. Headphone disconnections and
 feed outages do not count toward monitored quiet time. A route change can take longer
 to confirm: the classifier requires three completed tracks and retains votes for
