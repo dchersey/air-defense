@@ -21,6 +21,7 @@ struct Flight: Codable, Identifiable {
   // the activity graph, never acted on, and deliberately never route-resolved — so the
   // UI dims it rather than showing it as a flight Air Defense handled.
   let engaged: Bool?
+  var passNumber: Int? = nil
 
   var id: String { "\(callsign ?? "?")-\(at)" }
 }

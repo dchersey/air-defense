@@ -81,7 +81,9 @@ traffic is loud over the listener. Tracking queries cover the union of those
 zones so an aircraft remains visible between detection and the overhead pass.
 Timing offsets can be set globally or per zone. Aircraft can trigger again after
 five minutes without a fresh observation inside the ANC zone, allowing repeat
-approaches and go-arounds within one session. Stale positions cannot trigger ANC.
+approaches and go-arounds within one session. Stale positions cannot trigger ANC. Recent flights keep a separate row for each
+pass, with `(2)`, `(3)`, etc. appended for the same aircraft and callsign returning
+within two hours; the first pass has no suffix.
 
 - **Arrivals:** the tracked-arrival mode uses ETA to increase polling frequency as
   a flight approaches, then engages on observed zone entry. Release is predicted

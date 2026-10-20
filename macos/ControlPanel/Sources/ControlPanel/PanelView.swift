@@ -843,12 +843,12 @@ private struct ActivityStrip: View {
         HStack(spacing: 8) {
           // Fixed cell: identifiers vary in width ("DAL557" vs "MIA → LGA", and the
           // arrow is not a monospaced advance), so without this the type column starts
-          // at a different x on every row. 72pt fits the widest form (XXX → YYY) at
-          // .caption2 with margin.
+          // at a different x on every row. Include space for a repeat-pass suffix.
           Text(routeLabel(flight))
             .font(.adMono).foregroundStyle(observed ? Palette.ink3 : Palette.ink)
             .lineLimit(1)
-            .frame(width: 72, alignment: .leading)
+            .truncationMode(.middle)
+            .frame(width: 90, alignment: .leading)
           Text(typeLabel(flight))
             .font(.adMono).foregroundStyle(observed ? Palette.ink3 : Palette.ink2)
             .lineLimit(1)
@@ -1005,10 +1005,13 @@ private struct ActivityStrip: View {
     // makes a gap in monitoring obvious at a glance — and the callsign of a flight
     // nothing acted on is not information worth a column. Deliberately not "private",
     // which means looked-up-and-unknown.
-    if flight.engaged == false { return "passive" }
-    if let o = flight.origin, let d = flight.destination { return "\(o) → \(d)" }
-    if flight.isPrivate == true { return "private" }
-    return flight.callsign ?? "—"
+    let label: String
+    if flight.engaged == false { label = "passive" }
+    else if let o = flight.origin, let d = flight.destination { label = "\(o) → \(d)" }
+    else if flight.isPrivate == true { label = "private" }
+    else { label = flight.callsign ?? "—" }
+    let pass = flight.passNumber ?? 1
+    return pass > 1 ? "\(label) (\(pass))" : label
   }
 }
 

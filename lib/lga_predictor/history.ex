@@ -19,6 +19,15 @@ defmodule LgaPredictor.History do
   @doc "Record one trigger event (most-recent-first; truncated to :max)."
   def record(event) when is_map(event) do
     Agent.update(__MODULE__, fn %{events: events, max: max} = state ->
+      # Keep each crossing as its own row. A returning aircraft with the same
+      # callsign continues the count; a later service starts over after two hours.
+      identity = {Map.get(event, :hex), Map.get(event, :callsign)}
+      prior = if identity != {nil, nil}, do: Enum.find(events, fn e ->
+        {Map.get(e, :hex), Map.get(e, :callsign)} == identity and
+          event.at >= e.at and event.at - e.at <= 7200
+      end)
+      number = if prior, do: Map.get(prior, :pass_number, 1) + 1, else: 1
+      event = Map.put(event, :pass_number, number)
       %{state | events: Enum.take([event | events], max)}
     end)
   end

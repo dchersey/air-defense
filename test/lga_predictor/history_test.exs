@@ -29,6 +29,28 @@ defmodule LgaPredictor.HistoryTest do
     assert callsigns == ["F5", "F4", "F3"]
   end
 
+  test "repeat passes keep separate numbered rows even after the first drops out" do
+    History.record(event("A", 100))
+    History.record(event("A", 1000))
+    assert [%{pass_number: 2}, %{pass_number: 1}] = History.recent()
+    History.record(event("B", 1100))
+    History.record(event("C", 1200))
+    History.record(event("A", 2000))
+    assert hd(History.recent()).pass_number == 3
+    History.record(event("A", 10_000))
+    assert hd(History.recent()).pass_number == 1
+  end
+
+  test "different aircraft or callsigns and anonymous flights do not share counters" do
+    History.record(Map.put(event("A", 100), :hex, "one"))
+    History.record(Map.put(event("A", 200), :hex, "two"))
+    History.record(Map.put(event("B", 300), :hex, "two"))
+    assert Enum.all?(History.recent(), &(&1.pass_number == 1))
+    History.record(event(nil, 400))
+    History.record(event(nil, 500))
+    assert hd(History.recent()).pass_number == 1
+  end
+
   test "counts_per_bucket buckets events by time window" do
     # bucket size 60s: events at t=10 and t=50 share bucket 0; t=130 is bucket 2
     History.record(event("A", 10))
