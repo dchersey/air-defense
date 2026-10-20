@@ -83,6 +83,22 @@ defmodule LgaPredictor.PollerTest do
     start_supervised!({Poller, Keyword.merge(defaults, opts)})
   end
 
+  test "quiet announcement checks fresh traffic beyond the normal arming window and fails closed" do
+    {:ok, result} = Agent.start_link(fn -> {:ok, []} end)
+    start(config_fun: fn -> config(trigger: :assume, zone_interval: 30_000) end,
+      fetcher: fn _ -> Agent.get(result, & &1) end)
+    :ok = Poller.start_session()
+    assert Poller.quiet_check().clear
+    # Still outside normal arming, but projected to enter in under five minutes.
+    Agent.update(result, fn _ -> {:ok, [%{inbound() | lat: 40.65}]} end)
+    refute Poller.quiet_check().clear
+    Agent.update(result, fn _ -> {:error, :timeout} end)
+    refute Poller.quiet_check().clear
+    :ok = Poller.stop_session()
+    Agent.update(result, fn _ -> {:ok, []} end)
+    refute Poller.quiet_check().clear
+  end
+
   test "background departure inference is independent of arrival routing and ANC" do
     {:ok, frame} = Agent.start_link(fn -> [] end)
     start(config_fun: fn -> Map.merge(config(), %{airport_coords: {40.7772,-73.8726},

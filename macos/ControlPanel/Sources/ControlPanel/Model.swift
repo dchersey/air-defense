@@ -216,16 +216,16 @@ final class StatusModel {
   // thread), so the button can show progress and not be double-fired.
   var reclaiming = false
 
-  // Quiet-period alert: when a session has run 10 min with no detections, play a
+  // Quiet-period alert: when a session has run 15 min with no detections, play a
   // message through the AirPods (so a busy user knows LGA may have shifted patterns
-  // and they can take the headphones off). Re-alerts every 10 min while still quiet.
+  // and they can take the headphones off). Re-alerts every 15 min while still quiet.
   @ObservationIgnored private var activeSince: Date?
   @ObservationIgnored private var lastQuietAlertAt: Date?
   // Last confirmed overhead activity. An inbound prediction defers playback but
   // must not restart the quiet clock if it never actually engages ANC.
   @ObservationIgnored private var lastActivityAt: Date?
   @ObservationIgnored private var alertPlayer: AVAudioPlayer?
-  private let quietGap: TimeInterval = 600
+  private let quietGap: TimeInterval = 900
 
   // Headphones-off (not-monitoring) spans observed during a session, kept for the
   // last hour. Used to (a) NOT count off-time toward the quiet-alert window — else
@@ -378,12 +378,38 @@ final class StatusModel {
   // Fire (and periodically re-fire) the alert after `quietGap` seconds of MONITORED
   // silence, measured from the later of session start or the last detection. So both
   // "busy, then quiet" AND "activated a monitor but nothing showed" alert the user.
+  @ObservationIgnored private var checkingQuietAlert = false
+  @ObservationIgnored private var lastQuietCheckAt = Date.distantPast
+
   private func evaluateQuietAlert() {
-    if quietAlertDue(at: Date(), enabled: quietAlertEnabled) { playQuietAlert() }
+    let now = Date()
+    guard !checkingQuietAlert, now.timeIntervalSince(lastQuietCheckAt) >= 30,
+      quietAlertDue(at: now, enabled: quietAlertEnabled, markAlert: false),
+      let url = URL(string: "\(base)/api/quiet_check") else { return }
+    checkingQuietAlert = true
+    lastQuietCheckAt = now
+    Task {
+      defer { checkingQuietAlert = false }
+      do {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 12
+        let (data, response) = try await URLSession.shared.data(for: request)
+        struct Check: Decodable { let clear: Bool }
+        guard (response as? HTTPURLResponse)?.statusCode == 200,
+          try JSONDecoder().decode(Check.self, from: data).clear,
+          Date().timeIntervalSince(now) < 10,
+          quietAlertDue(at: Date(), enabled: quietAlertEnabled, markAlert: false) else { return }
+        playQuietAlert()
+        lastQuietAlertAt = Date()
+      } catch {
+        Log.line("quiet alert deferred: incoming check unavailable")
+      }
+    }
   }
 
   // Separate the clock decision from audio playback for deterministic regression tests.
-  func quietAlertDue(at now: Date, enabled: Bool) -> Bool {
+  func quietAlertDue(at now: Date, enabled: Bool, markAlert: Bool = true) -> Bool {
     guard active else {
       activeSince = nil
       lastQuietAlertAt = nil
@@ -409,7 +435,7 @@ final class StatusModel {
     if let activity = lastActivityAt, activity > reference { reference = activity }
     let monitored = now.timeIntervalSince(reference) - pausedSeconds(since: reference, now: now)
     guard monitored >= quietGap else { return false }
-    lastQuietAlertAt = now
+    if markAlert { lastQuietAlertAt = now }
     return true
   }
 

@@ -30,18 +30,19 @@ struct QuietAlertTests {
     m.ancPhase = "idle"
     #expect(m.quietAlertDue(at: start.addingTimeInterval(902), enabled: true))
     #expect(!m.quietAlertDue(at: start.addingTimeInterval(904), enabled: true))
-    #expect(m.quietAlertDue(at: start.addingTimeInterval(1502), enabled: true))
+    #expect(m.quietAlertDue(at: start.addingTimeInterval(1802), enabled: true))
   }
 
   @MainActor @Test func actualEngagementRestartsQuietWindow() {
     let m = model()
     let start = Date(timeIntervalSince1970: 10000)
     #expect(!m.quietAlertDue(at: start, enabled: true))
+    #expect(!m.quietAlertDue(at: start.addingTimeInterval(899), enabled: true))
     m.ancPhase = "engaged"
-    #expect(!m.quietAlertDue(at: start.addingTimeInterval(590), enabled: true))
+    #expect(!m.quietAlertDue(at: start.addingTimeInterval(900), enabled: true))
     m.ancPhase = "idle"
-    #expect(!m.quietAlertDue(at: start.addingTimeInterval(601), enabled: true))
-    #expect(m.quietAlertDue(at: start.addingTimeInterval(1190), enabled: true))
+    #expect(!m.quietAlertDue(at: start.addingTimeInterval(901), enabled: true))
+    #expect(m.quietAlertDue(at: start.addingTimeInterval(1800), enabled: true))
   }
 
   @MainActor @Test func unavailableMonitoringNeverAnnouncesQuiet() {

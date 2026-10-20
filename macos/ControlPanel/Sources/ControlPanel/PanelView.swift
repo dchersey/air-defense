@@ -1084,7 +1084,7 @@ private struct SettingsScreen: View {
         "Auto-pause without AirPods", subtitle: "Hold monitoring when no buds are connected",
         isOn: $autoPause)
       toggleRow(
-        "Quiet-period alert", subtitle: "Play a message after 10 min with no flights",
+        "Quiet-period alert", subtitle: "Play a message after 15 min with no flights",
         isOn: $quietAlert)
       toggleRow(
         "Launch at Login", subtitle: "Start Air Defense when you sign in", isOn: $launchAtLogin

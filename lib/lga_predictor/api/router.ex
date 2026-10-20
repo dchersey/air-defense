@@ -22,6 +22,10 @@ defmodule LgaPredictor.API.Router do
     send_json(conn, 200, status_payload())
   end
 
+  post "/api/quiet_check" do
+    send_json(conn, 200, Poller.quiet_check())
+  end
+
   get "/api/route_history" do
     send_json(conn, 200, LgaPredictor.RouteHistory.snapshot())
   end

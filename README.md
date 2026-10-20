@@ -317,8 +317,10 @@ app is Developer ID-signed, notarized, stapled, and accepted by Gatekeeper.
 
 ## Using it
 
-Quiet-period announcements require ten minutes of monitored time without a confirmed
-overflight. Inbound predictions defer playback while tracked, but near-misses do not
+Quiet-period announcements require fifteen minutes of monitored time without a confirmed
+overflight. Just before playback, a fresh traffic check looks for aircraft in the
+noise zone or projected to enter within five minutes; a failed check defers the
+announcement. Inbound predictions defer playback while tracked, but near-misses do not
 restart the timer. Actual ANC engagement resets it. Headphone disconnections and
 feed outages do not count toward monitored quiet time. A route change can take longer
 to confirm: the classifier requires three completed tracks and retains votes for

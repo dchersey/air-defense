@@ -107,6 +107,8 @@ defmodule LgaPredictor.Poller do
   @doc "Session status: active?, per-zoneset session state, polls, credits."
   def status, do: GenServer.call(__MODULE__, :status)
 
+  def quiet_check, do: GenServer.call(__MODULE__, :quiet_check, 15_000)
+
   @doc """
   Report whether the AirPods are the active output. When disconnected, active
   sessions keep their timers running but PAUSE polling (no FR24 credits) and
@@ -142,6 +144,33 @@ defmodule LgaPredictor.Poller do
   def handle_call(:stop_session, _from, state), do: {:reply, :ok, stop_all(state)}
 
   def handle_call(:status, _from, state), do: {:reply, status_of(state), state}
+
+  def handle_call(:quiet_check, _from, state) do
+    config = state.config_fun.()
+    zones = Enum.filter(config.zonesets, &Map.has_key?(state.sessions, &1.id))
+    clear = zones != [] and state.headphones_connected and
+      Enum.all?(status_of(state).zonesets, &(&1.phase not in ["armed", "engaged"])) and
+      Enum.all?(zones, fn zone ->
+        # Look beyond the normal trigger box before announcing a lull. This is
+        # read-only and shares the fallback's five-second request limiter.
+        box = case Map.get(config, :airport_coords) do
+          {_, _} = airport -> terminal_box(airport)
+          _ -> query_box(zone)
+        end
+        case fetch(state, box) do
+          {:ok, aircraft} ->
+            not Enum.any?(aircraft, fn ac ->
+              not ramp?(ac) and (ac.alt_ft || 0) < (zone.altitude_ceiling_ft || config.global_ceiling_ft) and
+                (ac.gspeed_kt || 0) >= (zone.min_gspeed_kt || 0) and
+                (in_any_zone?(zone.anc_zones, {ac.lat, ac.lon}) or
+                  first_window(ac, zone, zone.altitude_ceiling_ft || config.global_ceiling_ft, 300) != nil)
+            end)
+          _ -> false
+        end
+      end)
+    {:reply, %{clear: clear}, state}
+  end
+
 
   def handle_call({:set_headphones, connected, audio_output}, _from, state) do
     state =
