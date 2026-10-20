@@ -19,7 +19,7 @@ defmodule LgaPredictor.Poller do
 
   Config comes from `ConfigStore` via an injectable `:config_fun`. FR24 fetching is
   injectable via `:fetcher` so the loop is testable offline. ANC timing fires
-  `anc_latency_seconds` early; a flight is actioned at most once per session.
+  `anc_latency_seconds` early; repeat passes can re-arm after five minutes clear of the ANC zone.
   """
 
   use GenServer
@@ -188,7 +188,7 @@ defmodule LgaPredictor.Poller do
     # Reset stats only when starting from fully idle.
     state =
       if map_size(state.sessions) == 0 do
-        %{state | polls: 0, credits: 0, actioned: MapSet.new(), engaged: MapSet.new()}
+        %{state | polls: 0, credits: 0, actioned: %{}, engaged: MapSet.new()}
       else
         state
       end
@@ -955,10 +955,22 @@ defmodule LgaPredictor.Poller do
   defp consider(ac, zoneset, config, state) do
     key = ac.hex || ac.callsign
     ceiling = zoneset.altitude_ceiling_ft || config.global_ceiling_ft
+    now = System.os_time(:second)
+    state = case Map.get(state.actioned, key) do
+      at when is_integer(at) and now - at >= 300 ->
+        %{state | actioned: Map.delete(state.actioned, key)}
+      _ -> state
+    end
 
     cond do
-      MapSet.member?(state.actioned, key) ->
+      is_number(ac.pos_age_s) and ac.pos_age_s > 15 ->
         state
+
+      Map.has_key?(state.actioned, key) ->
+        # Keep the same overhead pass suppressed, but allow this aircraft to
+        # return after a go-around. Only fresh in-zone observations renew the hold.
+        if in_any_zone?(zoneset.anc_zones, {ac.lat, ac.lon}),
+          do: %{state | actioned: Map.put(state.actioned, key, now)}, else: state
 
       (ac.alt_ft || 0) >= ceiling ->
         state
@@ -1034,7 +1046,7 @@ defmodule LgaPredictor.Poller do
 
         %{
           state
-          | actioned: MapSet.put(state.actioned, key),
+          | actioned: Map.put(state.actioned, key, System.os_time(:second)),
             suppress_until:
               Map.update(state.suppress_until, zoneset.id, exits_at, &max(&1, exits_at))
         }
@@ -1047,7 +1059,7 @@ defmodule LgaPredictor.Poller do
 
       passed_zone?(ac, zones) ->
         # Missed the zone (past its latitude band on the side it's heading) → abandon.
-        %{state | actioned: MapSet.put(state.actioned, key)} |> drop_leg(zoneset.id, key)
+        %{state | actioned: Map.put(state.actioned, key, System.os_time(:second))} |> drop_leg(zoneset.id, key)
 
       tracking_arrival?(state, zoneset.id, key) or
           (window.enters_in <= arrival_ramp_seconds(state) and approaching?(ac, zones, lead)) ->
@@ -1140,7 +1152,7 @@ defmodule LgaPredictor.Poller do
         %{
           state
           | engaged: MapSet.delete(state.engaged, key),
-            actioned: MapSet.put(state.actioned, key)
+            actioned: Map.put(state.actioned, key, System.os_time(:second))
         }
         |> drop_leg(zoneset.id, key)
 
@@ -1168,7 +1180,7 @@ defmodule LgaPredictor.Poller do
         |> put_leg(zoneset.id, key, ac, engage_at: now, exits_at: now + ttl)
 
       passed_zone?(ac, zones) ->
-        %{state | actioned: MapSet.put(state.actioned, key)} |> drop_leg(zoneset.id, key)
+        %{state | actioned: Map.put(state.actioned, key, System.os_time(:second))} |> drop_leg(zoneset.id, key)
 
       approaching?(ac, zones, lead) ->
         # On radar and closing on the zone, not yet overhead → inbound/armed (amber),
@@ -1362,7 +1374,7 @@ defmodule LgaPredictor.Poller do
 
     %{
       state
-      | actioned: MapSet.put(state.actioned, key),
+      | actioned: Map.put(state.actioned, key, System.os_time(:second)),
         suppress_until:
           Map.update(state.suppress_until, zoneset_id, exits_at, &max(&1, exits_at)),
         intercepts: intercepts
@@ -1547,7 +1559,7 @@ defmodule LgaPredictor.Poller do
       headphones_connected: true,
       headphones_audio_output: true,
       keep_alive_held: false,
-      actioned: MapSet.new(),
+      actioned: %{},
       # Set only while a failover is active; cleared when a session starts so the
       # configured provider gets another chance.
       provider_override: nil,

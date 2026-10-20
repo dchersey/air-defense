@@ -79,7 +79,9 @@ with Control Center Accessibility automation as a fallback.
 A **zoneset** pairs a monitor zone upstream with one or more **ANC zones** where
 traffic is loud over the listener. Tracking queries cover the union of those
 zones so an aircraft remains visible between detection and the overhead pass.
-Timing offsets can be set globally or per zone.
+Timing offsets can be set globally or per zone. Aircraft can trigger again after
+five minutes without a fresh observation inside the ANC zone, allowing repeat
+approaches and go-arounds within one session. Stale positions cannot trigger ANC.
 
 - **Arrivals:** the tracked-arrival mode uses ETA to increase polling frequency as
   a flight approaches, then engages on observed zone entry. Release is predicted

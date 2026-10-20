@@ -735,6 +735,37 @@ defmodule LgaPredictor.PollerTest do
     assert remaining > 29_500
   end
 
+  test "the same aircraft can trigger a second arrival after five minutes clear" do
+    start(config_fun: fn -> config(trigger: :assume) end)
+    :ok = Poller.start_session()
+    original = :sys.get_state(Poller).actioned["ABC123"]
+    assert is_integer(original)
+    :sys.replace_state(Poller, fn state ->
+      %{state | suppress_until: %{},
+        actioned: Map.put(state.actioned, "ABC123", original - 301)}
+    end)
+    send(Poller, {:poll, "z1"})
+    assert hd(Poller.status().zonesets).phase == "engaged"
+    assert :sys.get_state(Poller).actioned["ABC123"] >= original
+  end
+
+  test "fresh overhead observations renew duplicate protection but stale positions cannot engage" do
+    {:ok, frame} = Agent.start_link(fn -> inbound() end)
+    start(config_fun: fn -> config(trigger: :assume) end,
+      fetcher: fn _ -> {:ok, [Agent.get(frame, & &1)]} end)
+    :ok = Poller.start_session()
+    now = System.os_time(:second)
+    :sys.replace_state(Poller, &%{&1 | suppress_until: %{}, actioned: %{"ABC123" => now - 290}})
+    send(Poller, {:poll, "z1"})
+    _ = Poller.status()
+    assert :sys.get_state(Poller).actioned["ABC123"] >= now
+    Agent.update(frame, &%{&1 | pos_age_s: 60})
+    :sys.replace_state(Poller, &%{&1 | suppress_until: %{}, actioned: %{"ABC123" => now - 301}})
+    send(Poller, {:poll, "z1"})
+    _ = Poller.status()
+    refute Map.has_key?(:sys.get_state(Poller).actioned, "ABC123")
+  end
+
   test "departure overhead exposes live-tracking (no clear-by time)" do
     start(config_fun: fn -> config(type: :departure) end, fetcher: fn _ -> {:ok, [inbound()]} end)
     :ok = Poller.start_session()
