@@ -79,7 +79,7 @@ enum Palette {
     switch name?.replacingOccurrences(of: " ", with: "_") {
     case "low_approach": return stop
     case "high_approach": return Color.theme(light: 0x3F7CC4, dark: 0x64ACFF)
-    case "river_approach": return go
+    case "river_approach": return Color.theme(light: 0x075A2E, dark: 0x075A2E)
     case "direct_approach": return Color.theme(light: 0x7B04D6, dark: 0x7B04D6)
     default: return ink3
     }
