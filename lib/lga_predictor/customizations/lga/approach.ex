@@ -196,6 +196,10 @@ defmodule LgaPredictor.Approach do
             nearer? = is_nil(prior.closest_nm) or d < prior.closest_nm
 
             Map.put(acc, key, %{
+              # Preserve an observed low arrival before it descends below the
+              # rotor cutoff at closest approach (DAL379: 1,150 -> 825 ft).
+              low_near_home: Map.get(prior, :low_near_home, false) or
+                (d <= @near_home_nm and overhead_band(ac.alt_ft) == :low_approach),
               closest_nm: if(nearer?, do: d, else: prior.closest_nm),
               closest_alt: if(nearer?, do: ac.alt_ft, else: prior.closest_alt),
               last_nm: d,
@@ -351,6 +355,9 @@ defmodule LgaPredictor.Approach do
   end
 
   defp vote(%{closest_nm: d}) when d > @near_home_nm, do: :river_approach
+
+  defp vote(%{closest_alt: alt, low_near_home: true}) when alt > 0 and alt < @rotor_ceiling_ft,
+    do: :low_approach
 
   defp vote(%{closest_alt: alt}) do
     case overhead_band(alt) do

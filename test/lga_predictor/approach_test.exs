@@ -135,6 +135,22 @@ defmodule LgaPredictor.ApproachTest do
   defp seen(fleet, passes \\ %{}, at \\ @now),
     do: Approach.track_passes(passes, fleet, @lga, @home, at)
 
+  test "low arrivals keep their vote after descending below 1000 feet near home" do
+    fleet = for hex <- ~w(a b c), do: plane(hex, {40.718, -73.88}, 1175)
+    passes = seen(fleet)
+      |> then(&seen(Enum.map(fleet, fn ac -> %{ac | lat: 40.728, lon: -73.864, alt_ft: 825} end), &1, @now + 30))
+      |> then(&seen(Enum.map(fleet, fn ac -> %{ac | lat: 40.745, lon: -73.85, alt_ft: 500} end), &1, @now + 60))
+    assert passes["a"].closest_alt == 825
+    assert Approach.route(passes, @now + 60) == :low_approach
+
+    # A low-only target, or an earlier low-band sample far from home, is not enough.
+    low_only = seen(Enum.map(fleet, &%{&1 | alt_ft: 825}))
+    assert Approach.route(low_only, @done) == nil
+    far_then_low = seen(Enum.map(fleet, &%{&1 | lat: 40.80, lon: -73.87}))
+      |> then(&seen(Enum.map(fleet, fn ac -> %{ac | lat: 40.728, lon: -73.864, alt_ft: 825} end), &1, @now + 30))
+    assert Approach.route(far_then_low, @done) == nil
+  end
+
   describe "track_passes/5" do
     test "level 3950-foot northeast loops establish high approach without entering the low core" do
       # Local receiver trace, 5 October: EDV5334 remained above the old 3500-ft
