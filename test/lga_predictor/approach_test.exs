@@ -143,12 +143,15 @@ defmodule LgaPredictor.ApproachTest do
     assert passes["a"].closest_alt == 825
     assert Approach.route(passes, @now + 60) == :low_approach
 
-    # A low-only target, or an earlier low-band sample far from home, is not enough.
+    # An airliner first received below 1000 ft can qualify by type and speed.
     low_only = seen(Enum.map(fleet, &%{&1 | alt_ft: 825}))
-    assert Approach.route(low_only, @done) == nil
-    far_then_low = seen(Enum.map(fleet, &%{&1 | lat: 40.80, lon: -73.87}))
-      |> then(&seen(Enum.map(fleet, fn ac -> %{ac | lat: 40.728, lon: -73.864, alt_ft: 825} end), &1, @now + 30))
-    assert Approach.route(far_then_low, @done) == nil
+    assert Approach.route(low_only, @done) == :low_approach
+    for changes <- [%{type: "B407"}, %{type: "C172"}, %{type: nil},
+                    %{gspeed_kt: 90}, %{gspeed_kt: nil}, %{alt_ft: 475},
+                    %{vspeed_fpm: 1200}, %{pos_age_s: 30}] do
+      excluded = seen(Enum.map(fleet, &Map.merge(%{&1 | alt_ft: 825}, changes)))
+      assert Approach.route(excluded, @done) == nil, inspect(changes)
+    end
   end
 
   describe "track_passes/5" do
@@ -351,8 +354,10 @@ defmodule LgaPredictor.ApproachTest do
     # route; nor is an aircraft whose altitude the feed omitted. Both abstain rather than
     # being counted as evidence of the quiet routing.
     test "rotorcraft and unread altitudes abstain" do
-      rotor = landed_via(~w(a b c), @over_home, 600, -300)
+      rotor = seen(Enum.map(~w(a b c), &plane(&1, @over_home, 600, -300, type: "B407")))
       assert Approach.route(rotor, @done) == nil
+      unread = seen(Enum.map(~w(a b c), &%{plane(&1, @over_home, 600, -300) | alt_ft: nil}))
+      assert Approach.route(unread, @done) == nil
     end
 
     # THE 11:35 MARKER. Three loop aircraft recognised as bound while still 8 nm out,

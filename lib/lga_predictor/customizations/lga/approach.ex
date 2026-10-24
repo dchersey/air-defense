@@ -16,7 +16,7 @@ defmodule LgaPredictor.Approach do
   number a listener cares about — how close each arrival came to home, and how high it
   was when it did:
 
-    `:low_approach`   arrivals pass within `@near_home_nm` at 1000-3000 ft, gear down.
+    `:low_approach`   arrivals pass within `@near_home_nm` at 500-3000 ft (sub-1000 requires at least 100 kt).
                       The loud one; the same band that lights the icon amber.
     `:high_approach`  arrivals pass within `@near_home_nm` at 3000-6000 ft — the long
                       loop out to the north-east before turning back in, gear still up,
@@ -41,7 +41,9 @@ defmodule LgaPredictor.Approach do
   # the menu-bar icon that goes amber for overhead noise. Measured over the zone.
   #
   #   < 1000 ft   rotorcraft and light GA — every sub-1000ft crossing measured over the
-  #               zone was a Bell 206/429 or a Cessna Caravan. Never an airport arrival.
+  #               zone in the original sample was a Bell 206/429 or Cessna Caravan.
+  #               This shared ambient band stays conservative; the typed-airliner
+  #               route classifier separately accepts fresh arrivals down to 500 ft.
   #   1000-3000   LOW APPROACH — near-arrivals on final, GEAR DOWN. Flights that
   #               actually engaged ANC crossed at 1475-1800 ft. The loud one.
   #   3000-6000   HIGH APPROACH — the long loop that runs out over the borough to the
@@ -199,7 +201,7 @@ defmodule LgaPredictor.Approach do
               # Preserve an observed low arrival before it descends below the
               # rotor cutoff at closest approach (DAL379: 1,150 -> 825 ft).
               low_near_home: Map.get(prior, :low_near_home, false) or
-                (d <= @near_home_nm and overhead_band(ac.alt_ft) == :low_approach),
+                (d <= @near_home_nm and low_arrival_sample?(ac)),
               closest_nm: if(nearer?, do: d, else: prior.closest_nm),
               closest_alt: if(nearer?, do: ac.alt_ft, else: prior.closest_alt),
               last_nm: d,
@@ -213,6 +215,15 @@ defmodule LgaPredictor.Approach do
       end
     end)
     |> Map.filter(fn {_k, p} -> p.last_seen > now - @retention_seconds end)
+  end
+
+  # Only reached for fresh, typed airliners that passed the terminal/climb
+  # filters. Sub-1000-ft arrivals are valid; exclude slow low-level targets rather
+  # than treating every aircraft below the shared ambient altitude band as a rotor.
+  defp low_arrival_sample?(ac) do
+    overhead_band(ac.alt_ft) == :low_approach or
+      (ac.alt_ft >= 500 and ac.alt_ft < @rotor_ceiling_ft and
+        is_number(ac.gspeed_kt) and ac.gspeed_kt >= 100)
   end
 
   # The high loop can stay level at 3,950 ft until it leaves receiver coverage.
