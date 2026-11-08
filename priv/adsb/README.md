@@ -136,8 +136,15 @@ At 1090 MHz a quarter wave is only **6.9 cm**, so nothing needs to be large.
 
 `provision.sh` installs a Pushover monitor (15-minute timer, alerts only on state *change*)
 watching: filesystem gone read-only, under-voltage, **readsb's message counter frozen**,
-failed auto-updates, disk above 85%, and a weekly digest of pending Pi kernel/firmware
-updates.
+failed auto-updates, disk above 85%, and manual Pi package/reboot maintenance. SSH and Pushover use the same assessment.
+When updates need attention, run `sudo apt update && sudo apt full-upgrade -y && sudo reboot`.
+`&&` stops the sequence if an apt command fails. If only a reboot is pending, run `sudo reboot`.
+The login banner refreshes after apt and starts afresh at boot. While checking, it shows no action request;
+when clear, it disappears. Pushover sends a resolution on the next health check (normally within
+15 minutes); an already-delivered notification remains in the app’s history.
+
+On an existing receiver, copy `provision.sh` across and run `sudo bash provision.sh --notices-only`
+to install just these monitors. It does not upgrade packages, reboot, or reconfigure the feeder.
 
 The frozen-counter check is the valuable one. readsb reports `active` while hearing nothing
 at all if the dongle drops off USB — and unlike an aircraft count, a message counter does

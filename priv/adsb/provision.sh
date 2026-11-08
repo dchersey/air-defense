@@ -29,6 +29,244 @@ UUID_FILE=${UUID_FILE:-}
 DB_URL=https://github.com/wiedehopf/tar1090-db/raw/csv/aircraft.csv.gz
 
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
+# Install just the notice scripts on an existing receiver, without touching
+# network, decoder, package policy, credentials, or running a test push.
+install_notice_tools() (
+set -e
+cat > /usr/local/bin/adsb-health <<'HEALTH'
+#!/bin/bash
+# Pushover health monitor for the Air Defense ADS-B receiver.
+#
+# Every failure mode of this box is silent: a dead SDR still looks like a running
+# service, and a dying SD card just remounts read-only. Alerts fire on state CHANGE
+# only, which is what keeps the channel worth reading.
+#
+# Deliberately NOT alerted: temperature (the 3B+ soft-throttles above 60C by design),
+# Wi-Fi signal, routine Debian patching — noise that trains you to ignore alerts.
+set -uo pipefail
+CONF=/etc/adsb-health.conf
+STATE=/var/lib/adsb-health
+[ -r "$CONF" ] || { echo "missing $CONF" >&2; exit 1; }
+# shellcheck disable=SC1090
+. "$CONF"
+mkdir -p "$STATE"
+
+notify() {
+  curl -s -m 20 --form-string "token=$PUSHOVER_TOKEN" --form-string "user=$PUSHOVER_USER" \
+       --form-string "title=$1" --form-string "message=$2" --form-string "priority=${3:-0}" \
+       https://api.pushover.net/1/messages.json >/dev/null
+}
+# A one-shot re-check shortly after a state change, so a transient clears (or is
+# confirmed) in minutes rather than at the next quarter-hour tick. Unique unit name:
+# overlapping rechecks are harmless one-shots, not a conflict.
+recheck() {
+  systemd-run --quiet --on-active="$1" --timer-property=AccuracySec=5s \
+    --unit="adsb-health-recheck-$(date +%s%N)" /usr/local/bin/adsb-health >/dev/null 2>&1 || true
+}
+
+# What readsb has been doing, for a resolve or blip message: when it last started and
+# how many times systemd has restarted it since boot. A wedged SDR makes readsb exit
+# and Restart=always brings it back 15 s later — that is usually the whole story.
+readsb_context() {
+  local started n
+  started=$(systemctl show readsb -p ExecMainStartTimestamp --value 2>/dev/null | awk '{print $3}')
+  n=$(systemctl show readsb -p NRestarts --value 2>/dev/null)
+  printf 'readsb last started %s (systemd restart #%s since boot).' "${started:-?}" "${n:-?}"
+}
+
+# State-change notifier. On the way DOWN it remembers the title and the time, so the
+# resolution can name what it resolves and how long it lasted — the old resolve was a
+# hard-coded title (wrong for the "unreachable" variant) and "Back to normal." with no
+# context. A bad edge also schedules a 2-minute re-check. $4 on an ok edge is extra
+# context appended to the resolution.
+edge() {
+  local key=$1 now=$2 title=$3 was
+  was=$(cat "$STATE/$key" 2>/dev/null || echo ok)
+  printf '%s' "$now" > "$STATE/$key"
+  [ "$now" = "$was" ] && return
+  if [ "$now" = bad ]; then
+    printf '%s' "$title" > "$STATE/$key.title"
+    date +%s > "$STATE/$key.since"
+    notify "$title" "$4" "${5:-0}"
+    recheck 2min
+  else
+    local alerted since after
+    alerted=$(cat "$STATE/$key.title" 2>/dev/null || echo "$title")
+    since=$(cat "$STATE/$key.since" 2>/dev/null || echo 0)
+    if [ "$since" -gt 0 ]; then after=" after ~$(( ($(date +%s) - since) / 60 )) min"; else after=""; fi
+    notify "RESOLVED: $alerted" "Back to normal${after}. ${4:-}" 0
+    rm -f "$STATE/$key.title" "$STATE/$key.since"
+  fi
+}
+
+case "${1:-}" in
+  --test) notify "ADS-B receiver" "Test from $(hostname) at $(date '+%H:%M %Z'). Monitoring is live." 0; echo sent; exit 0 ;;
+  --boot) notify "ADS-B: receiver back online" "Reboot completed. $(hostname) came back up at $(date '+%H:%M %Z') on kernel $(uname -r); readsb $(systemctl is-active readsb)." -1; exit 0 ;;
+esac
+
+## SD card dying — the filesystem drops to read-only.
+if awk '$2=="/"{print $4}' /proc/mounts | cut -d, -f1 | grep -qx ro; then
+  edge rootfs bad "ADS-B: filesystem READ-ONLY" "The SD card has likely failed. Flight data is stale. Reimage needed." 1
+else edge rootfs ok "ADS-B: filesystem READ-ONLY"; fi
+
+## Under-voltage (bit 0 now, bit 16 since boot). NOT the temperature bits (3/19), which
+## are benign on a 3B+ and would cry wolf. Under-voltage is what corrupts cards.
+TH=$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2)
+if [ -n "$TH" ] && (( (TH & 0x1) || (TH & 0x10000) )); then
+  edge volt bad "ADS-B: UNDER-VOLTAGE" "throttled=$TH — inadequate PSU or cable. This corrupts SD cards. Replace the supply." 1
+else edge volt ok "ADS-B: UNDER-VOLTAGE"; fi
+
+## Receiver deaf. readsb can be 'active' while hearing nothing (dongle dropped off USB,
+## antenna knocked loose). The message COUNTER is the honest signal — NYC airspace is
+## never silent, so a frozen counter means the SDR is dead, and unlike an aircraft count
+## it does not false-alarm at 3am.
+MSG=$(curl -s -m 8 http://localhost/tar1090/data/aircraft.json 2>/dev/null | jq -r '.messages // empty')
+PREV=$(cat "$STATE/messages" 2>/dev/null || echo "")
+[ -n "$MSG" ] && printf '%s' "$MSG" > "$STATE/messages"
+
+# A knock on the USB connector aborts the bulk transfer while the dongle keeps
+# answering control requests: it stays visible in lsusb, readsb keeps running at ~14%
+# CPU processing an empty stream, and never exits — so Restart=always cannot help. The
+# cure is a restart, so try that ONCE before paging a human. Counting MSG==0 as frozen
+# matters here: readsb zeroes its counter on restart, so a plain "changed since last
+# time" test would read a still-deaf receiver as healthy on the very next check.
+STRIKE=$STATE/deaf-strike
+if [ -z "$MSG" ]; then
+  # aircraft.json not served, or not JSON. readsb exits on a wedged SDR and systemd
+  # restarts it 15 s later, so a single miss is far more often that window than an
+  # outage — on 2026-09-22 this paged at priority 1 for a hiccup that healed itself in
+  # 15 seconds. First miss: note it, re-check in a minute, say nothing. Second: page.
+  logger -t adsb-health "aircraft.json unavailable (readsb $(systemctl is-active readsb))"
+  if [ ! -f "$STRIKE" ]; then
+    date +%s > "$STRIKE"
+    recheck 60s
+  else
+    edge deaf bad "ADS-B: decoder unreachable" "readsb/tar1090 not answering on localhost for over a minute. Service state: $(systemctl is-active readsb)." 1
+  fi
+elif [ "$MSG" = "0" ] || { [ -n "$PREV" ] && [ "$MSG" = "$PREV" ]; }; then
+  rm -f "$STRIKE"
+  LAST=$(cat "$STATE/deaf-restart" 2>/dev/null || echo 0)
+  NOW=$(date +%s)
+  if [ $((NOW - LAST)) -gt 1800 ]; then
+    # First stall in 30 min: bounce readsb and say so at low priority. The notification
+    # is the audit trail — repeated "self-healed" messages mean a failing connector,
+    # which silent restarts would otherwise hide.
+    printf '%s' "$NOW" > "$STATE/deaf-restart"
+    systemctl restart readsb
+    notify "ADS-B: decoder stalled — restarted" \
+      "readsb was running but decoding nothing (stalled USB transfer). Restarted it; you will be paged if that did not fix it. Repeats here mean a failing cable or connector." -1
+  else
+    edge deaf bad "ADS-B: receiver is DEAF" "readsb decoded 0 new messages AND a restart in the last 30 min did not fix it. Check the SDR dongle, its USB cable, and the antenna." 1
+  fi
+else
+  # Healthy. A strike that never became a page is a transient that healed itself —
+  # worth one low-priority line, because repeats mean a failing cable or connector.
+  if [ -f "$STRIKE" ]; then
+    SECS=$(( $(date +%s) - $(cat "$STRIKE") ))
+    rm -f "$STRIKE"
+    [ "$(cat "$STATE/deaf" 2>/dev/null)" = bad ] || notify "ADS-B: decoder blipped — self-healed" \
+      "Unreachable for ~${SECS}s, then back without help. $(readsb_context) No action needed; repeats here mean a failing cable or connector." -1
+  fi
+  edge deaf ok "ADS-B: receiver deaf/unreachable" "$(readsb_context)"
+fi
+
+## Automatic patching silently stopped.
+if systemctl is-failed --quiet unattended-upgrades.service || systemctl is-failed --quiet apt-daily-upgrade.service; then
+  edge uu bad "ADS-B: auto-updates FAILED" "unattended-upgrades or apt-daily-upgrade is in a failed state. Security patches are not being applied." 0
+else edge uu ok "ADS-B: auto-updates FAILED"; fi
+
+## Disk.
+USE=$(df --output=pcent / | tail -1 | tr -dc '0-9')
+if [ "${USE:-0}" -ge 85 ]; then
+  edge disk bad "ADS-B: disk ${USE}% full" "Root filesystem at ${USE}%. $(df -h / | awk 'NR==2{print $4}') free." 0
+else edge disk ok "ADS-B: disk full"; fi
+
+## Only report a completed maintenance assessment from this boot. An absent
+## cache means "checking", never "resolved". The helper publishes atomically.
+BANNER=/run/adsb-health/motd
+if [ -n "$(find "$BANNER" -mmin -120 -print 2>/dev/null)" ] && message=$(cat "$BANNER" 2>/dev/null); then
+  if [ -n "$message" ]; then
+    edge maintenance bad "ADS-B: Pi maintenance needed" "$message" 0
+  else
+    edge maintenance ok "ADS-B: Pi maintenance needed" "No manual upgrade or reboot pending."
+  fi
+fi
+HEALTH
+chmod 755 /usr/local/bin/adsb-health
+
+# Both channels consume one per-boot snapshot. An empty snapshot is a verified all-clear.
+cat > /usr/local/bin/adsb-pending <<'PENDING'
+#!/bin/bash
+# Work out what this box needs a human for, and cache it for the login banner.
+#
+# The banner itself (/etc/update-motd.d/95-air-defense) only prints this file: pam_motd
+# runs its scripts synchronously at login, and an apt simulation takes several seconds
+# on a 3B+. So the slow part runs here — hourly, at boot, and after every apt run — and
+# login stays instant. Prints nothing when nothing is needed.
+set -euo pipefail
+export LC_ALL=C
+OUT=${ADSB_PENDING_OUT:-/run/adsb-health/motd}
+mkdir -p "$(dirname "$OUT")"
+# Invalidate before probing. Failure must never publish an all-clear.
+rm -f "$OUT"
+TMP=$(mktemp "$OUT.XXXXXX")
+trap 'rm -f "$TMP"' EXIT
+SIM=$(apt-get -s -o Debug::NoLocking=true dist-upgrade)
+N=$(awk '/^Inst /{n++} END{print n+0}' <<< "$SIM")
+NRPI=$(awk '/^Inst .*Raspberry Pi Foundation/{n++} END{print n+0}' <<< "$SIM")
+REBOOT=""
+[ ! -f /run/reboot-required ] || REBOOT="requested by an installed package"
+NR=$(/usr/sbin/needrestart -b)
+KSTA=$(awk -F': ' '/^NEEDRESTART-KSTA/{print $2}' <<< "$NR")
+if [[ $KSTA == 2 || $KSTA == 3 ]]; then
+  REBOOT="kernel check: running $(awk -F': ' '/^NEEDRESTART-KCUR/{print $2}' <<< "$NR"), expected $(awk -F': ' '/^NEEDRESTART-KEXP/{print $2}' <<< "$NR")"
+fi
+SVC=$(awk '/^NEEDRESTART-SVC/{n++} END{print n+0}' <<< "$NR")
+# Routine Debian packages are handled automatically. If manual intervention
+# is needed, include any other available upgrades in the same visit.
+if (( NRPI > 0 || SVC > 0 )) || [ -n "$REBOOT" ]; then
+  {
+    echo "ADS-B receiver: maintenance needed (checked $(date '+%F %R %Z'))."
+    (( N == 0 )) || echo "  $N package update(s) available; $NRPI from the Raspberry Pi repository."
+    [ -z "$REBOOT" ] || echo "  Reboot needed: $REBOOT."
+    (( SVC == 0 )) || echo "  $SVC service(s) still using replaced libraries."
+    if (( N > 0 )); then
+      echo '  Update, upgrade, then reboot once:'
+      echo '    sudo apt update && sudo apt full-upgrade -y && sudo reboot'
+    else
+      echo '  Packages are current; only a reboot is needed:'
+      echo '    sudo reboot'
+    fi
+  } > "$TMP"
+fi
+chmod 644 "$TMP"; mv "$TMP" "$OUT"
+PENDING
+chmod 755 /usr/local/bin/adsb-pending
+cat > /etc/update-motd.d/95-air-defense <<'MOTD'
+#!/bin/sh
+cache=/run/adsb-health/motd
+if [ -r "$cache" ] && [ -z "$(find "$cache" -mmin +120 -print)" ]; then
+  cat "$cache"
+else
+  echo 'ADS-B receiver: maintenance status not yet verified; no action requested. Check: systemctl status adsb-pending.service'
+fi
+MOTD
+chmod 755 /etc/update-motd.d/95-air-defense
+printf '[Unit]\nDescription=Refresh the Air Defense login banner (pending updates / reboot)\n[Service]\nType=oneshot\nTimeoutStartSec=300\nExecStart=/usr/local/bin/adsb-pending\n' > /etc/systemd/system/adsb-pending.service
+printf '[Unit]\nDescription=Refresh the Air Defense login banner hourly\n[Timer]\nOnBootSec=15s\nOnUnitActiveSec=1h\nAccuracySec=1min\n[Install]\nWantedBy=timers.target\n' > /etc/systemd/system/adsb-pending.timer
+# Refresh right after any apt run, without holding apt up: the banner should clear the
+# moment the upgrade finishes, not an hour later.
+printf 'DPkg::Post-Invoke { "rm -f /run/adsb-health/motd; systemctl restart --no-block adsb-pending.service 2>/dev/null || true"; };\nAPT::Update::Post-Invoke-Success { "rm -f /run/adsb-health/motd; systemctl restart --no-block adsb-pending.service 2>/dev/null || true"; };\n' > /etc/apt/apt.conf.d/53air-defense-pending
+systemctl daemon-reload
+systemctl enable --now adsb-pending.timer >/dev/null 2>&1
+systemctl restart adsb-pending.timer
+systemctl start --no-block adsb-pending.service
+)
+if [[ ${1:-} == --notices-only ]]; then
+  install_notice_tools
+  exit $?
+fi
+
 [ -n "$LAT" ] && [ -n "$LON" ] || { echo "set LAT= and LON= (decimal degrees) — see the header"; exit 1; }
 [ -n "$WIFI_SSID" ] || { echo "set WIFI_SSID= to the network the receiver joins"; exit 1; }
 id "$ADMIN_USER" >/dev/null 2>&1 || { echo "no such user: '$ADMIN_USER' (set ADMIN_USER=)"; exit 1; }
@@ -155,175 +393,8 @@ echo "    That fires only when a kernel package writes /var/run/reboot-required,
 echo "    kernels are deliberately excluded from unattended upgrades. Reboot by hand."
 
 step "Health monitor (Pushover)"
-cat > /usr/local/bin/adsb-health <<'HEALTH'
-#!/bin/bash
-# Pushover health monitor for the Air Defense ADS-B receiver.
-#
-# Every failure mode of this box is silent: a dead SDR still looks like a running
-# service, and a dying SD card just remounts read-only. Alerts fire on state CHANGE
-# only, which is what keeps the channel worth reading.
-#
-# Deliberately NOT alerted: temperature (the 3B+ soft-throttles above 60C by design),
-# Wi-Fi signal, routine Debian patching — noise that trains you to ignore alerts.
-set -uo pipefail
-CONF=/etc/adsb-health.conf
-STATE=/var/lib/adsb-health
-[ -r "$CONF" ] || { echo "missing $CONF" >&2; exit 1; }
-# shellcheck disable=SC1090
-. "$CONF"
-mkdir -p "$STATE"
-
-notify() {
-  curl -s -m 20 --form-string "token=$PUSHOVER_TOKEN" --form-string "user=$PUSHOVER_USER" \
-       --form-string "title=$1" --form-string "message=$2" --form-string "priority=${3:-0}" \
-       https://api.pushover.net/1/messages.json >/dev/null
-}
-# A one-shot re-check shortly after a state change, so a transient clears (or is
-# confirmed) in minutes rather than at the next quarter-hour tick. Unique unit name:
-# overlapping rechecks are harmless one-shots, not a conflict.
-recheck() {
-  systemd-run --quiet --on-active="$1" --timer-property=AccuracySec=5s \
-    --unit="adsb-health-recheck-$(date +%s%N)" /usr/local/bin/adsb-health >/dev/null 2>&1 || true
-}
-
-# What readsb has been doing, for a resolve or blip message: when it last started and
-# how many times systemd has restarted it since boot. A wedged SDR makes readsb exit
-# and Restart=always brings it back 15 s later — that is usually the whole story.
-readsb_context() {
-  local started n
-  started=$(systemctl show readsb -p ExecMainStartTimestamp --value 2>/dev/null | awk '{print $3}')
-  n=$(systemctl show readsb -p NRestarts --value 2>/dev/null)
-  printf 'readsb last started %s (systemd restart #%s since boot).' "${started:-?}" "${n:-?}"
-}
-
-# State-change notifier. On the way DOWN it remembers the title and the time, so the
-# resolution can name what it resolves and how long it lasted — the old resolve was a
-# hard-coded title (wrong for the "unreachable" variant) and "Back to normal." with no
-# context. A bad edge also schedules a 2-minute re-check. $4 on an ok edge is extra
-# context appended to the resolution.
-edge() {
-  local key=$1 now=$2 title=$3 was
-  was=$(cat "$STATE/$key" 2>/dev/null || echo ok)
-  printf '%s' "$now" > "$STATE/$key"
-  [ "$now" = "$was" ] && return
-  if [ "$now" = bad ]; then
-    printf '%s' "$title" > "$STATE/$key.title"
-    date +%s > "$STATE/$key.since"
-    notify "$title" "$4" "${5:-0}"
-    recheck 2min
-  else
-    local alerted since after
-    alerted=$(cat "$STATE/$key.title" 2>/dev/null || echo "$title")
-    since=$(cat "$STATE/$key.since" 2>/dev/null || echo 0)
-    if [ "$since" -gt 0 ]; then after=" after ~$(( ($(date +%s) - since) / 60 )) min"; else after=""; fi
-    notify "RESOLVED: $alerted" "Back to normal${after}. ${4:-}" 0
-    rm -f "$STATE/$key.title" "$STATE/$key.since"
-  fi
-}
-
-case "${1:-}" in
-  --test) notify "ADS-B receiver" "Test from $(hostname) at $(date '+%H:%M %Z'). Monitoring is live." 0; echo sent; exit 0 ;;
-  --boot) notify "ADS-B receiver rebooted" "$(hostname) came back up at $(date '+%H:%M %Z') on kernel $(uname -r); readsb $(systemctl is-active readsb)." -1; exit 0 ;;
-esac
-
-## SD card dying — the filesystem drops to read-only.
-if awk '$2=="/"{print $4}' /proc/mounts | cut -d, -f1 | grep -qx ro; then
-  edge rootfs bad "ADS-B: filesystem READ-ONLY" "The SD card has likely failed. Flight data is stale. Reimage needed." 1
-else edge rootfs ok "ADS-B: filesystem READ-ONLY"; fi
-
-## Under-voltage (bit 0 now, bit 16 since boot). NOT the temperature bits (3/19), which
-## are benign on a 3B+ and would cry wolf. Under-voltage is what corrupts cards.
-TH=$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2)
-if [ -n "$TH" ] && (( (TH & 0x1) || (TH & 0x10000) )); then
-  edge volt bad "ADS-B: UNDER-VOLTAGE" "throttled=$TH — inadequate PSU or cable. This corrupts SD cards. Replace the supply." 1
-else edge volt ok "ADS-B: UNDER-VOLTAGE"; fi
-
-## Receiver deaf. readsb can be 'active' while hearing nothing (dongle dropped off USB,
-## antenna knocked loose). The message COUNTER is the honest signal — NYC airspace is
-## never silent, so a frozen counter means the SDR is dead, and unlike an aircraft count
-## it does not false-alarm at 3am.
-MSG=$(curl -s -m 8 http://localhost/tar1090/data/aircraft.json 2>/dev/null | jq -r '.messages // empty')
-PREV=$(cat "$STATE/messages" 2>/dev/null || echo "")
-[ -n "$MSG" ] && printf '%s' "$MSG" > "$STATE/messages"
-
-# A knock on the USB connector aborts the bulk transfer while the dongle keeps
-# answering control requests: it stays visible in lsusb, readsb keeps running at ~14%
-# CPU processing an empty stream, and never exits — so Restart=always cannot help. The
-# cure is a restart, so try that ONCE before paging a human. Counting MSG==0 as frozen
-# matters here: readsb zeroes its counter on restart, so a plain "changed since last
-# time" test would read a still-deaf receiver as healthy on the very next check.
-STRIKE=$STATE/deaf-strike
-if [ -z "$MSG" ]; then
-  # aircraft.json not served, or not JSON. readsb exits on a wedged SDR and systemd
-  # restarts it 15 s later, so a single miss is far more often that window than an
-  # outage — on 2026-09-22 this paged at priority 1 for a hiccup that healed itself in
-  # 15 seconds. First miss: note it, re-check in a minute, say nothing. Second: page.
-  logger -t adsb-health "aircraft.json unavailable (readsb $(systemctl is-active readsb))"
-  if [ ! -f "$STRIKE" ]; then
-    date +%s > "$STRIKE"
-    recheck 60s
-  else
-    edge deaf bad "ADS-B: decoder unreachable" "readsb/tar1090 not answering on localhost for over a minute. Service state: $(systemctl is-active readsb)." 1
-  fi
-elif [ "$MSG" = "0" ] || { [ -n "$PREV" ] && [ "$MSG" = "$PREV" ]; }; then
-  rm -f "$STRIKE"
-  LAST=$(cat "$STATE/deaf-restart" 2>/dev/null || echo 0)
-  NOW=$(date +%s)
-  if [ $((NOW - LAST)) -gt 1800 ]; then
-    # First stall in 30 min: bounce readsb and say so at low priority. The notification
-    # is the audit trail — repeated "self-healed" messages mean a failing connector,
-    # which silent restarts would otherwise hide.
-    printf '%s' "$NOW" > "$STATE/deaf-restart"
-    systemctl restart readsb
-    notify "ADS-B: decoder stalled — restarted" \
-      "readsb was running but decoding nothing (stalled USB transfer). Restarted it; you will be paged if that did not fix it. Repeats here mean a failing cable or connector." -1
-  else
-    edge deaf bad "ADS-B: receiver is DEAF" "readsb decoded 0 new messages AND a restart in the last 30 min did not fix it. Check the SDR dongle, its USB cable, and the antenna." 1
-  fi
-else
-  # Healthy. A strike that never became a page is a transient that healed itself —
-  # worth one low-priority line, because repeats mean a failing cable or connector.
-  if [ -f "$STRIKE" ]; then
-    SECS=$(( $(date +%s) - $(cat "$STRIKE") ))
-    rm -f "$STRIKE"
-    [ "$(cat "$STATE/deaf" 2>/dev/null)" = bad ] || notify "ADS-B: decoder blipped — self-healed" \
-      "Unreachable for ~${SECS}s, then back without help. $(readsb_context) No action needed; repeats here mean a failing cable or connector." -1
-  fi
-  edge deaf ok "ADS-B: receiver deaf/unreachable" "$(readsb_context)"
-fi
-
-## Automatic patching silently stopped.
-if systemctl is-failed --quiet unattended-upgrades.service || systemctl is-failed --quiet apt-daily-upgrade.service; then
-  edge uu bad "ADS-B: auto-updates FAILED" "unattended-upgrades or apt-daily-upgrade is in a failed state. Security patches are not being applied." 0
-else edge uu ok "ADS-B: auto-updates FAILED"; fi
-
-## Disk.
-USE=$(df --output=pcent / | tail -1 | tr -dc '0-9')
-if [ "${USE:-0}" -ge 85 ]; then
-  edge disk bad "ADS-B: disk ${USE}% full" "Root filesystem at ${USE}%. $(df -h / | awk 'NR==2{print $4}') free." 0
-else edge disk ok "ADS-B: disk full"; fi
-
-## Raspberry Pi kernel/firmware pending — excluded from unattended upgrades on purpose,
-## so they accumulate and need a human. Weekly digest.
-STAMP=$STATE/rpi-digest
-if [ ! -f "$STAMP" ] || [ "$(( ($(date +%s) - $(stat -c %Y "$STAMP")) / 86400 ))" -ge 7 ]; then
-  # Never contend with apt: blocking here wedges the oneshot, and with it the timer,
-  # because OnUnitActiveSec= only re-arms once the unit deactivates.
-  if ! pgrep -x 'apt|apt-get|dpkg|unattended-upgrade' >/dev/null; then
-    # apt-get -s prints the ORIGIN on each Inst line, so one simulation replaces a
-    # per-package apt-cache loop (~100 subprocesses, minutes of wall clock on a 3B+).
-    SIM=$(apt-get -s dist-upgrade 2>/dev/null | grep '^Inst .*Raspberry Pi Foundation')
-    N=$(printf '%s' "$SIM" | grep -c .)
-    if [ "${N:-0}" -gt 0 ]; then
-      KERNEL=$(printf '%s\n' "$SIM" | awk '/^Inst linux-image-rpi/{print $2; exit}')
-      notify "ADS-B: $N Pi updates pending" \
-        "Kernel/firmware updates need a manual run (excluded from auto-updates on purpose).${KERNEL:+ Includes $KERNEL.} Run: sudo apt update && sudo apt full-upgrade" 0
-    fi
-    touch "$STAMP"
-  fi
-fi
-HEALTH
-chmod 755 /usr/local/bin/adsb-health
+install_notice_tools
+notice_rc=$?; [ "$notice_rc" -eq 0 ] || exit "$notice_rc"
 
 printf '[Unit]\nDescription=Air Defense receiver health check (Pushover)\nAfter=network-online.target\n[Service]\nType=oneshot\nTimeoutStartSec=180\nExecStart=/usr/local/bin/adsb-health\n' \
   > /etc/systemd/system/adsb-health.service
@@ -507,72 +578,7 @@ if [ -r /etc/adsb-health.conf ] && ! grep -q '^EXPECTED_GATEWAY=' /etc/adsb-heal
 fi
 
 # --- Login banner: what needs a human ---------------------------------------------
-# The Pushover digest says "updates pending"; this says the same thing, with the exact
-# commands, at the moment you log in to act on it. The slow part (an apt simulation)
-# is cached by adsb-pending so login stays instant.
-cat > /usr/local/bin/adsb-pending <<'PENDING'
-#!/bin/bash
-# Work out what this box needs a human for, and cache it for the login banner.
-#
-# The banner itself (/etc/update-motd.d/95-air-defense) only prints this file: pam_motd
-# runs its scripts synchronously at login, and an apt simulation takes several seconds
-# on a 3B+. So the slow part runs here — hourly, at boot, and after every apt run — and
-# login stays instant. Prints nothing when nothing is needed.
-set -uo pipefail
-OUT=${ADSB_PENDING_OUT:-/var/lib/adsb-health/motd}
-mkdir -p "$(dirname "$OUT")"
-TMP=$(mktemp "$OUT.XXXXXX")
 
-# Raspberry Pi Foundation packages are excluded from unattended upgrades on purpose
-# (kernel/firmware want a deliberate run), so they are what accumulates.
-SIM=$(apt-get -s -o Debug::NoLocking=true dist-upgrade 2>/dev/null | grep '^Inst ' || true)
-N=$(printf '%s' "$SIM" | grep -c . || true)
-NRPI=$(printf '%s' "$SIM" | grep -c 'Raspberry Pi Foundation' || true)
-KERNEL=$(printf '%s\n' "$SIM" | awk '/^Inst linux-image-rpi/{print $2; exit}')
-
-# Reboot needed: the Debian flag file, or needrestart seeing a newer installed kernel
-# (KSTA 2/3) — Pi OS kernel packages do not always drop the flag file.
-REBOOT=""
-[ -f /run/reboot-required ] && REBOOT="flagged by a package"
-NR=$(/usr/sbin/needrestart -b 2>/dev/null || true)
-KSTA=$(printf '%s\n' "$NR" | awk -F': ' '/^NEEDRESTART-KSTA/{print $2}')
-if [ "${KSTA:-1}" -gt 1 ] 2>/dev/null; then
-  REBOOT="running kernel $(printf '%s\n' "$NR" | awk -F': ' '/^NEEDRESTART-KCUR/{print $2}'), installed $(printf '%s\n' "$NR" | awk -F': ' '/^NEEDRESTART-KEXP/{print $2}')"
-fi
-SVC=$(printf '%s\n' "$NR" | grep -c '^NEEDRESTART-SVC' || true)
-
-{
-  if [ "${N:-0}" -gt 0 ] || [ -n "$REBOOT" ] || [ "${SVC:-0}" -gt 0 ]; then
-    echo
-    echo "  -- ADS-B receiver: action needed ----------------------------------"
-    if [ "${N:-0}" -gt 0 ]; then
-      echo "  * $N update(s) pending ($NRPI from the Raspberry Pi repo, which is never auto-installed)${KERNEL:+, incl. $KERNEL}"
-      echo "        sudo apt update && sudo apt full-upgrade"
-    fi
-    if [ -n "$REBOOT" ]; then
-      echo "  * Reboot required ($REBOOT)"
-      echo "        sudo reboot"
-    elif [ "${SVC:-0}" -gt 0 ]; then
-      echo "  * $SVC service(s) running on replaced libraries - a reboot is the clean fix"
-      echo "        sudo reboot"
-    fi
-    echo "  (checked $(date '+%a %H:%M'))"
-    echo
-  fi
-} > "$TMP"
-chmod 644 "$TMP"; mv "$TMP" "$OUT"
-PENDING
-chmod 755 /usr/local/bin/adsb-pending
-printf '#!/bin/sh\n# Air Defense receiver: pending updates / reboot, cached by adsb-pending.\n[ -r /var/lib/adsb-health/motd ] && cat /var/lib/adsb-health/motd\nexit 0\n' > /etc/update-motd.d/95-air-defense
-chmod 755 /etc/update-motd.d/95-air-defense
-printf '[Unit]\nDescription=Refresh the Air Defense login banner (pending updates / reboot)\n[Service]\nType=oneshot\nTimeoutStartSec=300\nExecStart=/usr/local/bin/adsb-pending\n' > /etc/systemd/system/adsb-pending.service
-printf '[Unit]\nDescription=Refresh the Air Defense login banner hourly\n[Timer]\nOnBootSec=2min\nOnUnitActiveSec=1h\nAccuracySec=1min\n[Install]\nWantedBy=timers.target\n' > /etc/systemd/system/adsb-pending.timer
-# Refresh right after any apt run, without holding apt up: the banner should clear the
-# moment the upgrade finishes, not an hour later.
-printf 'DPkg::Post-Invoke { "systemctl start --no-block adsb-pending.service 2>/dev/null || true"; };\nAPT::Update::Post-Invoke-Success { "systemctl start --no-block adsb-pending.service 2>/dev/null || true"; };\n' > /etc/apt/apt.conf.d/53air-defense-pending
-systemctl daemon-reload
-systemctl enable --now adsb-pending.timer >/dev/null 2>&1
-ok "login banner installed (pending updates / reboot)"
 
 systemctl daemon-reload
 systemctl enable --now adsb-health.timer >/dev/null 2>&1 && ok "timer armed (15 min)"
