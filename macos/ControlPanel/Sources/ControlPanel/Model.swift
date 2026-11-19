@@ -76,6 +76,7 @@ struct RouteEvidence: Codable {
 }
 
 struct DepartureSummary: Codable {
+  var confirmedRoutes: [String]? = nil
   let track: String?
   let count: Int
   let closestNm: Double?
